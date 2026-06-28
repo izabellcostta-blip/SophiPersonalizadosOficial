@@ -1,0 +1,2140 @@
+from __future__ import annotations
+
+import base64
+import json
+import sqlite3
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+
+EMPRESA = "Sophi Personalizados Oficial"
+DB_PATH = Path("banco") / "Sophi_erp.db"
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+DB_PATH.parent.mkdir(exist_ok=True)
+
+
+def criar_icone_padrao():
+    caminho = UPLOAD_DIR / "sophi_app_icon.png"
+    if caminho.exists():
+        return str(caminho)
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (1024, 1024), "#000000")
+        draw = ImageDraw.Draw(img)
+        try:
+            font_big = ImageFont.truetype("arial.ttf", 360)
+            font_small = ImageFont.truetype("arial.ttf", 64)
+        except Exception:
+            font_big = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        texto = "S"
+        bbox = draw.textbbox((0, 0), texto, font=font_big)
+        draw.text(((1024 - (bbox[2] - bbox[0])) / 2, 245), texto, fill="#ffffff", font=font_big)
+        subtitulo = "SOPHI"
+        bbox2 = draw.textbbox((0, 0), subtitulo, font=font_small)
+        draw.text(((1024 - (bbox2[2] - bbox2[0])) / 2, 700), subtitulo, fill="#ffffff", font=font_small)
+        img.save(caminho)
+        return str(caminho)
+    except Exception:
+        return "S"
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def conectar():
+    return sqlite3.connect(DB_PATH)
+
+
+def executar(sql, params=()):
+    with conectar() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+        return cur.lastrowid
+
+
+def consultar(sql, params=()):
+    with conectar() as conn:
+        return pd.read_sql_query(sql, conn, params=params)
+
+
+def n(valor, padrao=0.0):
+    try:
+        if valor is None or valor == "":
+            return padrao
+        if isinstance(valor, str):
+            valor = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
+        return float(valor)
+    except Exception:
+        return padrao
+
+
+def real(valor):
+    try:
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
+def real4(valor):
+    try:
+        return f"R$ {float(valor):,.4f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,0000"
+
+
+def hoje_iso():
+    return date.today().isoformat()
+
+
+def obter_config(chave, padrao=""):
+    padroes_forcados = {
+        "valor_hora": "5",
+        "margem_padrao": "50",
+        "reserva_erro": "5",
+        "custo_kwh": "250",
+        "validade_orcamento": "7",
+    }
+
+    df = consultar("SELECT valor FROM configuracoes WHERE chave=?", (chave,))
+
+    if df.empty:
+        return padroes_forcados.get(chave, padrao)
+
+    valor = str(df.iloc[0]["valor"]).strip()
+
+    # Corrige automaticamente valores antigos que ficaram com muitos zeros.
+    if chave in padroes_forcados:
+        numero = n(valor, None)
+        if numero is None:
+            return padroes_forcados[chave]
+
+        if chave == "valor_hora" and numero > 100:
+            return "5"
+        if chave == "margem_padrao" and numero > 500:
+            return "50"
+        if chave == "reserva_erro" and numero > 100:
+            return "5"
+        if chave == "custo_kwh" and numero > 100000:
+            return "250"
+        if chave == "validade_orcamento" and numero > 365:
+            return "7"
+
+        if float(numero).is_integer():
+            return str(int(numero))
+        return str(numero).replace(".", ",")
+
+    return valor
+
+
+def salvar_config(chave, valor):
+    executar(
+        "INSERT OR REPLACE INTO configuracoes(chave, valor) VALUES (?, ?)",
+        (chave, str(valor)),
+    )
+
+
+def card(titulo, valor, subtitulo=""):
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="card-title">{titulo}</div>
+            <div class="card-value">{valor}</div>
+            <div class="card-subtitle">{subtitulo}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def salvar_upload(upload, nome_base):
+    if upload is None:
+        return ""
+    ext = Path(upload.name).suffix.lower()
+    caminho = UPLOAD_DIR / f"{nome_base}{ext}"
+    caminho.write_bytes(upload.getbuffer())
+    return str(caminho)
+
+
+def imagem_base64(caminho):
+    try:
+        p = Path(caminho)
+        if not p.exists():
+            return ""
+        return base64.b64encode(p.read_bytes()).decode("utf-8")
+    except Exception:
+        return ""
+
+
+# ============================================================
+# BANCO
+# ============================================================
+
+def criar_banco():
+    executar("""
+    CREATE TABLE IF NOT EXISTS categorias (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS insumos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        valor_pacote REAL DEFAULT 0,
+        quantidade_pacote REAL DEFAULT 1,
+        fornecedor TEXT,
+        link_produto TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS tintas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        valor_kit REAL DEFAULT 0,
+        rendimento_impressoes REAL DEFAULT 1,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS equipamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        valor_pago REAL DEFAULT 0,
+        vida_util_meses REAL DEFAULT 24,
+        producao_mensal REAL DEFAULT 500,
+        potencia_w REAL DEFAULT 0,
+        usa_energia TEXT DEFAULT 'Sim',
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS produtos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        categoria TEXT,
+        qtd_por_lote REAL DEFAULT 1,
+        receita_json TEXT,
+        tintas_json TEXT,
+        equipamentos_json TEXT,
+        tempo_min REAL DEFAULT 0,
+        valor_hora REAL DEFAULT 0,
+        reserva_erro REAL DEFAULT 0,
+        margem_lucro REAL DEFAULT 0,
+        custo_insumos REAL DEFAULT 0,
+        custo_tintas REAL DEFAULT 0,
+        custo_equipamentos REAL DEFAULT 0,
+        custo_mao_obra REAL DEFAULT 0,
+        custo_total_lote REAL DEFAULT 0,
+        custo_unitario REAL DEFAULT 0,
+        preco_sugerido REAL DEFAULT 0,
+        preco_escolhido REAL DEFAULT 0,
+        lucro_unitario REAL DEFAULT 0,
+        margem_real REAL DEFAULT 0,
+        ativo TEXT DEFAULT 'Sim',
+        foto TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS configuracoes (
+        chave TEXT PRIMARY KEY,
+        valor TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        whatsapp TEXT,
+        instagram TEXT,
+        email TEXT,
+        cidade TEXT,
+        endereco TEXT,
+        aniversario TEXT,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim',
+        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS orcamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        whatsapp TEXT,
+        data_orcamento TEXT DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'Em orçamento',
+        forma_pagamento TEXT,
+        subtotal REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        frete REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS orcamento_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        produto TEXT,
+        categoria TEXT,
+        quantidade REAL DEFAULT 0,
+        valor_unitario REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        total REAL DEFAULT 0
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS financeiro (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_DATE,
+        tipo TEXT,
+        descricao TEXT,
+        categoria TEXT,
+        forma_pagamento TEXT,
+        valor REAL DEFAULT 0,
+        origem TEXT,
+        referencia_id INTEGER,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS estoque (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_DATE,
+        item TEXT,
+        categoria TEXT,
+        tipo_movimento TEXT,
+        quantidade REAL DEFAULT 0,
+        valor_unitario REAL DEFAULT 0,
+        fornecedor TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    configuracoes_padrao = {
+        "nome_empresa": "Sophi Personalizados Oficial",
+        "whatsapp": "",
+        "instagram": "@sophipersonalizadosoficial",
+        "email": "",
+        "pix": "",
+        "valor_hora": "5",
+        "margem_padrao": "50",
+        "reserva_erro": "5",
+        "custo_kwh": "250",
+        "validade_orcamento": "7",
+        "logo_path": "",
+    }
+
+    for chave, valor in configuracoes_padrao.items():
+        executar(
+            "INSERT OR IGNORE INTO configuracoes(chave, valor) VALUES (?, ?)",
+            (chave, valor),
+        )
+
+    # Categorias padrão: cria apenas uma vez.
+    # Depois disso você pode adicionar, modificar e excluir livremente.
+    categorias_ja_criadas = consultar(
+        "SELECT valor FROM configuracoes WHERE chave='categorias_iniciais_criadas'"
+    )
+
+    if categorias_ja_criadas.empty:
+        categorias = [
+            "Papel",
+            "Laminação",
+            "Manta/Imã",
+            "Embalagem",
+            "Quadros/A4",
+            "Moldura",
+            "Adesivo",
+            "Sacola",
+            "Caixa",
+            "Fita",
+            "Brinde",
+            "Acabamento",
+            "Outro",
+        ]
+
+        for cat in categorias:
+            executar("INSERT OR IGNORE INTO categorias(nome, ativo) VALUES (?, 'Sim')", (cat,))
+
+        executar(
+            "INSERT OR REPLACE INTO configuracoes(chave, valor) VALUES (?, ?)",
+            ("categorias_iniciais_criadas", "Sim"),
+        )
+
+    if consultar("SELECT COUNT(*) AS total FROM equipamentos").iloc[0]["total"] == 0:
+        equipamentos = [
+            ("Computador", 2000.00, 24, 500, 80, "Sim", "Sim"),
+            ("Silhouette Cameo 4", 1500.00, 24, 500, 20, "Sim", "Sim"),
+            ("Guilhotina", 75.00, 36, 500, 0, "Não", "Sim"),
+            ("Laminadora 6 em 1", 200.00, 24, 500, 450, "Sim", "Sim"),
+            ("Impressora Epson L3250", 1200.00, 24, 500, 12, "Sim", "Sim"),
+        ]
+        for e in equipamentos:
+            executar("""
+            INSERT INTO equipamentos(
+                nome, valor_pago, vida_util_meses, producao_mensal,
+                potencia_w, usa_energia, ativo
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, e)
+
+    if consultar("SELECT COUNT(*) AS total FROM tintas").iloc[0]["total"] == 0:
+        executar("""
+        INSERT INTO tintas(nome, valor_kit, rendimento_impressoes, ativo)
+        VALUES (?, ?, ?, ?)
+        """, ("Tinta Epson Original", 180.00, 7500.00, "Sim"))
+
+
+# ============================================================
+# CÁLCULOS
+# ============================================================
+
+def custo_insumo(valor_pacote, quantidade_pacote):
+    return n(valor_pacote) / max(n(quantidade_pacote, 1), 1)
+
+
+def custo_tinta(valor_kit, rendimento):
+    return n(valor_kit) / max(n(rendimento, 1), 1)
+
+
+def custo_equipamento(row, minutos=1, custo_kwh=None):
+    if custo_kwh is None:
+        custo_kwh = n(obter_config("custo_kwh", "0.90"), 0.90)
+    valor_pago = n(row["valor_pago"])
+    vida = max(n(row["vida_util_meses"], 1), 1)
+    producao = max(n(row["producao_mensal"], 1), 1)
+    potencia = n(row["potencia_w"])
+    usa = str(row["usa_energia"])
+
+    desgaste_por_uso = valor_pago / vida / producao
+    energia_por_minuto = (potencia / 1000) * custo_kwh / 60 if usa == "Sim" else 0
+
+    return (desgaste_por_uso + energia_por_minuto) * minutos
+
+
+def categorias_ativas():
+    df = consultar("SELECT nome FROM categorias WHERE ativo='Sim' ORDER BY nome")
+    return df["nome"].tolist()
+
+
+def dataframe_mes(df, data_col, valor_col, ano):
+    if df.empty:
+        return pd.DataFrame({"Mês": list(range(1, 13)), "Total": [0.0] * 12})
+    dados = df.copy()
+    dados[data_col] = pd.to_datetime(dados[data_col], errors="coerce")
+    dados = dados[dados[data_col].dt.year == ano]
+    serie = dados.groupby(dados[data_col].dt.month)[valor_col].sum()
+    out = pd.DataFrame({"Mês": list(range(1, 13))})
+    out["Total"] = out["Mês"].map(serie).fillna(0.0)
+    return out
+
+
+def dataframe_dia(df, data_col, valor_col, ano):
+    if df.empty:
+        return pd.DataFrame({"Data": [], "Total": []})
+    dados = df.copy()
+    dados[data_col] = pd.to_datetime(dados[data_col], errors="coerce")
+    dados = dados[dados[data_col].dt.year == ano]
+    if dados.empty:
+        return pd.DataFrame({"Data": [], "Total": []})
+    serie = dados.groupby(dados[data_col].dt.date)[valor_col].sum()
+    out = serie.reset_index()
+    out.columns = ["Data", "Total"]
+    return out
+
+
+def gerar_html_orcamento(orc_id):
+    orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orc_id),))
+    if orc.empty:
+        return ""
+
+    o = orc.iloc[0]
+    itens = consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=?", (int(orc_id),))
+
+    logo = obter_config("logo_path", "")
+    logo_html = ""
+    if logo and Path(logo).exists():
+        b64 = imagem_base64(logo)
+        ext = Path(logo).suffix.replace(".", "").lower() or "png"
+        logo_html = f'<img src="data:image/{ext};base64,{b64}" class="logo">'
+
+    linhas = ""
+    for _, r in itens.iterrows():
+        linhas += f"""
+        <tr>
+            <td class="produto">{r['produto']}</td>
+            <td>{r['categoria'] or '-'}</td>
+            <td class="center">{n(r['quantidade']):.0f}</td>
+            <td class="right">{real(r['valor_unitario'])}</td>
+            <td class="right">{real(r['desconto'])}</td>
+            <td class="right strong">{real(r['total'])}</td>
+        </tr>
+        """
+
+    empresa = obter_config("nome_empresa", EMPRESA)
+    validade = obter_config("validade_orcamento", "7")
+    try:
+        prazo_entrega = (datetime.now().date() + timedelta(days=int(n(validade, 7)))).strftime("%d/%m/%Y")
+    except Exception:
+        prazo_entrega = (datetime.now().date() + timedelta(days=7)).strftime("%d/%m/%Y")
+    instagram = obter_config("instagram", "")
+    whatsapp = obter_config("whatsapp", "")
+    pix = obter_config("pix", "")
+    email = obter_config("email", "")
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Orçamento #{orc_id} - {empresa}</title>
+<style>
+* {{ 
+    box-sizing: border-box; 
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+}}
+html {{
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}}
+body {{
+    font-family: Arial, Helvetica, sans-serif;
+    color: #111;
+    margin: 0;
+    background: #f3f3f3;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}}
+.page {{
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0 auto;
+    background: #fff;
+    padding: 20px 28px;
+}}
+.top {{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    border-bottom: 2px solid #111;
+    padding-bottom: 12px;
+}}
+.logo {{ max-height: 60px; max-width: 130px; object-fit: contain; }}
+.brand h1 {{
+    margin: 0;
+    font-size: 25px;
+    letter-spacing: .4px;
+}}
+.brand p {{
+    margin: 5px 0 0;
+    color: #555;
+    font-size: 11px;
+}}
+.brand {{
+    max-width: 540px;
+}}
+.badge .label {{
+    font-size: 9px;
+}}
+.badge {{
+    border: 2px solid #111;
+    padding: 9px 12px;
+    text-align: right;
+    min-width: 145px;
+}}
+.badge .num {{
+    font-size: 20px;
+    font-weight: 800;
+}}
+.badge .status {{
+    margin-top: 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}}
+.section {{
+    margin-top: 14px;
+}}
+.section-title {{
+    background: #000000 !important;
+    color: #ffffff !important;
+    box-shadow: inset 0 0 0 1000px #000000 !important;
+    padding: 7px 11px;
+    margin: 14px 0 8px;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: .2px;
+}}
+.grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}}
+.box {{
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 10px;
+    background: #fafafa;
+}}
+.box p {{
+    margin: 6px 0;
+    font-size: 12px;
+    line-height: 1.25;
+}}
+.label {{
+    color: #777;
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+}}
+.value {{
+    font-size: 13px;
+    font-weight: 700;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+    font-size: 11px;
+}}
+th {{
+    background: #000000 !important;
+    color: #ffffff !important;
+    box-shadow: inset 0 0 0 1000px #000000 !important;
+    padding: 11px 9px;
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}}
+td {{
+    border-bottom: 1px solid #e6e6e6;
+    padding: 7px 7px;
+}}
+tr:nth-child(even) td {{ background: #fafafa; }}
+.right {{ text-align: right; }}
+.center {{ text-align: center; }}
+.strong {{ font-weight: 800; }}
+.produto {{ font-weight: 700; }}
+.totals {{
+    width: 285px;
+    margin-left: auto;
+    margin-top: 10px;
+}}
+.total-row {{
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid #eee;
+}}
+.total-final {{
+    margin-top: 7px;
+    padding: 10px;
+    background: #000000 !important;
+    color: #ffffff !important;
+    box-shadow: inset 0 0 0 1000px #000000 !important;
+    border-radius: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 18px;
+    font-weight: 900;
+}}
+.obs {{
+    min-height: 42px;
+    white-space: pre-wrap;
+}}
+.footer {{
+    margin-top: 18px;
+    padding-top: 10px;
+    border-top: 1px solid #ddd;
+    font-size: 10px;
+    color: #555;
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+}}
+button {{
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    background: #111;
+    color: #fff;
+    border: none;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-weight: 700;
+    cursor: pointer;
+}}
+@media print {{
+    * {{
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        color-adjust: exact !important;
+    }}
+    body {{ background: #ffffff !important; }}
+    @page {{ size: A4; margin: 8mm; }}
+    .page {{ width: auto; min-height: auto; padding: 0; }}
+    button {{ display: none; }}
+    th, .total-final, .section-title {{
+        background: #000000 !important;
+        color: #ffffff !important;
+        box-shadow: inset 0 0 0 1000px #000000 !important;
+    }}
+}}
+</style>
+</head>
+<body>
+<button onclick="window.print()">Imprimir / salvar em PDF</button>
+
+<div class="page">
+    <div class="top">
+        <div class="brand">
+            {logo_html}
+            <h1>{empresa}</h1>
+            <p>📷 {instagram} {(' | ' + whatsapp) if whatsapp else ''} {(' | ' + email) if email else ''}</p>
+        </div>
+        <div class="badge">
+            <div class="label">Orçamento</div>
+            <div class="num">#{int(orc_id):06d}</div>
+            <div class="status">{o['status']}</div>
+        </div>
+    </div>
+
+    <div class="section grid">
+        <div class="box">
+            <div class="label">Cliente</div>
+            <div class="value">{o['cliente_nome']}</div>
+            <p><b>WhatsApp:</b> {o['whatsapp'] or '-'}</p>
+            <p><b>Data:</b> {o['data_orcamento']}</p><p><b>Prazo de entrega:</b> {prazo_entrega}</p>
+        </div>
+        <div class="box">
+            <div class="label">Pagamento</div>
+            <div class="value">{o['forma_pagamento'] or '-'}</div>
+            <p><b>Validade:</b> {validade} dias</p>
+            <p><b>Chave PIX/CNPJ:</b> {pix or '-'}</p>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Itens do orçamento</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Produto</th>
+                    <th>Categoria</th>
+                    <th class="center">Qtd</th>
+                    <th class="right">Unitário</th>
+                    <th class="right">Desconto</th>
+                    <th class="right">Total</th>
+                </tr>
+            </thead>
+            <tbody>{linhas}</tbody>
+        </table>
+    </div>
+
+    <div class="totals">
+        <div class="total-row"><span>Subtotal</span><b>{real(o['subtotal'])}</b></div>
+        <div class="total-row"><span>Desconto</span><b>{real(o['desconto'])}</b></div>
+        <div class="total-row"><span>Frete</span><b>{real(o['frete'])}</b></div>
+        <div class="total-final"><span>Total</span><span>{real(o['total'])}</span></div>
+    </div>
+
+    <div class="section box">
+        <div class="section-title">Informações adicionais</div><div class="label">Observações</div>
+        <div class="obs">{o['observacoes'] or 'Sem observações.'}</div>
+    </div>
+
+    <div class="footer">
+        <div>Orçamento gerado pelo Sophi ERP. Valores sujeitos à confirmação conforme personalização, material e prazo.</div>
+        <div><b>{empresa}</b><br>Obrigada pela preferência.</div>
+    </div>
+</div>
+</body>
+</html>"""
+    return html
+
+def tela_inicio():
+    st.title("Dashboard")
+    st.write("Visão geral da Sophi Personalizados Oficial.")
+
+    anos = list(range(2026, 2031))
+    ano = st.selectbox("Ano do dashboard", anos, index=0)
+
+    orc = consultar("SELECT * FROM orcamentos")
+    fin = consultar("SELECT * FROM financeiro")
+    clientes = consultar("SELECT * FROM clientes")
+    produtos = consultar("SELECT * FROM produtos")
+
+    faturamento_orc = 0.0
+    qtd_orc = 0
+
+    if not orc.empty:
+        temp = orc.copy()
+        temp["data_orcamento"] = pd.to_datetime(temp["data_orcamento"], errors="coerce")
+        temp_ano = temp[temp["data_orcamento"].dt.year == ano]
+        faturamento_orc = float(temp_ano["total"].sum())
+        qtd_orc = len(temp_ano)
+
+    entradas = 0.0
+    saidas = 0.0
+    if not fin.empty:
+        tempf = fin.copy()
+        tempf["data"] = pd.to_datetime(tempf["data"], errors="coerce")
+        tempf = tempf[tempf["data"].dt.year == ano]
+        entradas = float(tempf[tempf["tipo"] == "Entrada"]["valor"].sum())
+        saidas = float(tempf[tempf["tipo"] == "Saída"]["valor"].sum())
+
+    saldo = entradas - saidas
+    ticket = faturamento_orc / qtd_orc if qtd_orc else 0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        card("Faturamento", real(faturamento_orc), f"Orçamentos em {ano}")
+    with c2:
+        card("Entradas", real(entradas), "Fluxo de caixa")
+    with c3:
+        card("Saídas", real(saidas), "Fluxo de caixa")
+    with c4:
+        card("Saldo", real(saldo), "Entradas - saídas")
+    with c5:
+        card("Ticket médio", real(ticket), f"{qtd_orc} orçamento(s)")
+
+    c6, c7, c8 = st.columns(3)
+    with c6:
+        card("Clientes", str(len(clientes)), "Cadastrados")
+    with c7:
+        card("Produtos", str(len(produtos)), "Cadastrados")
+    with c8:
+        card("Orçamentos", str(qtd_orc), f"Ano {ano}")
+
+    st.divider()
+
+    mensal = dataframe_mes(orc, "data_orcamento", "total", ano)
+    mensal["Mês"] = mensal["Mês"].map({
+        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+    })
+
+    st.subheader("Faturamento mensal")
+    st.bar_chart(mensal.set_index("Mês"))
+
+    diario = dataframe_dia(orc, "data_orcamento", "total", ano)
+    st.subheader("Faturamento diário")
+    if diario.empty:
+        st.info("Ainda não há dados diários para este ano.")
+    else:
+        st.line_chart(diario.set_index("Data"))
+
+    st.subheader("Comparativo anual")
+    linhas = []
+    for a in anos:
+        if orc.empty:
+            total = 0
+        else:
+            temp = orc.copy()
+            temp["data_orcamento"] = pd.to_datetime(temp["data_orcamento"], errors="coerce")
+            total = float(temp[temp["data_orcamento"].dt.year == a]["total"].sum())
+        linhas.append({"Ano": str(a), "Total": total})
+    anual = pd.DataFrame(linhas)
+    st.bar_chart(anual.set_index("Ano"))
+
+    st.subheader("Últimos orçamentos")
+    if orc.empty:
+        st.info("Ainda não há orçamentos.")
+    else:
+        ultimos = consultar("""
+        SELECT id, cliente_nome, status, forma_pagamento, total, data_orcamento
+        FROM orcamentos
+        ORDER BY id DESC
+        LIMIT 8
+        """)
+        st.dataframe(
+            ultimos,
+            use_container_width=True,
+            hide_index=True,
+            column_config={"total": st.column_config.NumberColumn("Total", format="R$ %.2f")},
+        )
+
+def tela_configuracoes():
+    st.title("Configurações")
+    st.write("Aqui você controla os dados principais da Sophi Personalizados Oficial.")
+
+    logo_atual = obter_config("logo_path", "")
+    if logo_atual and Path(logo_atual).exists():
+        st.image(logo_atual, width=160)
+
+    logo_upload = st.file_uploader("Enviar logo da empresa", type=["png", "jpg", "jpeg", "webp"])
+    if logo_upload is not None:
+        caminho = salvar_upload(logo_upload, "logo_sophi")
+        salvar_config("logo_path", caminho)
+        st.success("Logo salva com sucesso.")
+        st.rerun()
+
+    with st.form("form_configuracoes"):
+        st.subheader("Dados da empresa")
+        nome_empresa = st.text_input("Nome da empresa", value=obter_config("nome_empresa", EMPRESA))
+        instagram = st.text_input("Instagram", value=obter_config("instagram", "@sophipersonalizadosoficial"))
+        whatsapp = st.text_input("WhatsApp", value=obter_config("whatsapp", ""))
+        email = st.text_input("E-mail", value=obter_config("email", ""))
+        pix = st.text_input("Chave PIX", value=obter_config("pix", ""))
+
+        st.subheader("Valores padrão de cálculo")
+        st.caption("Digite normal: 5 / 5,50 / 2,50. O sistema salva sem encher de zeros.")
+
+        c1, c2, c3 = st.columns(3)
+        valor_hora_txt = c1.text_input("Valor da sua hora (R$)", value=obter_config("valor_hora", "5"))
+        margem_padrao_txt = c2.text_input("Margem padrão (%)", value=obter_config("margem_padrao", "50"))
+        reserva_erro_txt = c3.text_input("Reserva de erro (%)", value=obter_config("reserva_erro", "5"))
+
+        c4, c5 = st.columns(2)
+        custo_kwh_txt = c4.text_input("Custo energia kWh (R$)", value=obter_config("custo_kwh", "250"))
+        validade_txt = c5.text_input("Validade do orçamento em dias", value=obter_config("validade_orcamento", "7"))
+
+        if st.form_submit_button("Salvar configurações"):
+            salvar_config("nome_empresa", nome_empresa)
+            salvar_config("instagram", instagram)
+            salvar_config("whatsapp", whatsapp)
+            salvar_config("email", email)
+            salvar_config("pix", pix)
+            salvar_config("valor_hora", int(n(valor_hora_txt, 5)) if n(valor_hora_txt, 5).is_integer() else n(valor_hora_txt, 5))
+            salvar_config("margem_padrao", int(n(margem_padrao_txt, 50)) if n(margem_padrao_txt, 50).is_integer() else n(margem_padrao_txt, 50))
+            salvar_config("reserva_erro", n(reserva_erro_txt, 5))
+            salvar_config("custo_kwh", int(n(custo_kwh_txt, 250)) if n(custo_kwh_txt, 250).is_integer() else n(custo_kwh_txt, 250))
+            salvar_config("validade_orcamento", int(n(validade_txt, 7)))
+            st.success("Configurações salvas com sucesso.")
+            st.rerun()
+
+
+def tela_clientes():
+    st.title("Clientes")
+    st.write("Cadastre e acompanhe os clientes da Sophi Personalizados Oficial.")
+
+    st.subheader("Cadastrar cliente")
+    with st.form("form_cliente"):
+        c1, c2 = st.columns(2)
+        nome = c1.text_input("Nome do cliente")
+        whatsapp = c2.text_input("WhatsApp")
+
+        c3, c4 = st.columns(2)
+        instagram = c3.text_input("Instagram")
+        email = c4.text_input("E-mail")
+
+        c5, c6 = st.columns(2)
+        cidade = c5.text_input("Cidade")
+        aniversario = c6.text_input("Aniversário", placeholder="Ex: 15/08")
+
+        endereco = st.text_area("Endereço")
+        observacoes = st.text_area("Observações")
+        ativo = st.selectbox("Cliente ativo?", ["Sim", "Não"])
+
+        if st.form_submit_button("Salvar cliente"):
+            if not nome.strip():
+                st.error("Digite o nome do cliente.")
+            else:
+                executar("""
+                INSERT INTO clientes(
+                    nome, whatsapp, instagram, email, cidade,
+                    endereco, aniversario, observacoes, ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (nome, whatsapp, instagram, email, cidade, endereco, aniversario, observacoes, ativo))
+                st.success("Cliente salvo com sucesso.")
+                st.rerun()
+
+    st.divider()
+    st.subheader("Clientes cadastrados")
+    busca_cliente = st.text_input("Pesquisar cliente")
+
+    if busca_cliente.strip():
+        termo = f"%{busca_cliente.strip()}%"
+        df_clientes = consultar("""
+        SELECT id, nome, whatsapp, instagram, email, cidade, aniversario, ativo, data_cadastro
+        FROM clientes
+        WHERE nome LIKE ? OR whatsapp LIKE ? OR instagram LIKE ? OR cidade LIKE ?
+        ORDER BY id DESC
+        """, (termo, termo, termo, termo))
+    else:
+        df_clientes = consultar("""
+        SELECT id, nome, whatsapp, instagram, email, cidade, aniversario, ativo, data_cadastro
+        FROM clientes
+        ORDER BY id DESC
+        """)
+
+    edited = st.data_editor(
+        df_clientes,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_clientes_profissional",
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar alterações dos clientes"):
+            for _, r in edited.iterrows():
+                if str(r["nome"]).strip():
+                    executar("""
+                    UPDATE clientes
+                    SET nome=?, whatsapp=?, instagram=?, email=?, cidade=?, aniversario=?, ativo=?
+                    WHERE id=?
+                    """, (
+                        r["nome"], r["whatsapp"], r["instagram"], r["email"],
+                        r["cidade"], r["aniversario"], r["ativo"], int(r["id"]),
+                    ))
+            st.success("Clientes atualizados.")
+            st.rerun()
+    with c2:
+        id_excluir = st.number_input("ID para excluir", min_value=0, step=1, key="del_cliente_prof")
+    with c3:
+        st.write("")
+        if st.button("Excluir cliente"):
+            if id_excluir > 0:
+                executar("DELETE FROM clientes WHERE id=?", (int(id_excluir),))
+                st.success("Cliente excluído com sucesso.")
+                st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+
+    st.subheader("Ficha rápida do cliente")
+    id_ficha = st.number_input("ID do cliente para ver ficha", min_value=0, step=1, key="id_ficha_cliente")
+    if id_ficha > 0:
+        cli = consultar("SELECT * FROM clientes WHERE id=?", (int(id_ficha),))
+        if cli.empty:
+            st.warning("Cliente não encontrado.")
+        else:
+            c = cli.iloc[0]
+            orcs = consultar("SELECT COUNT(*) AS qtd, COALESCE(SUM(total),0) AS total FROM orcamentos WHERE cliente_id=?", (int(id_ficha),))
+            qtd = int(orcs.iloc[0]["qtd"])
+            total = float(orcs.iloc[0]["total"])
+            a, b, ccol = st.columns(3)
+            with a:
+                card("Cliente", c["nome"], c["whatsapp"] or "")
+            with b:
+                card("Orçamentos", str(qtd), "Histórico")
+            with ccol:
+                card("Total gasto", real(total), "Soma de orçamentos")
+            st.write(c["observacoes"] or "")
+
+def tela_cadastro_por_categoria(titulo, categoria_padrao):
+    st.title(titulo)
+    st.write(f"Cadastre, edite e exclua itens da categoria: {categoria_padrao}.")
+
+    with st.form(f"form_{categoria_padrao}"):
+        nome = st.text_input("Nome")
+        c1, c2 = st.columns(2)
+        valor_pacote = c1.number_input("Valor pago/pacote", min_value=0.0, step=0.01, format="%.2f")
+        quantidade = c2.number_input("Quantidade no pacote", min_value=1.0, value=1.0, step=1.0)
+        fornecedor = st.text_input("Fornecedor")
+        link = st.text_input("Link do produto")
+        ativo = st.selectbox("Ativo?", ["Sim", "Não"])
+        st.metric("Custo unitário automático", real(custo_insumo(valor_pacote, quantidade)))
+
+        if st.form_submit_button("Salvar"):
+            if not nome.strip():
+                st.error("Digite o nome.")
+            else:
+                executar("""
+                INSERT INTO insumos(nome, categoria, valor_pacote, quantidade_pacote, fornecedor, link_produto, ativo)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (nome, categoria_padrao, valor_pacote, quantidade, fornecedor, link, ativo))
+                st.success("Salvo com sucesso.")
+                st.rerun()
+
+    st.subheader("Cadastrados")
+    df = consultar("SELECT * FROM insumos WHERE categoria=? ORDER BY id DESC", (categoria_padrao,))
+    if not df.empty:
+        df["custo_unitario"] = df.apply(lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]), axis=1)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key=f"editor_{categoria_padrao}",
+        column_config={
+            "valor_pacote": st.column_config.NumberColumn("Valor pacote", format="R$ %.2f"),
+            "custo_unitario": st.column_config.NumberColumn("Custo unitário", format="R$ %.2f"),
+        },
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button(f"Salvar modificações - {categoria_padrao}"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT INTO insumos(nome, categoria, valor_pacote, quantidade_pacote, fornecedor, link_produto, ativo)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (str(r["nome"]).strip(), categoria_padrao, n(r.get("valor_pacote", 0)), max(n(r.get("quantidade_pacote", 1), 1), 1), str(r.get("fornecedor", "")), str(r.get("link_produto", "")), str(r.get("ativo", "Sim") or "Sim")))
+                    else:
+                        executar("""
+                        UPDATE insumos SET nome=?, categoria=?, valor_pacote=?, quantidade_pacote=?, fornecedor=?, link_produto=?, ativo=? WHERE id=?
+                        """, (str(r["nome"]).strip(), categoria_padrao, n(r.get("valor_pacote", 0)), max(n(r.get("quantidade_pacote", 1), 1), 1), str(r.get("fornecedor", "")), str(r.get("link_produto", "")), str(r.get("ativo", "Sim") or "Sim"), int(r["id"])))
+            st.success("Alterações salvas.")
+            st.rerun()
+
+    with c2:
+        del_id = st.number_input("ID para excluir", min_value=0, step=1, key=f"del_{categoria_padrao}")
+    with c3:
+        st.write("")
+        if st.button(f"Excluir - {categoria_padrao}") and del_id:
+            executar("DELETE FROM insumos WHERE id=?", (int(del_id),))
+            st.success("Excluído.")
+            st.rerun()
+
+def tela_categorias():
+    st.title("Categorias")
+    st.write("Adicione, modifique e exclua categorias livremente. O sistema não recria categorias excluídas.")
+
+    st.subheader("Adicionar categoria")
+    c1, c2 = st.columns([3, 1])
+    nova = c1.text_input("Nome da nova categoria")
+    ativo_novo = c2.selectbox("Ativo?", ["Sim", "Não"], key="categoria_ativa_nova")
+
+    if st.button("Adicionar categoria"):
+        if nova.strip():
+            executar("INSERT OR IGNORE INTO categorias(nome, ativo) VALUES (?, ?)", (nova.strip(), ativo_novo))
+            st.success("Categoria criada.")
+            st.rerun()
+        else:
+            st.warning("Digite o nome da categoria.")
+
+    st.divider()
+    st.subheader("Modificar categorias cadastradas")
+    df = consultar("SELECT id, nome, ativo FROM categorias ORDER BY nome")
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_categorias_modificar",
+    )
+
+    if st.button("Salvar modificações das categorias"):
+        for _, r in edited.iterrows():
+            if str(r.get("nome", "")).strip():
+                if pd.isna(r.get("id")):
+                    executar(
+                        "INSERT OR IGNORE INTO categorias(nome, ativo) VALUES (?, ?)",
+                        (str(r["nome"]).strip(), str(r.get("ativo", "Sim") or "Sim")),
+                    )
+                else:
+                    executar(
+                        "UPDATE categorias SET nome=?, ativo=? WHERE id=?",
+                        (str(r["nome"]).strip(), str(r.get("ativo", "Sim") or "Sim"), int(r["id"])),
+                    )
+        st.success("Categorias atualizadas.")
+        st.rerun()
+
+    st.divider()
+    st.subheader("Excluir categoria")
+    st.caption("A categoria excluída não será recriada automaticamente.")
+    id_excluir = st.number_input("ID da categoria para excluir", min_value=0, step=1, key="excluir_categoria_id")
+
+    if st.button("Excluir categoria selecionada"):
+        if id_excluir > 0:
+            executar("DELETE FROM categorias WHERE id=?", (int(id_excluir),))
+            st.success("Categoria excluída com sucesso.")
+            st.rerun()
+        else:
+            st.warning("Digite um ID válido.")
+
+def tela_insumos():
+    st.title("Insumos Gerais")
+    st.subheader("Cadastrar insumo")
+    categorias = categorias_ativas()
+
+    with st.form("form_insumo"):
+        c1, c2 = st.columns(2)
+        nome = c1.text_input("Nome do insumo")
+        categoria = c2.selectbox("Categoria", categorias)
+
+        c3, c4 = st.columns(2)
+        valor_pacote = c3.number_input("Valor do pacote", min_value=0.0, step=0.01, format="%.2f")
+        quantidade = c4.number_input("Quantidade no pacote", min_value=1.0, value=1.0, step=1.0)
+
+        fornecedor = st.text_input("Fornecedor")
+        link = st.text_input("Link do produto")
+        ativo = st.selectbox("Ativo?", ["Sim", "Não"])
+        st.metric("Custo automático", real(custo_insumo(valor_pacote, quantidade)))
+
+        if st.form_submit_button("Salvar insumo"):
+            if not nome.strip():
+                st.error("Coloque o nome do insumo.")
+            else:
+                executar("""
+                INSERT INTO insumos(nome, categoria, valor_pacote, quantidade_pacote, fornecedor, link_produto, ativo)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (nome, categoria, valor_pacote, quantidade, fornecedor, link, ativo))
+                st.success("Insumo salvo.")
+                st.rerun()
+
+    st.subheader("Insumos cadastrados")
+    df = consultar("SELECT * FROM insumos ORDER BY id DESC")
+    if not df.empty:
+        df["custo_automatico"] = df.apply(lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]), axis=1)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_pacote": st.column_config.NumberColumn("Valor pacote", format="R$ %.2f"),
+            "custo_automatico": st.column_config.NumberColumn("Custo automático", format="R$ %.2f"),
+        },
+        key="editor_insumos",
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar Alterações dos insumos"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT INTO insumos(nome, categoria, valor_pacote, quantidade_pacote, fornecedor, link_produto, ativo)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (r["nome"], r["categoria"], n(r["valor_pacote"]), max(n(r["quantidade_pacote"], 1), 1), r["fornecedor"], r["link_produto"], r["ativo"]))
+                    else:
+                        executar("""
+                        UPDATE insumos SET nome=?, categoria=?, valor_pacote=?, quantidade_pacote=?, fornecedor=?, link_produto=?, ativo=? WHERE id=?
+                        """, (r["nome"], r["categoria"], n(r["valor_pacote"]), max(n(r["quantidade_pacote"], 1), 1), r["fornecedor"], r["link_produto"], r["ativo"], int(r["id"])))
+            st.success("Insumos atualizados.")
+            st.rerun()
+
+    with c2:
+        del_id = st.number_input("ID para excluir", min_value=0, step=1, key="del_ins")
+    with c3:
+        st.write("")
+        if st.button("Excluir insumo") and del_id:
+            executar("DELETE FROM insumos WHERE id=?", (int(del_id),))
+            st.success("Insumo excluído.")
+            st.rerun()
+
+
+def tela_tintas():
+    st.title("Tintas")
+    st.subheader("Cadastrar tinta")
+
+    with st.form("form_tinta"):
+        nome = st.text_input("Nome da tinta", value="Tinta Epson Original")
+        c1, c2 = st.columns(2)
+        valor_kit = c1.number_input("Valor do kit", min_value=0.0, value=180.00, step=0.01, format="%.2f")
+        rendimento = c2.number_input("Rendimento em impressões", min_value=1.0, value=7500.0, step=1.0)
+        ativo = st.selectbox("Ativo?", ["Sim", "Não"])
+        st.metric("Custo por impressão", real4(custo_tinta(valor_kit, rendimento)))
+
+        if st.form_submit_button("Salvar tinta"):
+            executar("INSERT INTO tintas(nome, valor_kit, rendimento_impressoes, ativo) VALUES (?, ?, ?, ?)",
+                     (nome, valor_kit, rendimento, ativo))
+            st.success("Tinta salva.")
+            st.rerun()
+
+    st.subheader("Tintas cadastradas")
+    df = consultar("SELECT * FROM tintas ORDER BY id DESC")
+    if not df.empty:
+        df["custo_automatico"] = df.apply(lambda r: custo_tinta(r["valor_kit"], r["rendimento_impressoes"]), axis=1)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_kit": st.column_config.NumberColumn("Valor kit", format="R$ %.2f"),
+            "custo_automatico": st.column_config.NumberColumn("Custo automático", format="R$ %.4f"),
+        },
+        key="editor_tintas",
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar Alterações das tintas"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("INSERT INTO tintas(nome, valor_kit, rendimento_impressoes, ativo) VALUES (?, ?, ?, ?)",
+                                 (r["nome"], n(r["valor_kit"]), max(n(r["rendimento_impressoes"], 1), 1), r["ativo"]))
+                    else:
+                        executar("UPDATE tintas SET nome=?, valor_kit=?, rendimento_impressoes=?, ativo=? WHERE id=?",
+                                 (r["nome"], n(r["valor_kit"]), max(n(r["rendimento_impressoes"], 1), 1), r["ativo"], int(r["id"])))
+            st.success("Tintas atualizadas.")
+            st.rerun()
+    with c2:
+        del_id = st.number_input("ID para excluir", min_value=0, step=1, key="del_tinta")
+    with c3:
+        st.write("")
+        if st.button("Excluir tinta") and del_id:
+            executar("DELETE FROM tintas WHERE id=?", (int(del_id),))
+            st.success("Tinta excluída.")
+            st.rerun()
+
+
+def tela_equipamentos():
+    st.title("Equipamentos")
+    st.subheader("Cadastrar equipamento")
+
+    with st.form("form_equipamento"):
+        nome = st.text_input("Nome do equipamento")
+        c1, c2, c3 = st.columns(3)
+        valor_pago = c1.number_input("Valor pago", min_value=0.0, step=0.01, format="%.2f")
+        vida = c2.number_input("Vida útil em meses", min_value=1.0, value=24.0, step=1.0)
+        producao = c3.number_input("Produção padrão por mês", min_value=1.0, value=500.0, step=1.0)
+
+        c4, c5, c6 = st.columns(3)
+        potencia = c4.number_input("Potência padrão (W)", min_value=0.0, value=0.0, step=1.0)
+        usa_energia = c5.selectbox("Usa energia?", ["Sim", "Não"])
+        ativo = c6.selectbox("Ativo?", ["Sim", "Não"])
+
+        custo = custo_equipamento(
+            {
+                "valor_pago": valor_pago,
+                "vida_util_meses": vida,
+                "producao_mensal": producao,
+                "potencia_w": potencia,
+                "usa_energia": usa_energia,
+            },
+            minutos=1,
+        )
+
+        st.metric("Custo por minuto/uso", real4(custo))
+
+        if st.form_submit_button("Salvar equipamento"):
+            if not nome.strip():
+                st.error("Coloque o nome do equipamento.")
+            else:
+                executar("""
+                INSERT INTO equipamentos(
+                    nome, valor_pago, vida_util_meses, producao_mensal,
+                    potencia_w, usa_energia, ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (nome, valor_pago, vida, producao, potencia, usa_energia, ativo))
+                st.success("Equipamento salvo.")
+                st.rerun()
+
+    st.subheader("Equipamentos cadastrados")
+    df = consultar("SELECT * FROM equipamentos ORDER BY id DESC")
+    if not df.empty:
+        df["custo_automatico_minuto"] = df.apply(lambda r: custo_equipamento(r, minutos=1), axis=1)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_pago": st.column_config.NumberColumn("Valor pago", format="R$ %.2f"),
+            "custo_automatico_minuto": st.column_config.NumberColumn("Custo/min", format="R$ %.4f"),
+        },
+        key="editor_equipamentos",
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar Alterações dos equipamentos"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT INTO equipamentos(
+                            nome, valor_pago, vida_util_meses, producao_mensal,
+                            potencia_w, usa_energia, ativo
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (r["nome"], n(r["valor_pago"]), max(n(r["vida_util_meses"], 1), 1), max(n(r["producao_mensal"], 1), 1), n(r["potencia_w"]), r["usa_energia"], r["ativo"]))
+                    else:
+                        executar("""
+                        UPDATE equipamentos SET nome=?, valor_pago=?, vida_util_meses=?, producao_mensal=?, potencia_w=?, usa_energia=?, ativo=? WHERE id=?
+                        """, (r["nome"], n(r["valor_pago"]), max(n(r["vida_util_meses"], 1), 1), max(n(r["producao_mensal"], 1), 1), n(r["potencia_w"]), r["usa_energia"], r["ativo"], int(r["id"])))
+            st.success("Equipamentos atualizados.")
+            st.rerun()
+    with c2:
+        del_id = st.number_input("ID para excluir", min_value=0, step=1, key="del_eq")
+    with c3:
+        st.write("")
+        if st.button("Excluir equipamento") and del_id:
+            executar("DELETE FROM equipamentos WHERE id=?", (int(del_id),))
+            st.success("Equipamento excluído.")
+            st.rerun()
+
+
+def seletor_insumo(linha):
+    categorias = ["Todas"] + categorias_ativas()
+    c1, c2, c3 = st.columns([2, 4, 1.2])
+    categoria = c1.selectbox("Categoria", categorias, key=f"cat_ins_{linha}")
+
+    if categoria == "Todas":
+        df = consultar("SELECT * FROM insumos WHERE ativo='Sim' ORDER BY categoria, nome")
+    else:
+        df = consultar("SELECT * FROM insumos WHERE ativo='Sim' AND categoria=? ORDER BY nome", (categoria,))
+
+    if df.empty:
+        c2.selectbox("Insumo", ["Nenhum"], key=f"insumo_{linha}")
+        c3.number_input("Qtd", min_value=0.0, value=0.0, key=f"qtd_ins_{linha}")
+        return None
+
+    opcoes = ["Nenhum"]
+    mapa = {}
+
+    for _, r in df.iterrows():
+        custo = custo_insumo(r["valor_pacote"], r["quantidade_pacote"])
+        label = f"{r['nome']} — {r['categoria']} — {real(custo)}"
+        opcoes.append(label)
+        mapa[label] = {"nome": r["nome"], "categoria": r["categoria"], "custo_unitario": custo}
+
+    escolhido = c2.selectbox("Insumo", opcoes, key=f"insumo_{linha}")
+    qtd = c3.number_input(
+        "Qtd",
+        min_value=0.0,
+        value=1.0 if escolhido != "Nenhum" else 0.0,
+        step=1.0,
+        key=f"qtd_ins_{linha}",
+    )
+
+    if escolhido == "Nenhum" or qtd == 0:
+        return None
+
+    item = mapa[escolhido]
+    item["qtd"] = qtd
+    item["total"] = item["custo_unitario"] * qtd
+    return item
+
+
+def seletor_tinta(linha):
+    df = consultar("SELECT * FROM tintas WHERE ativo='Sim' ORDER BY nome")
+    c1, c2 = st.columns([4, 1.2])
+
+    if df.empty:
+        c1.selectbox("Tinta", ["Nenhuma"], key=f"tinta_{linha}")
+        c2.number_input("Qtd", min_value=0.0, value=0.0, key=f"qtd_tinta_{linha}")
+        return None
+
+    opcoes = ["Nenhuma"]
+    mapa = {}
+
+    for _, r in df.iterrows():
+        custo = custo_tinta(r["valor_kit"], r["rendimento_impressoes"])
+        label = f"{r['nome']} — {real4(custo)} por impressão"
+        opcoes.append(label)
+        mapa[label] = {"nome": r["nome"], "custo_unitario": custo}
+
+    escolhido = c1.selectbox("Tinta", opcoes, key=f"tinta_{linha}")
+    qtd = c2.number_input(
+        "Qtd",
+        min_value=0.0,
+        value=1.0 if escolhido != "Nenhuma" else 0.0,
+        step=1.0,
+        key=f"qtd_tinta_{linha}",
+    )
+
+    if escolhido == "Nenhuma" or qtd == 0:
+        return None
+
+    item = mapa[escolhido]
+    item["qtd"] = qtd
+    item["total"] = item["custo_unitario"] * qtd
+    return item
+
+
+def tela_produtos():
+    st.title("Produtos / Precificação")
+    c1, c2, c3 = st.columns([3, 2, 1])
+    nome = c1.text_input("Nome do produto")
+    categoria_produto = c2.text_input("Categoria do produto")
+    ativo = c3.selectbox("Ativo?", ["Sim", "Não"])
+
+    foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
+
+    qtd_por_lote = st.number_input("Quantidade produzida por folha/lote", min_value=1.0, value=1.0, step=1.0)
+
+    st.subheader("Receita do produto")
+    receita = []
+    custo_insumos_total = 0.0
+
+    for linha in range(1, 11):
+        item = seletor_insumo(linha)
+        if item:
+            receita.append(item)
+            custo_insumos_total += item["total"]
+
+    st.subheader("Tintas usadas")
+    tintas = []
+    custo_tintas_total = 0.0
+
+    for linha in range(1, 2):
+        item = seletor_tinta(linha)
+        if item:
+            tintas.append(item)
+            custo_tintas_total += item["total"]
+
+    st.subheader("Equipamentos usados")
+    df_eq = consultar("SELECT * FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
+    tempo_min = st.number_input("Tempo de produção do lote em minutos", min_value=0.0, value=10.0, step=1.0)
+
+    equipamentos = []
+    custo_equip_total = 0.0
+
+    if not df_eq.empty:
+        cols = st.columns(3)
+        for idx, (_, row) in enumerate(df_eq.iterrows()):
+            with cols[idx % 3]:
+                usar = st.checkbox(row["nome"], key=f"eq_{row['id']}")
+                if usar:
+                    custo = custo_equipamento(row, minutos=tempo_min)
+                    equipamentos.append({"nome": row["nome"], "custo": custo})
+                    custo_equip_total += custo
+                    st.caption(real4(custo))
+
+    st.subheader("Mão de obra e precificação")
+    c1, c2, c3 = st.columns(3)
+    valor_hora = c1.number_input("Valor hora Mão de obra", min_value=0.0, value=n(obter_config("valor_hora", "5"), 5), step=0.01, format="%.2f")
+    reserva = c2.number_input("Reserva de erro (%)", min_value=0.0, value=n(obter_config("reserva_erro", "5"), 5), step=0.1, format="%.2f")
+    margem = c3.number_input("Margem desejada (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f")
+
+    custo_mao_obra = tempo_min / 60 * valor_hora
+    custo_lote_sem_reserva = custo_insumos_total + custo_tintas_total + custo_equip_total + custo_mao_obra
+    custo_total_lote = custo_lote_sem_reserva * (1 + reserva / 100)
+    custo_unitario = custo_total_lote / qtd_por_lote if qtd_por_lote else 0
+    preco_sugerido = custo_unitario * (1 + margem / 100)
+
+    preco_escolhido = st.number_input("Preço escolhido por mim", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+    preco_final = preco_escolhido if preco_escolhido > 0 else preco_sugerido
+    lucro = preco_final - custo_unitario
+    margem_real = lucro / preco_final * 100 if preco_final else 0
+
+    st.subheader("Resumo automático")
+    r1, r2, r3, r4 = st.columns(4)
+    with r1:
+        card("Insumos", real(custo_insumos_total))
+    with r2:
+        card("Tintas", real4(custo_tintas_total))
+    with r3:
+        card("Equipamentos", real4(custo_equip_total))
+    with r4:
+        card("Mão de obra", real(custo_mao_obra))
+
+    r5, r6, r7, r8 = st.columns(4)
+    with r5:
+        card("Custo unitário", real(custo_unitario))
+    with r6:
+        card("Preço sugerido", real(preco_sugerido))
+    with r7:
+        card("Preço escolhido", real(preco_final))
+    with r8:
+        card("Lucro / Margem", real(lucro), f"{margem_real:.2f}%")
+
+    if st.button("Salvar produto precificado"):
+        if not nome.strip():
+            st.error("Coloque o nome do produto.")
+        else:
+            foto_path = salvar_upload(foto_upload, f"produto_{nome.replace(' ', '_')}") if foto_upload else ""
+            executar("""
+            INSERT INTO produtos(
+                nome, categoria, qtd_por_lote, receita_json, tintas_json,
+                equipamentos_json, tempo_min, valor_hora, reserva_erro,
+                margem_lucro, custo_insumos, custo_tintas, custo_equipamentos,
+                custo_mao_obra, custo_total_lote, custo_unitario, preco_sugerido,
+                preco_escolhido, lucro_unitario, margem_real, ativo, foto
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                nome, categoria_produto, qtd_por_lote,
+                json.dumps(receita, ensure_ascii=False),
+                json.dumps(tintas, ensure_ascii=False),
+                json.dumps(equipamentos, ensure_ascii=False),
+                tempo_min, valor_hora, reserva, margem,
+                custo_insumos_total, custo_tintas_total, custo_equip_total, custo_mao_obra,
+                custo_total_lote, custo_unitario, preco_sugerido, preco_final, lucro, margem_real,
+                ativo, foto_path,
+            ))
+            st.success("Produto salvo.")
+            st.rerun()
+
+    st.subheader("Produtos cadastrados")
+    df = consultar("""
+    SELECT id, nome, categoria, qtd_por_lote, custo_unitario, preco_sugerido,
+           preco_escolhido, lucro_unitario, margem_real, ativo
+    FROM produtos
+    ORDER BY id DESC
+    """)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "custo_unitario": st.column_config.NumberColumn("Custo unitário", format="R$ %.2f"),
+            "preco_sugerido": st.column_config.NumberColumn("Preço sugerido", format="R$ %.2f"),
+            "preco_escolhido": st.column_config.NumberColumn("Preço escolhido", format="R$ %.2f"),
+            "lucro_unitario": st.column_config.NumberColumn("Lucro unitário", format="R$ %.2f"),
+            "margem_real": st.column_config.NumberColumn("Margem real", format="%.2f%%"),
+        },
+        key="editor_produtos",
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar alterações dos produtos"):
+            for _, r in edited.iterrows():
+                executar("""
+                UPDATE produtos
+                SET nome=?, categoria=?, qtd_por_lote=?, custo_unitario=?,
+                    preco_sugerido=?, preco_escolhido=?, lucro_unitario=?,
+                    margem_real=?, ativo=?
+                WHERE id=?
+                """, (
+                    r["nome"], r["categoria"], n(r["qtd_por_lote"]), n(r["custo_unitario"]),
+                    n(r["preco_sugerido"]), n(r["preco_escolhido"]), n(r["lucro_unitario"]),
+                    n(r["margem_real"]), r["ativo"], int(r["id"]),
+                ))
+            st.success("Produtos atualizados.")
+            st.rerun()
+    with c2:
+        del_id = st.number_input("ID para excluir", min_value=0, step=1, key="del_prod")
+    with c3:
+        st.write("")
+        if st.button("Excluir produto") and del_id:
+            executar("DELETE FROM produtos WHERE id=?", (int(del_id),))
+            st.success("Produto excluído.")
+            st.rerun()
+
+
+def tela_orcamentos():
+    st.title("Orçamentos")
+    st.write("Crie orçamentos vinculados aos clientes cadastrados.")
+
+    clientes = consultar("SELECT id, nome, whatsapp, instagram, cidade FROM clientes WHERE ativo='Sim' ORDER BY nome")
+    produtos = consultar("""
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido
+    FROM produtos
+    WHERE ativo='Sim'
+    ORDER BY nome
+    """)
+
+    if clientes.empty:
+        st.warning("Cadastre um cliente antes de criar um orçamento.")
+        return
+
+    lista_clientes = [f"{int(row['id'])} - {row['nome']}" for _, row in clientes.iterrows()]
+    st.subheader("Novo orçamento")
+    cliente_escolhido = st.selectbox("Cliente", lista_clientes)
+    cliente_id = int(cliente_escolhido.split(" - ")[0])
+    cliente = clientes[clientes["id"] == cliente_id].iloc[0]
+
+    ccli1, ccli2, ccli3 = st.columns(3)
+    with ccli1:
+        card("Cliente", cliente["nome"], "Selecionado")
+    with ccli2:
+        card("WhatsApp", cliente["whatsapp"] or "-", "Contato")
+    with ccli3:
+        card("Cidade", cliente["cidade"] or "-", "Local")
+
+    st.divider()
+    st.subheader("Itens do orçamento")
+
+    if "qtd_itens_orcamento" not in st.session_state:
+        st.session_state.qtd_itens_orcamento = 1
+
+    c_add, c_remove, c_info = st.columns([1, 1, 3])
+    with c_add:
+        if st.button("Adicionar item"):
+            if st.session_state.qtd_itens_orcamento < 20:
+                st.session_state.qtd_itens_orcamento += 1
+                st.rerun()
+    with c_remove:
+        if st.button("Remover item"):
+            if st.session_state.qtd_itens_orcamento > 1:
+                st.session_state.qtd_itens_orcamento -= 1
+                st.rerun()
+    with c_info:
+        st.info(f"Itens no orçamento: {st.session_state.qtd_itens_orcamento}")
+
+    modo_manual = True
+    if not produtos.empty:
+        modo_manual = st.checkbox("Digitar produto manualmente", value=False)
+    else:
+        st.info("Você ainda não tem produtos cadastrados. O orçamento ficará em modo manual.")
+
+    itens = []
+    subtotal = 0.0
+
+    for i in range(int(st.session_state.qtd_itens_orcamento)):
+        with st.container(border=True):
+            st.markdown(f"### Item {i + 1}")
+            if modo_manual:
+                c1, c2 = st.columns(2)
+                produto = c1.text_input(f"Produto {i + 1}", key=f"orc_produto_manual_{i}")
+                categoria = c2.text_input(f"Categoria {i + 1}", key=f"orc_categoria_manual_{i}")
+                valor_padrao = 0.0
+            else:
+                c1, c2 = st.columns(2)
+                opcoes = produtos["nome"].tolist()
+                produto = c1.selectbox(f"Produto {i + 1}", opcoes, key=f"orc_produto_{i}")
+                dados_produto = produtos[produtos["nome"] == produto].iloc[0]
+                categoria = str(dados_produto["categoria"] or "")
+                preco_escolhido = n(dados_produto["preco_escolhido"])
+                preco_sugerido = n(dados_produto["preco_sugerido"])
+                valor_padrao = preco_escolhido if preco_escolhido > 0 else preco_sugerido
+                c2.text_input(f"Categoria {i + 1}", value=categoria, disabled=True, key=f"orc_categoria_{i}")
+
+            c3, c4, c5, c6 = st.columns(4)
+            quantidade = c3.number_input(f"Quantidade {i + 1}", min_value=0.0, value=1.0, step=1.0, key=f"orc_qtd_{i}")
+            valor_unitario = c4.number_input(f"Valor unitário {i + 1}", min_value=0.0, value=float(valor_padrao), step=0.50, format="%.2f", key=f"orc_unit_{i}")
+            desconto_item = c5.number_input(f"Desconto R$ {i + 1}", min_value=0.0, value=0.0, step=0.50, format="%.2f", key=f"orc_desc_{i}")
+            total_item = max((quantidade * valor_unitario) - desconto_item, 0)
+            c6.metric("Total", real(total_item))
+
+            subtotal += total_item
+            itens.append({
+                "produto": produto, "categoria": categoria, "quantidade": quantidade,
+                "valor_unitario": valor_unitario, "desconto": desconto_item, "total": total_item,
+            })
+
+    st.divider()
+    st.subheader("Totais")
+    c1, c2, c3, c4 = st.columns(4)
+    desconto_geral = c1.number_input("Desconto geral R$", min_value=0.0, value=0.0, step=0.50, format="%.2f")
+    frete = c2.number_input("Frete R$", min_value=0.0, value=0.0, step=0.50, format="%.2f")
+    total_geral = max(subtotal - desconto_geral + frete, 0)
+    c3.metric("Subtotal", real(subtotal))
+    c4.metric("Total geral", real(total_geral))
+
+    forma_pagamento = st.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Mercado Pago", "Outro"])
+    status = st.selectbox("Status", ["Em orçamento", "Aguardando pagamento", "Produção", "Finalizado", "Entregue", "Cancelado"])
+    observacoes = st.text_area("Observações do orçamento")
+
+    if st.button("Salvar orçamento"):
+        itens_validos = [item for item in itens if str(item["produto"]).strip()]
+        if not itens_validos:
+            st.error("Adicione pelo menos um produto ao orçamento.")
+        else:
+            ultimo = executar("""
+            INSERT INTO orcamentos(
+                cliente_id, cliente_nome, whatsapp, status, forma_pagamento,
+                subtotal, desconto, frete, total, observacoes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                int(cliente_id), str(cliente["nome"]), str(cliente["whatsapp"]), status,
+                forma_pagamento, subtotal, desconto_geral, frete, total_geral, observacoes,
+            ))
+
+            for item in itens_validos:
+                executar("""
+                INSERT INTO orcamento_itens(
+                    orcamento_id, produto, categoria, quantidade,
+                    valor_unitario, desconto, total
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    int(ultimo), item["produto"], item["categoria"], item["quantidade"],
+                    item["valor_unitario"], item["desconto"], item["total"],
+                ))
+
+                if status in ["Produção", "Finalizado", "Entregue"]:
+                    executar("""
+                    INSERT INTO estoque(data, item, categoria, tipo_movimento, quantidade, valor_unitario, fornecedor, observacoes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        hoje_iso(), item["produto"], item["categoria"], "Saída",
+                        item["quantidade"], item["valor_unitario"], "",
+                        f"Baixa automática orçamento #{ultimo}",
+                    ))
+
+            if status in ["Aguardando pagamento", "Produção", "Finalizado", "Entregue"]:
+                executar("""
+                INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (hoje_iso(), "Entrada", f"Orçamento #{ultimo} - {cliente['nome']}", "Venda", forma_pagamento, total_geral, "Orçamento", int(ultimo), observacoes))
+
+            st.success(f"Orçamento #{int(ultimo)} salvo com sucesso.")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Orçamentos cadastrados")
+    busca_orc = st.text_input("Pesquisar orçamento por cliente, WhatsApp ou status")
+
+    if busca_orc.strip():
+        termo = f"%{busca_orc.strip()}%"
+        df_orc = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, forma_pagamento, subtotal, desconto, frete, total, data_orcamento
+        FROM orcamentos
+        WHERE cliente_nome LIKE ? OR whatsapp LIKE ? OR status LIKE ?
+        ORDER BY id DESC
+        """, (termo, termo, termo))
+    else:
+        df_orc = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, forma_pagamento, subtotal, desconto, frete, total, data_orcamento
+        FROM orcamentos
+        ORDER BY id DESC
+        """)
+
+    st.dataframe(
+        df_orc,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "subtotal": st.column_config.NumberColumn("Subtotal", format="R$ %.2f"),
+            "desconto": st.column_config.NumberColumn("Desconto", format="R$ %.2f"),
+            "frete": st.column_config.NumberColumn("Frete", format="R$ %.2f"),
+            "total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+        },
+    )
+
+    st.subheader("Ver itens / Gerar PDF")
+    id_ver = st.number_input("ID do orçamento", min_value=0, step=1, key="id_ver_orcamento")
+    if id_ver > 0:
+        itens_df = consultar("""
+        SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+        FROM orcamento_itens
+        WHERE orcamento_id = ?
+        """, (int(id_ver),))
+        st.dataframe(
+            itens_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "valor_unitario": st.column_config.NumberColumn("Valor unitário", format="R$ %.2f"),
+                "desconto": st.column_config.NumberColumn("Desconto", format="R$ %.2f"),
+                "total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+            },
+        )
+
+        html = gerar_html_orcamento(int(id_ver))
+        if html:
+            st.download_button(
+                "Baixar orçamento profissional para imprimir/salvar PDF",
+                data=html.encode("utf-8"),
+                file_name=f"orcamento_{int(id_ver)}.html",
+                mime="text/html",
+            )
+
+    st.subheader("Excluir orçamento")
+    id_excluir_orc = st.number_input("ID do orçamento para excluir", min_value=0, step=1, key="id_excluir_orcamento")
+    if st.button("Excluir orçamento"):
+        if id_excluir_orc > 0:
+            executar("DELETE FROM orcamento_itens WHERE orcamento_id=?", (int(id_excluir_orc),))
+            executar("DELETE FROM orcamentos WHERE id=?", (int(id_excluir_orc),))
+            executar("DELETE FROM financeiro WHERE origem='Orçamento' AND referencia_id=?", (int(id_excluir_orc),))
+            st.success("Orçamento excluído com sucesso.")
+            st.rerun()
+        else:
+            st.warning("Digite o ID do orçamento.")
+
+def tela_financeiro():
+    st.title("Fluxo de Caixa")
+    st.write("Controle entradas, saídas, saldo e movimentações. Você pode adicionar, modificar e excluir.")
+
+    with st.form("form_financeiro"):
+        c1, c2, c3 = st.columns(3)
+        data = c1.text_input("Data", value=hoje_iso())
+        tipo = c2.selectbox("Tipo", ["Entrada", "Saída"])
+        valor = c3.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+        descricao = st.text_input("Descrição")
+        categoria = st.text_input("Categoria", value="Venda" if tipo == "Entrada" else "Compra")
+        forma_pagamento = st.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Mercado Pago", "Outro"])
+        observacoes = st.text_area("Observações")
+
+        if st.form_submit_button("Salvar movimento"):
+            if not descricao.strip():
+                st.error("Digite a descrição.")
+            else:
+                executar("""
+                INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (data, tipo, descricao, categoria, forma_pagamento, valor, "Manual", None, observacoes))
+                st.success("Movimento salvo.")
+                st.rerun()
+
+    df = consultar("SELECT * FROM financeiro ORDER BY data DESC, id DESC")
+    entradas = float(df[df["tipo"] == "Entrada"]["valor"].sum()) if not df.empty else 0
+    saidas = float(df[df["tipo"] == "Saída"]["valor"].sum()) if not df.empty else 0
+    saldo = entradas - saidas
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        card("Entradas", real(entradas))
+    with c2:
+        card("Saídas", real(saidas))
+    with c3:
+        card("Saldo", real(saldo))
+
+    if not df.empty:
+        graf = df.copy()
+        graf["data"] = pd.to_datetime(graf["data"], errors="coerce")
+        diario = graf.groupby(["data", "tipo"])["valor"].sum().reset_index()
+        pivot = diario.pivot(index="data", columns="tipo", values="valor").fillna(0)
+        st.subheader("Entradas e saídas por dia")
+        st.line_chart(pivot)
+
+    st.subheader("Movimentos")
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_financeiro",
+        column_config={"valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")},
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar modificações do fluxo de caixa"):
+            for _, r in edited.iterrows():
+                if str(r.get("descricao", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (str(r.get("data", hoje_iso())), str(r.get("tipo", "Entrada")), str(r.get("descricao", "")), str(r.get("categoria", "")), str(r.get("forma_pagamento", "")), n(r.get("valor", 0)), "Manual", None, str(r.get("observacoes", ""))))
+                    else:
+                        executar("""
+                        UPDATE financeiro SET data=?, tipo=?, descricao=?, categoria=?, forma_pagamento=?, valor=?, observacoes=? WHERE id=?
+                        """, (str(r.get("data", hoje_iso())), str(r.get("tipo", "Entrada")), str(r.get("descricao", "")), str(r.get("categoria", "")), str(r.get("forma_pagamento", "")), n(r.get("valor", 0)), str(r.get("observacoes", "")), int(r["id"])))
+            st.success("Fluxo de caixa atualizado.")
+            st.rerun()
+
+    with c2:
+        id_excluir = st.number_input("ID para excluir movimento", min_value=0, step=1)
+    with c3:
+        st.write("")
+        if st.button("Excluir movimento"):
+            if id_excluir > 0:
+                executar("DELETE FROM financeiro WHERE id=?", (int(id_excluir),))
+                st.success("Movimento excluído.")
+                st.rerun()
+
+def tela_estoque():
+    st.title("Estoque Inteligente")
+    st.write("Controle entradas, saídas e saldo automático. Você pode adicionar, modificar e excluir.")
+
+    with st.form("form_estoque"):
+        c1, c2, c3 = st.columns(3)
+        data = c1.text_input("Data", value=hoje_iso())
+        item = c2.text_input("Item")
+        categoria = c3.selectbox("Categoria", categorias_ativas() or ["Outro"])
+        c4, c5, c6 = st.columns(3)
+        tipo_movimento = c4.selectbox("Movimento", ["Entrada", "Saída"])
+        quantidade = c5.number_input("Quantidade", min_value=0.0, step=1.0)
+        valor_unitario = c6.number_input("Valor unitário", min_value=0.0, step=0.01, format="%.2f")
+        fornecedor = st.text_input("Fornecedor")
+        observacoes = st.text_area("Observações")
+
+        if st.form_submit_button("Salvar movimento de estoque"):
+            if not item.strip():
+                st.error("Digite o item.")
+            else:
+                executar("""
+                INSERT INTO estoque(data, item, categoria, tipo_movimento, quantidade, valor_unitario, fornecedor, observacoes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (data, item, categoria, tipo_movimento, quantidade, valor_unitario, fornecedor, observacoes))
+                st.success("Movimento salvo.")
+                st.rerun()
+
+    df = consultar("SELECT * FROM estoque ORDER BY data DESC, id DESC")
+    st.subheader("Saldo por item")
+    if df.empty:
+        st.info("Ainda não há movimentações de estoque.")
+    else:
+        resumo = df.copy()
+        resumo["qtd_assinada"] = resumo.apply(lambda r: n(r["quantidade"]) if r["tipo_movimento"] == "Entrada" else -n(r["quantidade"]), axis=1)
+        saldo = resumo.groupby(["item", "categoria"])["qtd_assinada"].sum().reset_index()
+        saldo.columns = ["Item", "Categoria", "Saldo"]
+        saldo["Status"] = saldo["Saldo"].apply(lambda x: "Baixo" if x <= 5 else "OK")
+        st.dataframe(saldo, use_container_width=True, hide_index=True)
+
+    st.subheader("Movimentos de estoque")
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="editor_estoque",
+        column_config={"valor_unitario": st.column_config.NumberColumn("Valor unitário", format="R$ %.2f")},
+    )
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        if st.button("Salvar modificações do estoque"):
+            for _, r in edited.iterrows():
+                if str(r.get("item", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT INTO estoque(data, item, categoria, tipo_movimento, quantidade, valor_unitario, fornecedor, observacoes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (str(r.get("data", hoje_iso())), str(r.get("item", "")), str(r.get("categoria", "")), str(r.get("tipo_movimento", "Entrada")), n(r.get("quantidade", 0)), n(r.get("valor_unitario", 0)), str(r.get("fornecedor", "")), str(r.get("observacoes", ""))))
+                    else:
+                        executar("""
+                        UPDATE estoque SET data=?, item=?, categoria=?, tipo_movimento=?, quantidade=?, valor_unitario=?, fornecedor=?, observacoes=? WHERE id=?
+                        """, (str(r.get("data", hoje_iso())), str(r.get("item", "")), str(r.get("categoria", "")), str(r.get("tipo_movimento", "Entrada")), n(r.get("quantidade", 0)), n(r.get("valor_unitario", 0)), str(r.get("fornecedor", "")), str(r.get("observacoes", "")), int(r["id"])))
+            st.success("Estoque atualizado.")
+            st.rerun()
+
+    with c2:
+        id_excluir = st.number_input("ID para excluir movimento", min_value=0, step=1, key="del_estoque")
+    with c3:
+        st.write("")
+        if st.button("Excluir movimento de estoque"):
+            if id_excluir > 0:
+                executar("DELETE FROM estoque WHERE id=?", (int(id_excluir),))
+                st.success("Movimento excluído.")
+                st.rerun()
+
+# =========================
+# APP
+# =========================
+
+criar_banco()
+
+# Se você já tem categorias no banco, marca como inicializadas para não recriar depois que excluir.
+try:
+    _flag_cat = consultar("SELECT valor FROM configuracoes WHERE chave='categorias_iniciais_criadas'")
+    if _flag_cat.empty:
+        salvar_config("categorias_iniciais_criadas", "Sim")
+except Exception:
+    pass
+
+# Corrige configurações antigas que ficaram salvas com muitos zeros.
+for _chave, _padrao, _limite in [
+    ("valor_hora", "5", 100),
+    ("margem_padrao", "50", 500),
+    ("reserva_erro", "5", 100),
+    ("custo_kwh", "250", 100000),
+    ("validade_orcamento", "7", 365),
+]:
+    try:
+        if n(obter_config(_chave, _padrao), 0) > _limite:
+            salvar_config(_chave, _padrao)
+    except Exception:
+        salvar_config(_chave, _padrao)
+
+icone_config = obter_config("logo_path", "")
+icone_app = icone_config if icone_config and Path(icone_config).exists() else criar_icone_padrao()
+
+st.set_page_config(
+    page_title="Sophi ERP",
+    page_icon=icone_app,
+    layout="wide",
+)
+
+# Ícone para navegador e atalho do iPhone/iOS.
+try:
+    _icon_path = Path(icone_app)
+    if _icon_path.exists():
+        _b64_icon = base64.b64encode(_icon_path.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <link rel="apple-touch-icon" href="data:image/png;base64,{_b64_icon}">
+            <link rel="icon" type="image/png" href="data:image/png;base64,{_b64_icon}">
+            <meta name="apple-mobile-web-app-title" content="Sophi ERP">
+            <meta name="apple-mobile-web-app-capable" content="yes">
+            """,
+            unsafe_allow_html=True,
+        )
+except Exception:
+    pass
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background: #ffffff; color: #111111; }
+section[data-testid="stSidebar"] { background: linear-gradient(180deg, #000000 0%, #151515 100%); }
+section[data-testid="stSidebar"] * { color: #ffffff !important; }
+h1 { font-family: 'Playfair Display', serif; font-size: 42px !important; color: #000000; }
+.stButton button { background: #000000; color: #ffffff; border: none; border-radius: 10px; padding: 0.55rem 1rem; font-weight: 600; }
+.card { background: #ffffff; border: 1px solid #e8e8e8; border-radius: 18px; padding: 18px 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.045); min-height: 105px; }
+.card-title { color: #777777; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+.card-value { color: #000000; font-size: 26px; font-weight: 800; }
+.card-subtitle { color: #777777; font-size: 12px; margin-top: 6px; }
+[data-testid="stMetricValue"] { color: #000000 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+logo = obter_config("logo_path", "")
+if logo and Path(logo).exists():
+    st.sidebar.image(logo, width=120)
+
+st.sidebar.markdown("""
+<div style="font-family:'Playfair Display',serif;font-size:30px;line-height:1;margin-top:10px;">
+    Sophi
+</div>
+<div style="font-size:12px;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:24px;">
+    Personalizados Oficial
+</div>
+""", unsafe_allow_html=True)
+
+menu = st.sidebar.radio(
+    "Menu",
+    [
+        "Dashboard",
+        "Clientes",
+        "Orçamentos",
+        "Produtos / Precificação",
+        "Papéis",
+        "Embalagens",
+        "Insumos",
+        "Tintas",
+        "Equipamentos",
+        "Estoque",
+        "Fluxo de Caixa",
+        "Categorias",
+        "Configurações",
+    ],
+)
+
+if menu == "Dashboard":
+    tela_inicio()
+elif menu == "Clientes":
+    tela_clientes()
+elif menu == "Orçamentos":
+    tela_orcamentos()
+elif menu == "Produtos / Precificação":
+    tela_produtos()
+elif menu == "Papéis":
+    tela_cadastro_por_categoria("Papéis", "Papel")
+elif menu == "Embalagens":
+    tela_cadastro_por_categoria("Embalagens", "Embalagem")
+elif menu == "Insumos":
+    tela_insumos()
+elif menu == "Tintas":
+    tela_tintas()
+elif menu == "Equipamentos":
+    tela_equipamentos()
+elif menu == "Estoque":
+    tela_estoque()
+elif menu == "Fluxo de Caixa":
+    tela_financeiro()
+elif menu == "Categorias":
+    tela_categorias()
+elif menu == "Configurações":
+    tela_configuracoes()
