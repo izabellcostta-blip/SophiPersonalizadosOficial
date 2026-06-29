@@ -2009,6 +2009,101 @@ def tela_estoque():
                 st.success("Movimento excluído.")
                 st.rerun()
 
+
+# ============================================================
+# LOGIN / SEGURANÇA
+# ============================================================
+
+def obter_credenciais_login():
+    try:
+        login = st.secrets.get("login", {})
+        usuario = str(login.get("usuario", "")).strip()
+        senha = str(login.get("senha", "")).strip()
+        return usuario, senha
+    except Exception:
+        return "", ""
+
+
+def tela_login():
+    st.markdown(
+        """
+        <style>
+        .login-card {
+            max-width: 430px;
+            margin: 7vh auto 0 auto;
+            background: #ffffff;
+            border: 1px solid #e9e9e9;
+            border-radius: 22px;
+            padding: 34px 32px;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
+            text-align: center;
+        }
+        .login-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 38px;
+            font-weight: 700;
+            color: #000000;
+            margin-bottom: 4px;
+        }
+        .login-subtitle {
+            font-size: 12px;
+            letter-spacing: 2.2px;
+            text-transform: uppercase;
+            color: #777777;
+            margin-bottom: 18px;
+        }
+        .login-caption {
+            font-size: 13px;
+            color: #777777;
+            margin-bottom: 22px;
+        }
+        </style>
+        <div class="login-card">
+            <div class="login-title">Sophi ERP</div>
+            <div class="login-subtitle">Personalizados Oficial</div>
+            <div class="login-caption">Acesso restrito ao sistema</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    usuario_correto, senha_correta = obter_credenciais_login()
+
+    if not usuario_correto or not senha_correta:
+        st.error("Login ainda não configurado. Configure os Secrets do Streamlit com [login], usuario e senha.")
+        st.stop()
+
+    with st.form("form_login"):
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        entrar = st.form_submit_button("Entrar")
+
+        if entrar:
+            if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
+                st.session_state["autenticado"] = True
+                st.session_state["usuario_logado"] = usuario.strip()
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+
+
+def exigir_login():
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    if not st.session_state["autenticado"]:
+        tela_login()
+        st.stop()
+
+
+def botao_sair():
+    st.sidebar.divider()
+    st.sidebar.caption(f"Usuário: {st.session_state.get('usuario_logado', '')}")
+    if st.sidebar.button("Sair"):
+        st.session_state["autenticado"] = False
+        st.session_state["usuario_logado"] = ""
+        st.rerun()
+
 # =========================
 # APP
 # =========================
@@ -2084,6 +2179,8 @@ logo = obter_config("logo_path", "")
 if logo and Path(logo).exists():
     st.sidebar.image(logo, width=120)
 
+exigir_login()
+
 st.sidebar.markdown("""
 <div style="font-family:'Playfair Display',serif;font-size:30px;line-height:1;margin-top:10px;">
     Sophi
@@ -2092,6 +2189,8 @@ st.sidebar.markdown("""
     Personalizados Oficial
 </div>
 """, unsafe_allow_html=True)
+
+botao_sair()
 
 menu = st.sidebar.radio(
     "Menu",
