@@ -3585,6 +3585,21 @@ def detectar_pagina_publica():
 
 
 
+
+
+def link_catalogo_publico():
+    try:
+        app_url = obter_config("catalogo_link_base", "").strip()
+    except Exception:
+        app_url = ""
+
+    if app_url:
+        if "?pagina=catalogo" in app_url:
+            return app_url
+        return app_url.rstrip("/") + "/?pagina=catalogo"
+
+    return "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
+
 def tela_catalogo_publico_cliente():
     empresa = obter_config("catalogo_titulo", obter_config("nome_empresa", EMPRESA))
     slogan = obter_config("catalogo_slogan", "Eternizando momentos com presentes personalizados")
@@ -3977,7 +3992,6 @@ menu = st.sidebar.radio(
         "Estoque",
         "Fluxo de Caixa",
         "Categorias",
-        "Catálogo público",
         "Configurações",
     ],
 )
