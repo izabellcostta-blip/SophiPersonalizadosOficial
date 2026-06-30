@@ -443,6 +443,31 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS historico_precos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        tipo_item TEXT,
+        item_id INTEGER,
+        item_nome TEXT,
+        campo TEXT,
+        valor_antigo REAL DEFAULT 0,
+        valor_novo REAL DEFAULT 0,
+        observacoes TEXT
+    )
+    """)
+
+    try:
+        executar("ALTER TABLE produtos ADD COLUMN favorito TEXT DEFAULT 'Não'")
+    except Exception:
+        pass
+
+    try:
+        executar("ALTER TABLE produtos ADD COLUMN descricao_catalogo TEXT")
+    except Exception:
+        pass
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -895,90 +920,295 @@ button {{
 </html>"""
     return html
 
-def tela_inicio():
-    st.title("Dashboard")
-    st.write("Visão geral da Sophi Personalizados Oficial.")
 
-    anos = list(range(2026, 2031))
-    ano = st.selectbox("Ano do dashboard", anos, index=0)
+
+# ============================================================
+# RECURSOS ERP 2.0 - PARTE INICIAL
+# ============================================================
+
+def registrar_historico_preco(tipo_item, item_id, item_nome, campo, valor_antigo, valor_novo, observacoes=""):
+    try:
+        if round(float(valor_antigo or 0), 2) == round(float(valor_novo or 0), 2):
+            return
+
+        executar("""
+        INSERT INTO historico_precos(
+            tipo_item, item_id, item_nome, campo,
+            valor_antigo, valor_novo, observacoes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(tipo_item),
+            int(item_id),
+            str(item_nome),
+            str(campo),
+            n(valor_antigo),
+            n(valor_novo),
+            str(observacoes),
+        ))
+    except Exception:
+        pass
+
+
+def saldo_estoque():
+    df = consultar("SELECT * FROM estoque")
+    if df.empty:
+        return pd.DataFrame(columns=["Item", "Categoria", "Saldo"])
+
+    temp = df.copy()
+    temp["qtd_assinada"] = temp.apply(
+        lambda r: n(r["quantidade"]) if str(r["tipo_movimento"]) == "Entrada" else -n(r["quantidade"]),
+        axis=1,
+    )
+
+    saldo = temp.groupby(["item", "categoria"])["qtd_assinada"].sum().reset_index()
+    saldo.columns = ["Item", "Categoria", "Saldo"]
+    return saldo
+
+
+def produtos_favoritos_df():
+    try:
+        return consultar("""
+        SELECT id, nome, categoria, preco_escolhido, preco_sugerido, custo_unitario, lucro_unitario, favorito
+        FROM produtos
+        WHERE ativo='Sim' AND favorito='Sim'
+        ORDER BY nome
+        """)
+    except Exception:
+        return pd.DataFrame()
+
+
+def aniversariantes_mes_df():
+    mes_atual = f"{datetime.now().month:02d}"
+    clientes = consultar("""
+    SELECT id, nome, whatsapp, aniversario
+    FROM clientes
+    WHERE ativo='Sim' AND aniversario IS NOT NULL AND aniversario != ''
+    ORDER BY nome
+    """)
+
+    if clientes.empty:
+        return clientes
+
+    def aniversario_do_mes(valor):
+        texto = str(valor).strip()
+        partes = texto.replace("-", "/").split("/")
+        if len(partes) >= 2:
+            return partes[1].zfill(2) == mes_atual
+        return False
+
+    return clientes[clientes["aniversario"].apply(aniversario_do_mes)]
+
+
+def painel_calculadora_rapida():
+    with st.sidebar.expander("Calculadora rápida"):
+        st.caption("Some custos rápidos sem precisar criar produto.")
+
+        papel = st.number_input("Papel / item", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="calc_papel")
+        laminacao = st.number_input("Laminação", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="calc_laminacao")
+        ima = st.number_input("Ímã / manta", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="calc_ima")
+        embalagem = st.number_input("Embalagem", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="calc_embalagem")
+        outros = st.number_input("Outros", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="calc_outros")
+
+        total = papel + laminacao + ima + embalagem + outros
+        st.metric("Custo rápido", real(total))
+
+
+def mostrar_ficha_produto(produto_id):
+    prod = consultar("SELECT * FROM produtos WHERE id=?", (int(produto_id),))
+    if prod.empty:
+        st.warning("Produto não encontrado.")
+        return
+
+    p = prod.iloc[0]
+
+    st.subheader(f"Ficha completa: {p['nome']}")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        card("Código", codigo_visual("PROD", p["id"]))
+    with c2:
+        card("Custo unitário", real(p["custo_unitario"]))
+    with c3:
+        preco = n(p["preco_escolhido"]) if n(p["preco_escolhido"]) > 0 else n(p["preco_sugerido"])
+        card("Preço venda", real(preco))
+    with c4:
+        card("Lucro", real(p["lucro_unitario"]), f"{n(p['margem_real']):.2f}%")
+
+    foto = str(p.get("foto", "") or "")
+    if foto and Path(foto).exists():
+        st.image(foto, width=220)
+
+    st.write(f"**Categoria:** {p.get('categoria', '') or '-'}")
+    st.write(f"**Quantidade por lote/folha:** {p.get('qtd_por_lote', '')}")
+
+    st.markdown("### Itens utilizados")
+    try:
+        receita = json.loads(p["receita_json"] or "[]")
+        if receita:
+            st.dataframe(formatar_valores_tabela(pd.DataFrame(receita)), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum item salvo.")
+    except Exception:
+        st.info("Não foi possível ler os itens utilizados.")
+
+    st.markdown("### Tintas")
+    try:
+        tintas = json.loads(p["tintas_json"] or "[]")
+        if tintas:
+            st.dataframe(formatar_valores_tabela(pd.DataFrame(tintas)), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhuma tinta salva.")
+    except Exception:
+        st.info("Não foi possível ler as tintas.")
+
+    st.markdown("### Equipamentos")
+    try:
+        equipamentos = json.loads(p["equipamentos_json"] or "[]")
+        if equipamentos:
+            st.dataframe(formatar_valores_tabela(pd.DataFrame(equipamentos)), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum equipamento salvo.")
+    except Exception:
+        st.info("Não foi possível ler os equipamentos.")
+
+    st.markdown("### Histórico de preços")
+    hist = consultar("""
+    SELECT data, campo, valor_antigo, valor_novo, observacoes
+    FROM historico_precos
+    WHERE tipo_item='Produto' AND item_id=?
+    ORDER BY id DESC
+    """, (int(produto_id),))
+
+    if hist.empty:
+        st.caption("Ainda não há histórico de alterações de preço.")
+    else:
+        st.dataframe(formatar_valores_tabela(hist), use_container_width=True, hide_index=True)
+
+    st.markdown("### Simulador de preço")
+    simulador = st.number_input(
+        "E se eu vender por...",
+        min_value=0.0,
+        value=float(preco or 0),
+        step=0.10,
+        format="%.2f",
+        key=f"simulador_prod_{int(produto_id)}",
+    )
+
+    custo = n(p["custo_unitario"])
+    lucro_sim = simulador - custo
+    margem_sim = (lucro_sim / simulador * 100) if simulador > 0 else 0
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        card("Custo", real(custo))
+    with s2:
+        card("Lucro simulado", real(lucro_sim))
+    with s3:
+        card("Margem simulada", f"{margem_sim:.2f}%")
+
+
+
+def tela_inicio():
+    st.title("Painel Hoje")
+    st.write("Resumo rápido para acompanhar a Sophi Personalizados Oficial sem abrir várias abas.")
+
+    hoje = hoje_iso()
+    ano = datetime.now().year
 
     orc = consultar("SELECT * FROM orcamentos")
     fin = consultar("SELECT * FROM financeiro")
     clientes = consultar("SELECT * FROM clientes")
     produtos = consultar("SELECT * FROM produtos")
 
-    faturamento_orc = 0.0
-    qtd_orc = 0
+    vendas_hoje = 0.0
+    if not fin.empty:
+        temp = fin.copy()
+        temp["data"] = pd.to_datetime(temp["data"], errors="coerce").dt.date.astype(str)
+        vendas_hoje = float(temp[(temp["data"] == hoje) & (temp["tipo"] == "Entrada")]["valor"].sum())
+
+    aguardando = 0
+    entregas_hoje = 0
+    faturamento_mes = 0.0
+    lucro_mes = 0.0
+    margem_media = 0.0
 
     if not orc.empty:
-        temp = orc.copy()
-        temp["data_orcamento"] = pd.to_datetime(temp["data_orcamento"], errors="coerce")
-        temp_ano = temp[temp["data_orcamento"].dt.year == ano]
-        faturamento_orc = float(temp_ano["total"].sum())
-        qtd_orc = len(temp_ano)
+        temp_orc = orc.copy()
+        temp_orc["data_orcamento_dt"] = pd.to_datetime(temp_orc["data_orcamento"], errors="coerce")
+        temp_orc["data_entrega_prevista"] = temp_orc["data_orcamento_dt"] + pd.to_timedelta(int(n(obter_config("validade_orcamento", "7"), 7)), unit="D")
 
-    entradas = 0.0
-    saidas = 0.0
-    if not fin.empty:
-        tempf = fin.copy()
-        tempf["data"] = pd.to_datetime(tempf["data"], errors="coerce")
-        tempf = tempf[tempf["data"].dt.year == ano]
-        entradas = float(tempf[tempf["tipo"] == "Entrada"]["valor"].sum())
-        saidas = float(tempf[tempf["tipo"] == "Saída"]["valor"].sum())
+        aguardando = len(temp_orc[temp_orc["status"].isin(["Em orçamento", "Aguardando pagamento"])])
 
-    saldo = entradas - saidas
-    ticket = faturamento_orc / qtd_orc if qtd_orc else 0
+        entregas_hoje = len(temp_orc[
+            (temp_orc["data_entrega_prevista"].dt.date.astype(str) == hoje)
+            & (~temp_orc["status"].isin(["Entregue", "Cancelado"]))
+        ])
+
+        mes_atual = datetime.now().month
+        temp_mes = temp_orc[temp_orc["data_orcamento_dt"].dt.month == mes_atual]
+        faturamento_mes = float(temp_mes["total"].sum())
+
+    if not produtos.empty:
+        lucro_mes = float(produtos["lucro_unitario"].fillna(0).sum())
+        margem_media = float(produtos["margem_real"].fillna(0).mean()) if "margem_real" in produtos.columns else 0.0
+
+    saldo = saldo_estoque()
+    estoque_baixo = saldo[saldo["Saldo"] <= 5] if not saldo.empty else pd.DataFrame()
+
+    aniversariantes = aniversariantes_mes_df()
+    favoritos = produtos_favoritos_df()
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        card("Faturamento", real(faturamento_orc), f"Orçamentos em {ano}")
+        card("Vendas hoje", real(vendas_hoje))
     with c2:
-        card("Entradas", real(entradas), "Fluxo de caixa")
+        card("Entregas hoje", str(entregas_hoje))
     with c3:
-        card("Saídas", real(saidas), "Fluxo de caixa")
+        card("Aguardando resposta", str(aguardando))
     with c4:
-        card("Saldo", real(saldo), "Entradas - saídas")
+        card("Estoque baixo", str(len(estoque_baixo)))
     with c5:
-        card("Ticket médio", real(ticket), f"{qtd_orc} orçamento(s)")
-
-    c6, c7, c8 = st.columns(3)
-    with c6:
-        card("Clientes", str(len(clientes)), "Cadastrados")
-    with c7:
-        card("Produtos", str(len(produtos)), "Cadastrados")
-    with c8:
-        card("Orçamentos", str(qtd_orc), f"Ano {ano}")
+        card("Aniversariantes", str(len(aniversariantes)))
 
     st.divider()
 
-    mensal = dataframe_mes(orc, "data_orcamento", "total", ano)
-    mensal["Mês"] = mensal["Mês"].map({
-        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
-    })
+    st.subheader("Dashboard de lucro")
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        card("Faturamento do mês", real(faturamento_mes))
+    with d2:
+        card("Lucro estimado", real(lucro_mes))
+    with d3:
+        card("Margem média", f"{margem_media:.2f}%")
 
-    st.subheader("Faturamento mensal")
-    st.bar_chart(mensal.set_index("Mês"))
+    st.divider()
 
-    diario = dataframe_dia(orc, "data_orcamento", "total", ano)
-    st.subheader("Faturamento diário")
-    if diario.empty:
-        st.info("Ainda não há dados diários para este ano.")
-    else:
-        st.line_chart(diario.set_index("Data"))
+    col1, col2 = st.columns(2)
 
-    st.subheader("Comparativo anual")
-    linhas = []
-    for a in anos:
-        if orc.empty:
-            total = 0
+    with col1:
+        st.subheader("Produtos favoritos")
+        if favoritos.empty:
+            st.info("Nenhum produto favorito ainda.")
         else:
-            temp = orc.copy()
-            temp["data_orcamento"] = pd.to_datetime(temp["data_orcamento"], errors="coerce")
-            total = float(temp[temp["data_orcamento"].dt.year == a]["total"].sum())
-        linhas.append({"Ano": str(a), "Total": total})
-    anual = pd.DataFrame(linhas)
-    st.bar_chart(anual.set_index("Ano"))
+            favoritos = adicionar_codigo_visual(favoritos, "PROD")
+            st.dataframe(formatar_valores_tabela(favoritos), use_container_width=True, hide_index=True)
+
+    with col2:
+        st.subheader("Estoque baixo")
+        if estoque_baixo.empty:
+            st.success("Nenhum item crítico no estoque.")
+        else:
+            st.dataframe(formatar_valores_tabela(estoque_baixo), use_container_width=True, hide_index=True)
+
+    st.subheader("Clientes aniversariantes do mês")
+    if aniversariantes.empty:
+        st.info("Nenhum aniversariante cadastrado neste mês.")
+    else:
+        aniversariantes = adicionar_codigo_visual(aniversariantes, "CLI")
+        st.dataframe(aniversariantes, use_container_width=True, hide_index=True)
+
+    st.divider()
 
     st.subheader("Últimos orçamentos")
     if orc.empty:
@@ -992,11 +1222,11 @@ def tela_inicio():
         """)
         ultimos = adicionar_codigo_visual(ultimos, "ORC", ano=ano)
         st.dataframe(
-            ultimos,
+            formatar_valores_tabela(ultimos),
             use_container_width=True,
             hide_index=True,
-            column_config={"total": st.column_config.NumberColumn("Total", format="R$ %.2f")},
         )
+
 
 def tela_configuracoes():
     st.title("Configurações")
@@ -2085,6 +2315,7 @@ def tela_produtos():
     nome = c1.text_input("Nome do produto")
     categoria_produto = c2.text_input("Categoria do produto")
     ativo = c3.selectbox("Ativo?", ["Sim", "Não"])
+    favorito = st.checkbox("⭐ Marcar como favorito", value=False)
 
     foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
 
@@ -2163,7 +2394,7 @@ def tela_produtos():
     margem = c3.number_input("Margem desejada (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f")
 
     custo_mao_obra = tempo_min / 60 * valor_hora
-    custo_lote_sem_reserva = custo_insumos_total + custo_tintas_total + custo_equip_total + custo_mao_obra
+    custo_lote_sem_reserva = custo_insumos_total + custo_embalagens_total + custo_tintas_total + custo_equip_total + custo_mao_obra
     custo_total_lote = custo_lote_sem_reserva * (1 + reserva / 100)
     custo_unitario = custo_total_lote / qtd_por_lote if qtd_por_lote else 0
     preco_sugerido = custo_unitario * (1 + margem / 100)
@@ -2207,9 +2438,9 @@ def tela_produtos():
                 equipamentos_json, tempo_min, valor_hora, reserva_erro,
                 margem_lucro, custo_insumos, custo_tintas, custo_equipamentos,
                 custo_mao_obra, custo_total_lote, custo_unitario, preco_sugerido,
-                preco_escolhido, lucro_unitario, margem_real, ativo, foto
+                preco_escolhido, lucro_unitario, margem_real, ativo, foto, favorito
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 nome, categoria_produto, qtd_por_lote,
                 json.dumps(receita_para_salvar, ensure_ascii=False),
@@ -2218,7 +2449,7 @@ def tela_produtos():
                 tempo_min, valor_hora, reserva, margem,
                 custo_insumos_total, custo_tintas_total, custo_equip_total, custo_mao_obra,
                 custo_total_lote, custo_unitario, preco_sugerido, preco_final, lucro, margem_real,
-                ativo, foto_path,
+                ativo, foto_path, "Sim" if favorito else "Não",
             ))
             st.success("Produto salvo.")
             st.rerun()
@@ -2226,7 +2457,7 @@ def tela_produtos():
     st.subheader("Produtos cadastrados")
     df = consultar("""
     SELECT id, nome, categoria, qtd_por_lote, custo_unitario, preco_sugerido,
-           preco_escolhido, lucro_unitario, margem_real, ativo
+           preco_escolhido, lucro_unitario, margem_real, favorito, ativo
     FROM produtos
     ORDER BY id DESC
     """)
@@ -2254,16 +2485,21 @@ def tela_produtos():
     with c1:
         if st.button("Salvar alterações dos produtos"):
             for _, r in edited.iterrows():
+                antigo = consultar("SELECT preco_escolhido, preco_sugerido FROM produtos WHERE id=?", (int(r["id"]),))
+                if not antigo.empty:
+                    registrar_historico_preco("Produto", int(r["id"]), r["nome"], "preco_escolhido", antigo.iloc[0]["preco_escolhido"], n(r["preco_escolhido"]), "Alteração manual em Produtos")
+                    registrar_historico_preco("Produto", int(r["id"]), r["nome"], "preco_sugerido", antigo.iloc[0]["preco_sugerido"], n(r["preco_sugerido"]), "Alteração manual em Produtos")
+
                 executar("""
                 UPDATE produtos
                 SET nome=?, categoria=?, qtd_por_lote=?, custo_unitario=?,
                     preco_sugerido=?, preco_escolhido=?, lucro_unitario=?,
-                    margem_real=?, ativo=?
+                    margem_real=?, favorito=?, ativo=?
                 WHERE id=?
                 """, (
                     r["nome"], r["categoria"], n(r["qtd_por_lote"]), n(r["custo_unitario"]),
                     n(r["preco_sugerido"]), n(r["preco_escolhido"]), n(r["lucro_unitario"]),
-                    n(r["margem_real"]), r["ativo"], int(r["id"]),
+                    n(r["margem_real"]), r.get("favorito", "Não"), r["ativo"], int(r["id"]),
                 ))
             st.success("Produtos atualizados.")
             st.rerun()
@@ -2275,6 +2511,26 @@ def tela_produtos():
             executar("DELETE FROM produtos WHERE id=?", (int(del_id),))
             st.success("Produto excluído.")
             st.rerun()
+
+
+    st.divider()
+    st.subheader("Ficha completa do produto")
+
+    produtos_ficha = consultar("""
+    SELECT id, nome
+    FROM produtos
+    ORDER BY nome
+    """)
+
+    if produtos_ficha.empty:
+        st.info("Cadastre um produto para visualizar a ficha completa.")
+    else:
+        mapa_produtos = {
+            f"{codigo_visual('PROD', row['id'])} - {row['nome']}": int(row["id"])
+            for _, row in produtos_ficha.iterrows()
+        }
+        escolhido = st.selectbox("Escolha um produto", list(mapa_produtos.keys()), key="produto_ficha_select")
+        mostrar_ficha_produto(mapa_produtos[escolhido])
 
 
 def tela_orcamentos():
