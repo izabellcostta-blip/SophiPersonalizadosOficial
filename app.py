@@ -497,6 +497,11 @@ def criar_banco():
         "custo_kwh": "250",
         "validade_orcamento": "7",
         "logo_path": "",
+        "catalogo_titulo": "Sophi Personalizados Oficial",
+        "catalogo_slogan": "Eternizando momentos com presentes personalizados",
+        "catalogo_descricao": "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido.",
+        "catalogo_aviso": "Valores sujeitos à confirmação conforme personalização, material e prazo.",
+        "catalogo_cor": "#000000",
     }
 
     for chave, valor in configuracoes_padrao.items():
@@ -3343,29 +3348,64 @@ def mostrar_linha_tempo_cliente(cliente_id):
 
 
 
+
 def tela_catalogo():
     st.title("Catálogo público")
-    st.write("Link público para enviar aos clientes. O cliente vê apenas foto, nome, descrição, preço e botão de WhatsApp.")
+    st.write("Configure o catálogo que seus clientes acessam pelo link público.")
+
+    base_url = "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
 
     st.success("Seu catálogo público está ativo.")
+    st.code(base_url)
 
-    st.code("?pagina=catalogo")
+    st.link_button("Abrir catálogo público", base_url)
 
-    st.info(
-        "Para usar: abra o link do seu ERP e adicione no final: ?pagina=catalogo. "
-        "Exemplo: https://seuapp.streamlit.app/?pagina=catalogo"
-    )
+    st.divider()
+    st.subheader("Configurações do catálogo")
 
-    html = gerar_html_catalogo_publico()
+    with st.form("form_config_catalogo"):
+        c1, c2 = st.columns(2)
 
-    st.download_button(
-        "Baixar catálogo em HTML",
-        data=html.encode("utf-8"),
-        file_name="catalogo_sophi.html",
-        mime="text/html",
-    )
+        titulo = c1.text_input(
+            "Título do catálogo",
+            value=obter_config("catalogo_titulo", obter_config("nome_empresa", EMPRESA)),
+        )
 
+        slogan = c2.text_input(
+            "Slogan",
+            value=obter_config("catalogo_slogan", "Eternizando momentos com presentes personalizados"),
+        )
+
+        descricao = st.text_area(
+            "Texto de apresentação",
+            value=obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido."),
+        )
+
+        aviso = st.text_input(
+            "Aviso no rodapé",
+            value=obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo."),
+        )
+
+        cor = st.text_input(
+            "Cor principal do catálogo",
+            value=obter_config("catalogo_cor", "#000000"),
+            help="Use código hexadecimal. Exemplo: #000000, #D8A7B1, #F4C2C2",
+        )
+
+        salvar = st.form_submit_button("Salvar configurações do catálogo")
+
+        if salvar:
+            salvar_config("catalogo_titulo", titulo)
+            salvar_config("catalogo_slogan", slogan)
+            salvar_config("catalogo_descricao", descricao)
+            salvar_config("catalogo_aviso", aviso)
+            salvar_config("catalogo_cor", cor)
+            st.success("Catálogo atualizado com sucesso.")
+            st.rerun()
+
+    st.divider()
     st.subheader("Produtos ativos que aparecem no catálogo")
+
     produtos = consultar("""
     SELECT id, nome, categoria, preco_escolhido, preco_sugerido, ativo, descricao_catalogo
     FROM produtos
@@ -3378,6 +3418,8 @@ def tela_catalogo():
     else:
         produtos = adicionar_codigo_visual(produtos, "PROD")
         st.dataframe(formatar_valores_tabela(produtos), use_container_width=True, hide_index=True)
+
+    st.info("Para alterar foto, preço ou descrição do produto, vá em Produtos / Precificação.")
 
 
 def tela_ordens_producao():
@@ -3521,33 +3563,59 @@ def detectar_pagina_publica():
     return ""
 
 
+
 def tela_catalogo_publico_cliente():
-    empresa = obter_config("nome_empresa", EMPRESA)
+    empresa = obter_config("catalogo_titulo", obter_config("nome_empresa", EMPRESA))
+    slogan = obter_config("catalogo_slogan", "Eternizando momentos com presentes personalizados")
+    descricao_topo = obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido.")
+    aviso = obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo.")
+    cor = obter_config("catalogo_cor", "#000000") or "#000000"
     instagram = obter_config("instagram", "")
     whatsapp = obter_whatsapp_limpo()
+    logo = obter_config("logo_path", "")
+
+    logo_html = ""
+    if logo and Path(logo).exists():
+        try:
+            b64 = imagem_base64(logo)
+            ext = Path(logo).suffix.replace(".", "").lower() or "png"
+            logo_html = f'<img class="catalogo-logo" src="data:image/{ext};base64,{b64}">'
+        except Exception:
+            logo_html = ""
 
     st.markdown(
-        """
+        f"""
         <style>
-        .stApp { background: #f7f7f7; }
-        .catalogo-hero {
-            background: #000;
+        .stApp {{ background: #f7f7f7; }}
+        .catalogo-hero {{
+            background: {cor};
             color: #fff;
             border-radius: 0 0 28px 28px;
             padding: 34px 24px;
             text-align: center;
             margin: -1rem -1rem 28px -1rem;
-        }
-        .catalogo-hero h1 {
+        }}
+        .catalogo-logo {{
+            max-width: 150px;
+            max-height: 90px;
+            object-fit: contain;
+            margin-bottom: 14px;
+            background: #fff;
+            border-radius: 16px;
+            padding: 8px;
+        }}
+        .catalogo-hero h1 {{
             color: #fff !important;
             font-size: 38px !important;
             margin-bottom: 6px;
-        }
-        .catalogo-hero p {
-            color: #ddd;
+        }}
+        .catalogo-hero p {{
+            color: #eee;
             font-size: 15px;
-        }
-        .produto-card {
+            max-width: 760px;
+            margin: 7px auto;
+        }}
+        .produto-card {{
             background: #fff;
             border-radius: 18px;
             padding: 16px;
@@ -3555,22 +3623,22 @@ def tela_catalogo_publico_cliente():
             border: 1px solid #eee;
             min-height: 100%;
             margin-bottom: 18px;
-        }
-        .categoria {
+        }}
+        .categoria {{
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 1.5px;
             color: #777;
             margin-top: 8px;
-        }
-        .preco {
+        }}
+        .preco {{
             font-size: 25px;
             font-weight: 900;
             margin: 12px 0;
-        }
-        .botao-wpp {
+        }}
+        .botao-wpp {{
             display: block;
-            background: #000;
+            background: {cor};
             color: #fff !important;
             padding: 12px 14px;
             border-radius: 12px;
@@ -3578,8 +3646,8 @@ def tela_catalogo_publico_cliente():
             text-decoration: none;
             font-weight: 800;
             margin-top: 12px;
-        }
-        .sem-foto {
+        }}
+        .sem-foto {{
             height: 220px;
             background: #111;
             color: #fff;
@@ -3589,7 +3657,7 @@ def tela_catalogo_publico_cliente():
             border-radius: 14px;
             font-size: 30px;
             font-weight: 900;
-        }
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -3598,8 +3666,11 @@ def tela_catalogo_publico_cliente():
     st.markdown(
         f"""
         <div class="catalogo-hero">
+            {logo_html}
             <h1>{empresa}</h1>
-            <p>{instagram} • Catálogo de produtos personalizados</p>
+            <p><b>{slogan}</b></p>
+            <p>{descricao_topo}</p>
+            <p>{instagram}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3668,7 +3739,7 @@ def tela_catalogo_publico_cliente():
     st.markdown(
         f"""
         <div style="text-align:center;color:#777;margin-top:35px;font-size:13px;">
-            Catálogo gerado pela {empresa}. Valores sujeitos à confirmação.
+            Catálogo gerado pela {empresa}. {aviso}
         </div>
         """,
         unsafe_allow_html=True,
