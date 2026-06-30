@@ -3342,16 +3342,24 @@ def mostrar_linha_tempo_cliente(cliente_id):
 
 
 
+
 def tela_catalogo():
     st.title("Catálogo público")
-    st.write("Gere um catálogo simples para enviar aos clientes. Ele mostra apenas foto, nome, descrição e preço.")
+    st.write("Link público para enviar aos clientes. O cliente vê apenas foto, nome, descrição, preço e botão de WhatsApp.")
 
-    st.info("Baixe o HTML e hospede/mande o arquivo ou use como base para página pública. O cliente não vê custo, lucro ou insumos.")
+    st.success("Seu catálogo público está ativo.")
+
+    st.code("?pagina=catalogo")
+
+    st.info(
+        "Para usar: abra o link do seu ERP e adicione no final: ?pagina=catalogo. "
+        "Exemplo: https://seuapp.streamlit.app/?pagina=catalogo"
+    )
 
     html = gerar_html_catalogo_publico()
 
     st.download_button(
-        "Baixar catálogo público em HTML",
+        "Baixar catálogo em HTML",
         data=html.encode("utf-8"),
         file_name="catalogo_sophi.html",
         mime="text/html",
@@ -3490,6 +3498,182 @@ def tela_ordens_producao():
                 st.info("Não foi possível ler os materiais.")
 
 
+
+
+# ============================================================
+# CATÁLOGO PÚBLICO POR LINK
+# ============================================================
+
+def detectar_pagina_publica():
+    try:
+        params = st.query_params
+        pagina = str(params.get("pagina", "")).lower().strip()
+        if pagina in ["catalogo", "catálogo", "catalog"]:
+            return "catalogo"
+    except Exception:
+        try:
+            params = st.experimental_get_query_params()
+            pagina = str(params.get("pagina", [""])[0]).lower().strip()
+            if pagina in ["catalogo", "catálogo", "catalog"]:
+                return "catalogo"
+        except Exception:
+            pass
+    return ""
+
+
+def tela_catalogo_publico_cliente():
+    empresa = obter_config("nome_empresa", EMPRESA)
+    instagram = obter_config("instagram", "")
+    whatsapp = obter_whatsapp_limpo()
+
+    st.markdown(
+        """
+        <style>
+        .stApp { background: #f7f7f7; }
+        .catalogo-hero {
+            background: #000;
+            color: #fff;
+            border-radius: 0 0 28px 28px;
+            padding: 34px 24px;
+            text-align: center;
+            margin: -1rem -1rem 28px -1rem;
+        }
+        .catalogo-hero h1 {
+            color: #fff !important;
+            font-size: 38px !important;
+            margin-bottom: 6px;
+        }
+        .catalogo-hero p {
+            color: #ddd;
+            font-size: 15px;
+        }
+        .produto-card {
+            background: #fff;
+            border-radius: 18px;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,.08);
+            border: 1px solid #eee;
+            min-height: 100%;
+            margin-bottom: 18px;
+        }
+        .categoria {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #777;
+            margin-top: 8px;
+        }
+        .preco {
+            font-size: 25px;
+            font-weight: 900;
+            margin: 12px 0;
+        }
+        .botao-wpp {
+            display: block;
+            background: #000;
+            color: #fff !important;
+            padding: 12px 14px;
+            border-radius: 12px;
+            text-align: center;
+            text-decoration: none;
+            font-weight: 800;
+            margin-top: 12px;
+        }
+        .sem-foto {
+            height: 220px;
+            background: #111;
+            color: #fff;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            border-radius: 14px;
+            font-size: 30px;
+            font-weight: 900;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="catalogo-hero">
+            <h1>{empresa}</h1>
+            <p>{instagram} • Catálogo de produtos personalizados</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    produtos = consultar("""
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, foto, ativo, descricao_catalogo
+    FROM produtos
+    WHERE ativo='Sim'
+    ORDER BY categoria, nome
+    """)
+
+    if produtos.empty:
+        st.info("Nenhum produto disponível no catálogo no momento.")
+        st.stop()
+
+    busca = st.text_input("Buscar produto", placeholder="Digite o nome do produto")
+    if busca.strip():
+        termo = busca.strip().lower()
+        produtos = produtos[
+            produtos["nome"].astype(str).str.lower().str.contains(termo, na=False)
+            | produtos["categoria"].astype(str).str.lower().str.contains(termo, na=False)
+        ]
+
+    categorias = ["Todas"] + sorted([c for c in produtos["categoria"].dropna().astype(str).unique().tolist() if c.strip()])
+    categoria_sel = st.selectbox("Categoria", categorias)
+
+    if categoria_sel != "Todas":
+        produtos = produtos[produtos["categoria"].astype(str) == categoria_sel]
+
+    cols = st.columns(3)
+
+    for idx, (_, p) in enumerate(produtos.iterrows()):
+        with cols[idx % 3]:
+            foto = str(p.get("foto", "") or "")
+            preco = n(p["preco_escolhido"]) if n(p["preco_escolhido"]) > 0 else n(p["preco_sugerido"])
+            descricao = str(p.get("descricao_catalogo", "") or "")
+            codigo = codigo_visual("PROD", int(p["id"]))
+
+            mensagem = f"Olá, tenho interesse no produto {p['nome']} ({codigo}) do catálogo da Sophi."
+            link = "#"
+            if whatsapp:
+                import urllib.parse
+                link = f"https://wa.me/{whatsapp}?text={urllib.parse.quote(mensagem)}"
+
+            st.markdown('<div class="produto-card">', unsafe_allow_html=True)
+
+            if foto and Path(foto).exists():
+                st.image(foto, use_container_width=True)
+            else:
+                st.markdown('<div class="sem-foto">Sophi</div>', unsafe_allow_html=True)
+
+            st.markdown(
+                f"""
+                <div class="categoria">{p['categoria'] or ''}</div>
+                <h3>{p['nome']}</h3>
+                <p>{descricao}</p>
+                <div class="preco">{real(preco)}</div>
+                <a class="botao-wpp" href="{link}" target="_blank">Chamar no WhatsApp</a>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div style="text-align:center;color:#777;margin-top:35px;font-size:13px;">
+            Catálogo gerado pela {empresa}. Valores sujeitos à confirmação.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -3587,6 +3771,17 @@ def botao_sair():
 # =========================
 # APP
 # =========================
+
+# Página pública do catálogo: não exige login.
+if detectar_pagina_publica() == "catalogo":
+    criar_banco()
+    st.set_page_config(
+        page_title="Catálogo Sophi",
+        page_icon="🛍️",
+        layout="wide",
+    )
+    tela_catalogo_publico_cliente()
+    st.stop()
 
 criar_banco()
 
