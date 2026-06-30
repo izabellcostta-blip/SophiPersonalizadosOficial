@@ -332,6 +332,36 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS laminacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Hot',
+        largura_cm REAL DEFAULT 0,
+        comprimento_m REAL DEFAULT 0,
+        valor_pago REAL DEFAULT 0,
+        folhas_a4 REAL DEFAULT 0,
+        custo_metro REAL DEFAULT 0,
+        custo_a4 REAL DEFAULT 0,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS mantas_imas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Ímã',
+        valor_pacote REAL DEFAULT 0,
+        quantidade_pacote REAL DEFAULT 1,
+        custo_unitario REAL DEFAULT 0,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -1297,34 +1327,246 @@ def tela_tintas():
             st.rerun()
 
 
+
+def tela_laminacao():
+    st.title("Laminação")
+    st.write("Cadastre BOPP por metro e calcule automaticamente quantas folhas A4 rende.")
+
+    AREA_A4_M2 = 0.21 * 0.297
+
+    st.subheader("Cadastrar BOPP / Laminação")
+
+    with st.form("form_laminacao"):
+        c1, c2 = st.columns(2)
+        nome = c1.text_input("Nome", placeholder="Ex: BOPP Brilho")
+        tipo = c2.selectbox("Tipo", ["Hot", "Cold", "Térmica", "Fria", "Outro"])
+
+        c3, c4, c5 = st.columns(3)
+        largura_cm = c3.number_input("Largura da bobina (cm)", min_value=0.0, value=22.0, step=0.1, format="%.2f")
+        comprimento_m = c4.number_input("Comprimento comprado (m)", min_value=0.0, value=10.0, step=0.1, format="%.2f")
+        valor_pago = c5.number_input("Valor pago", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+
+        largura_m = largura_cm / 100
+        area_total_m2 = largura_m * comprimento_m
+        folhas_a4 = area_total_m2 / AREA_A4_M2 if area_total_m2 > 0 else 0
+        custo_metro = valor_pago / comprimento_m if comprimento_m > 0 else 0
+        custo_a4 = valor_pago / folhas_a4 if folhas_a4 > 0 else 0
+
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Área total", f"{area_total_m2:.2f} m²")
+        r2.metric("Folhas A4 equivalentes", f"{folhas_a4:.0f}")
+        r3.metric("Custo por metro", real(custo_metro))
+        r4.metric("Custo por A4", real(custo_a4))
+
+        c6, c7 = st.columns(2)
+        observacoes = c6.text_input("Observação", placeholder="Ex: bobina 22cm x 10m")
+        ativo = c7.selectbox("Ativo?", ["Sim", "Não"], key="ativo_laminacao")
+
+        if st.form_submit_button("Salvar laminação"):
+            if not nome.strip():
+                st.error("Digite o nome da laminação.")
+            else:
+                executar("""
+                INSERT INTO laminacoes (
+                    nome, tipo, largura_cm, comprimento_m, valor_pago,
+                    folhas_a4, custo_metro, custo_a4, observacoes, ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    nome, tipo, largura_cm, comprimento_m, valor_pago,
+                    folhas_a4, custo_metro, custo_a4, observacoes, ativo
+                ))
+                st.success("Laminação salva com sucesso.")
+                st.rerun()
+
+    st.divider()
+    st.subheader("Laminações cadastradas")
+
+    df = consultar("""
+    SELECT id, nome, tipo, largura_cm, comprimento_m, valor_pago,
+           folhas_a4, custo_metro, custo_a4, observacoes, ativo
+    FROM laminacoes
+    ORDER BY id DESC
+    """)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_pago": st.column_config.NumberColumn("Valor pago", format="R$ %.2f"),
+            "folhas_a4": st.column_config.NumberColumn("Folhas A4", format="%.0f"),
+            "custo_metro": st.column_config.NumberColumn("Custo por metro", format="R$ %.2f"),
+            "custo_a4": st.column_config.NumberColumn("Custo por A4", format="R$ %.2f"),
+        },
+        key="editor_laminacoes",
+    )
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        if st.button("Salvar alterações da laminação"):
+            executar("DELETE FROM laminacoes")
+            for _, r in edited.iterrows():
+                nome = str(r.get("nome", "")).strip()
+                if nome:
+                    largura_cm = n(r.get("largura_cm", 0))
+                    comprimento_m = n(r.get("comprimento_m", 0))
+                    valor_pago = n(r.get("valor_pago", 0))
+                    largura_m = largura_cm / 100
+                    area_total_m2 = largura_m * comprimento_m
+                    folhas_a4 = area_total_m2 / AREA_A4_M2 if area_total_m2 > 0 else 0
+                    custo_metro = valor_pago / comprimento_m if comprimento_m > 0 else 0
+                    custo_a4 = valor_pago / folhas_a4 if folhas_a4 > 0 else 0
+
+                    executar("""
+                    INSERT INTO laminacoes (
+                        nome, tipo, largura_cm, comprimento_m, valor_pago,
+                        folhas_a4, custo_metro, custo_a4, observacoes, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        nome, str(r.get("tipo", "Hot")), largura_cm, comprimento_m, valor_pago,
+                        folhas_a4, custo_metro, custo_a4, str(r.get("observacoes", "")),
+                        str(r.get("ativo", "Sim"))
+                    ))
+            st.success("Laminações atualizadas.")
+            st.rerun()
+
+    with c2:
+        id_excluir = st.number_input("ID para excluir", min_value=0, step=1, key="del_laminacao")
+        if st.button("Excluir laminação"):
+            if id_excluir > 0:
+                executar("DELETE FROM laminacoes WHERE id=?", (int(id_excluir),))
+                st.success("Laminação excluída.")
+                st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+
+
+def tela_mantas_imas():
+    st.title("Mantas / Ímã / Velcro")
+    st.write("Cadastre manta ímã adesiva, velcro, manta adesiva e materiais de fixação.")
+
+    st.subheader("Cadastrar material")
+
+    with st.form("form_mantas_imas"):
+        c1, c2 = st.columns(2)
+        nome = c1.text_input("Nome", placeholder="Ex: Manta Ímã Adesiva A4")
+        tipo = c2.selectbox("Tipo", ["Ímã", "Velcro", "Manta adesiva", "Manta imantada", "Fixação", "Outro"])
+
+        c3, c4 = st.columns(2)
+        valor_pacote = c3.number_input("Valor do pacote", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+        quantidade_pacote = c4.number_input("Quantidade no pacote", min_value=1.0, value=1.0, step=1.0, format="%.0f")
+
+        custo_unitario = valor_pacote / max(quantidade_pacote, 1)
+        st.metric("Custo unitário / A4", real(custo_unitario))
+
+        c5, c6 = st.columns(2)
+        observacoes = c5.text_input("Observação", placeholder="Ex: pacote com 5 folhas A4")
+        ativo = c6.selectbox("Ativo?", ["Sim", "Não"], key="ativo_mantas_imas")
+
+        if st.form_submit_button("Salvar material"):
+            if not nome.strip():
+                st.error("Digite o nome do material.")
+            else:
+                executar("""
+                INSERT INTO mantas_imas (
+                    nome, tipo, valor_pacote, quantidade_pacote,
+                    custo_unitario, observacoes, ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    nome, tipo, valor_pacote, quantidade_pacote,
+                    custo_unitario, observacoes, ativo
+                ))
+                st.success("Material salvo com sucesso.")
+                st.rerun()
+
+    st.divider()
+    st.subheader("Materiais cadastrados")
+
+    df = consultar("""
+    SELECT id, nome, tipo, valor_pacote, quantidade_pacote,
+           custo_unitario, observacoes, ativo
+    FROM mantas_imas
+    ORDER BY id DESC
+    """)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_pacote": st.column_config.NumberColumn("Valor pacote", format="R$ %.2f"),
+            "custo_unitario": st.column_config.NumberColumn("Custo unitário", format="R$ %.2f"),
+        },
+        key="editor_mantas_imas",
+    )
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        if st.button("Salvar alterações de mantas / ímãs"):
+            executar("DELETE FROM mantas_imas")
+            for _, r in edited.iterrows():
+                nome = str(r.get("nome", "")).strip()
+                if nome:
+                    valor = n(r.get("valor_pacote", 0))
+                    qtd = max(n(r.get("quantidade_pacote", 1), 1), 1)
+                    custo = valor / qtd
+                    executar("""
+                    INSERT INTO mantas_imas (
+                        nome, tipo, valor_pacote, quantidade_pacote,
+                        custo_unitario, observacoes, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        nome, str(r.get("tipo", "Ímã")), valor, qtd,
+                        custo, str(r.get("observacoes", "")), str(r.get("ativo", "Sim"))
+                    ))
+            st.success("Materiais atualizados.")
+            st.rerun()
+
+    with c2:
+        id_excluir = st.number_input("ID para excluir", min_value=0, step=1, key="del_mantas_imas")
+        if st.button("Excluir material"):
+            if id_excluir > 0:
+                executar("DELETE FROM mantas_imas WHERE id=?", (int(id_excluir),))
+                st.success("Material excluído.")
+                st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+
+
 def tela_equipamentos():
     st.title("Equipamentos")
+    st.write("Cadastre equipamentos, energia, desgaste e custo por minuto.")
+
     st.subheader("Cadastrar equipamento")
 
     with st.form("form_equipamento"):
         nome = st.text_input("Nome do equipamento")
+
         c1, c2, c3 = st.columns(3)
         valor_pago = c1.number_input("Valor pago", min_value=0.0, step=0.01, format="%.2f")
-        vida = c2.number_input("Vida útil em meses", min_value=1.0, value=24.0, step=1.0)
-        producao = c3.number_input("Produção padrão por mês", min_value=1.0, value=500.0, step=1.0)
+        vida = c2.number_input("Vida útil em meses", min_value=1.0, value=36.0, step=1.0)
+        producao = c3.number_input("Produção mensal estimada", min_value=1.0, value=500.0, step=1.0)
 
         c4, c5, c6 = st.columns(3)
-        potencia = c4.number_input("Potência padrão (W)", min_value=0.0, value=0.0, step=1.0)
-        usa_energia = c5.selectbox("Usa energia?", ["Sim", "Não"])
+        usa_energia = c4.selectbox("Usa energia?", ["Sim", "Não"])
+        potencia = c5.number_input("Potência (W)", min_value=0.0, value=0.0, step=1.0)
         ativo = c6.selectbox("Ativo?", ["Sim", "Não"])
 
-        custo = custo_equipamento(
-            {
-                "valor_pago": valor_pago,
-                "vida_util_meses": vida,
-                "producao_mensal": producao,
-                "potencia_w": potencia,
-                "usa_energia": usa_energia,
-            },
-            minutos=1,
-        )
+        custo_kwh = n(obter_config("custo_kwh", "1.00"), 1)
+        desgaste = valor_pago / max(vida, 1) / max(producao, 1)
+        energia_min = (potencia / 1000) * custo_kwh / 60 if usa_energia == "Sim" else 0
+        custo_minuto = desgaste + energia_min
 
-        st.metric("Custo por minuto/uso", real4(custo))
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Desgaste por uso", real4(desgaste))
+        r2.metric("Energia por minuto", real4(energia_min))
+        r3.metric("Custo por minuto", real4(custo_minuto))
 
         if st.form_submit_button("Salvar equipamento"):
             if not nome.strip():
@@ -1340,10 +1582,22 @@ def tela_equipamentos():
                 st.success("Equipamento salvo.")
                 st.rerun()
 
+    st.divider()
     st.subheader("Equipamentos cadastrados")
+
     df = consultar("SELECT * FROM equipamentos ORDER BY id DESC")
+
     if not df.empty:
-        df["custo_automatico_minuto"] = df.apply(lambda r: custo_equipamento(r, minutos=1), axis=1)
+        custo_kwh = n(obter_config("custo_kwh", "1.00"), 1)
+        df["desgaste_uso"] = df.apply(
+            lambda r: n(r["valor_pago"]) / max(n(r["vida_util_meses"], 1), 1) / max(n(r["producao_mensal"], 1), 1),
+            axis=1,
+        )
+        df["energia_minuto"] = df.apply(
+            lambda r: ((n(r["potencia_w"]) / 1000) * custo_kwh / 60) if str(r["usa_energia"]) == "Sim" else 0,
+            axis=1,
+        )
+        df["custo_minuto_total"] = df["desgaste_uso"] + df["energia_minuto"]
 
     edited = st.data_editor(
         df,
@@ -1352,38 +1606,45 @@ def tela_equipamentos():
         num_rows="dynamic",
         column_config={
             "valor_pago": st.column_config.NumberColumn("Valor pago", format="R$ %.2f"),
-            "custo_automatico_minuto": st.column_config.NumberColumn("Custo/min", format="R$ %.4f"),
+            "desgaste_uso": st.column_config.NumberColumn("Desgaste/uso", format="R$ %.4f"),
+            "energia_minuto": st.column_config.NumberColumn("Energia/min", format="R$ %.4f"),
+            "custo_minuto_total": st.column_config.NumberColumn("Custo/min total", format="R$ %.4f"),
         },
         key="editor_equipamentos",
     )
 
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2 = st.columns([2, 1])
     with c1:
-        if st.button("Salvar Alterações dos equipamentos"):
+        if st.button("Salvar alterações dos equipamentos"):
+            executar("DELETE FROM equipamentos")
             for _, r in edited.iterrows():
                 if str(r.get("nome", "")).strip():
-                    if pd.isna(r.get("id")):
-                        executar("""
-                        INSERT INTO equipamentos(
-                            nome, valor_pago, vida_util_meses, producao_mensal,
-                            potencia_w, usa_energia, ativo
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (r["nome"], n(r["valor_pago"]), max(n(r["vida_util_meses"], 1), 1), max(n(r["producao_mensal"], 1), 1), n(r["potencia_w"]), r["usa_energia"], r["ativo"]))
-                    else:
-                        executar("""
-                        UPDATE equipamentos SET nome=?, valor_pago=?, vida_util_meses=?, producao_mensal=?, potencia_w=?, usa_energia=?, ativo=? WHERE id=?
-                        """, (r["nome"], n(r["valor_pago"]), max(n(r["vida_util_meses"], 1), 1), max(n(r["producao_mensal"], 1), 1), n(r["potencia_w"]), r["usa_energia"], r["ativo"], int(r["id"])))
+                    executar("""
+                    INSERT INTO equipamentos(
+                        nome, valor_pago, vida_util_meses, producao_mensal,
+                        potencia_w, usa_energia, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        r.get("nome", ""), n(r.get("valor_pago", 0)),
+                        max(n(r.get("vida_util_meses", 1), 1), 1),
+                        max(n(r.get("producao_mensal", 1), 1), 1),
+                        n(r.get("potencia_w", 0)), str(r.get("usa_energia", "Sim")),
+                        str(r.get("ativo", "Sim"))
+                    ))
             st.success("Equipamentos atualizados.")
             st.rerun()
+
     with c2:
         del_id = st.number_input("ID para excluir", min_value=0, step=1, key="del_eq")
-    with c3:
-        st.write("")
-        if st.button("Excluir equipamento") and del_id:
-            executar("DELETE FROM equipamentos WHERE id=?", (int(del_id),))
-            st.success("Equipamento excluído.")
-            st.rerun()
+        if st.button("Excluir equipamento"):
+            if del_id > 0:
+                executar("DELETE FROM equipamentos WHERE id=?", (int(del_id),))
+                st.success("Equipamento excluído.")
+                st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+
 
 
 def seletor_insumo(linha):
@@ -2201,6 +2462,8 @@ menu = st.sidebar.radio(
         "Produtos / Precificação",
         "Papéis",
         "Embalagens",
+        "Laminação",
+        "Mantas / Ímã / Velcro",
         "Insumos",
         "Tintas",
         "Equipamentos",
@@ -2210,6 +2473,7 @@ menu = st.sidebar.radio(
         "Configurações",
     ],
 )
+
 
 if menu == "Dashboard":
     tela_inicio()
@@ -2223,6 +2487,10 @@ elif menu == "Papéis":
     tela_cadastro_por_categoria("Papéis", "Papel")
 elif menu == "Embalagens":
     tela_cadastro_por_categoria("Embalagens", "Embalagem")
+elif menu == "Laminação":
+    tela_laminacao()
+elif menu == "Mantas / Ímã / Velcro":
+    tela_mantas_imas()
 elif menu == "Insumos":
     tela_insumos()
 elif menu == "Tintas":
