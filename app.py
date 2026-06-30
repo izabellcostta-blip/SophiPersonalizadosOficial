@@ -3992,6 +3992,7 @@ menu = st.sidebar.radio(
         "Estoque",
         "Fluxo de Caixa",
         "Categorias",
+        "Catálogo público",
         "Configurações",
     ],
 )
@@ -4005,8 +4006,6 @@ elif menu == "Orçamentos":
     tela_orcamentos()
 elif menu == "Ordem de Produção":
     tela_ordens_producao()
-elif menu == "Catálogo público":
-    tela_catalogo()
 elif menu == "Produtos / Precificação":
     tela_produtos()
 elif menu == "Papéis":
@@ -4029,5 +4028,7 @@ elif menu == "Fluxo de Caixa":
     tela_financeiro()
 elif menu == "Categorias":
     tela_categorias()
+elif menu == "Catálogo público":
+    tela_catalogo()
 elif menu == "Configurações":
     tela_configuracoes()
