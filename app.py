@@ -468,6 +468,23 @@ def criar_banco():
     except Exception:
         pass
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS ordens_producao (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        codigo TEXT,
+        cliente_nome TEXT,
+        whatsapp TEXT,
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
+        data_entrega TEXT,
+        status TEXT DEFAULT 'Aguardando',
+        itens_json TEXT,
+        materiais_json TEXT,
+        observacoes TEXT
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -1389,6 +1406,12 @@ def tela_clientes():
             with ccol:
                 card("Total gasto", real(total), "Soma de orçamentos")
             st.write(c["observacoes"] or "")
+
+    st.divider()
+    st.subheader("Linha do tempo do cliente")
+    id_timeline = st.number_input("ID do cliente para linha do tempo", min_value=0, step=1, key="id_timeline_cliente")
+    if id_timeline > 0:
+        mostrar_linha_tempo_cliente(int(id_timeline))
 
 def tela_cadastro_por_categoria(titulo, categoria_padrao):
     st.title(titulo)
@@ -2318,6 +2341,7 @@ def tela_produtos():
     favorito = st.checkbox("⭐ Marcar como favorito", value=False)
 
     foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
+    descricao_catalogo = st.text_area("Descrição para catálogo público", placeholder="Texto curto que o cliente verá no catálogo.")
 
     qtd_por_lote = st.number_input("Quantidade produzida por folha/lote", min_value=1.0, value=1.0, step=1.0)
 
@@ -2438,9 +2462,9 @@ def tela_produtos():
                 equipamentos_json, tempo_min, valor_hora, reserva_erro,
                 margem_lucro, custo_insumos, custo_tintas, custo_equipamentos,
                 custo_mao_obra, custo_total_lote, custo_unitario, preco_sugerido,
-                preco_escolhido, lucro_unitario, margem_real, ativo, foto, favorito
+                preco_escolhido, lucro_unitario, margem_real, ativo, foto, favorito, descricao_catalogo
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 nome, categoria_produto, qtd_por_lote,
                 json.dumps(receita_para_salvar, ensure_ascii=False),
@@ -2449,7 +2473,7 @@ def tela_produtos():
                 tempo_min, valor_hora, reserva, margem,
                 custo_insumos_total, custo_tintas_total, custo_equip_total, custo_mao_obra,
                 custo_total_lote, custo_unitario, preco_sugerido, preco_final, lucro, margem_real,
-                ativo, foto_path, "Sim" if favorito else "Não",
+                ativo, foto_path, "Sim" if favorito else "Não", descricao_catalogo,
             ))
             st.success("Produto salvo.")
             st.rerun()
@@ -2681,6 +2705,7 @@ def tela_orcamentos():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (hoje_iso(), "Entrada", f"Orçamento #{ultimo} - {cliente['nome']}", "Venda", forma_pagamento, total_geral, "Orçamento", int(ultimo), observacoes))
 
+            garantir_ordem_producao(int(ultimo))
             st.success(f"Orçamento {codigo_visual('ORC', int(ultimo), ano=datetime.now().year)} salvo com sucesso.")
             st.rerun()
 
@@ -2744,6 +2769,15 @@ def tela_orcamentos():
                 file_name=f"orcamento_{int(id_ver)}.html",
                 mime="text/html",
             )
+
+            etiqueta_html = criar_html_etiqueta(int(id_ver))
+            if etiqueta_html:
+                st.download_button(
+                    "Baixar etiqueta do pedido",
+                    data=etiqueta_html.encode("utf-8"),
+                    file_name=f"etiqueta_{int(id_ver)}.html",
+                    mime="text/html",
+                )
 
     st.subheader("Excluir orçamento")
     id_excluir_orc = st.number_input("ID do orçamento para excluir", min_value=0, step=1, key="id_excluir_orcamento")
@@ -2919,6 +2953,541 @@ def tela_estoque():
                 executar("DELETE FROM estoque WHERE id=?", (int(id_excluir),))
                 st.success("Movimento excluído.")
                 st.rerun()
+
+
+
+
+# ============================================================
+# RECURSOS ERP 2.0 - PARTE FINAL
+# ============================================================
+
+def obter_whatsapp_limpo():
+    numero = obter_config("whatsapp", "")
+    return "".join([c for c in str(numero) if c.isdigit()])
+
+
+def garantir_ordem_producao(orcamento_id):
+    """Cria OP automaticamente para orçamento em produção/finalizado/entregue."""
+    try:
+        existe = consultar("SELECT id FROM ordens_producao WHERE orcamento_id=?", (int(orcamento_id),))
+        if not existe.empty:
+            return int(existe.iloc[0]["id"])
+
+        orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+        if orc.empty:
+            return None
+
+        o = orc.iloc[0]
+        status = str(o["status"])
+
+        if status not in ["Produção", "Finalizado", "Entregue", "ProduÃ§Ã£o"]:
+            return None
+
+        itens = consultar("""
+        SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+        FROM orcamento_itens
+        WHERE orcamento_id=?
+        """, (int(orcamento_id),))
+
+        itens_lista = itens.to_dict("records") if not itens.empty else []
+
+        materiais = []
+        try:
+            for _, item in itens.iterrows():
+                produto_nome = str(item["produto"])
+                prod = consultar("SELECT receita_json, tintas_json, equipamentos_json FROM produtos WHERE nome=?", (produto_nome,))
+                if not prod.empty:
+                    p = prod.iloc[0]
+                    for campo, tipo in [
+                        ("receita_json", "Item"),
+                        ("tintas_json", "Tinta"),
+                        ("equipamentos_json", "Equipamento"),
+                    ]:
+                        try:
+                            dados = json.loads(p[campo] or "[]")
+                            for d in dados:
+                                materiais.append({
+                                    "tipo": tipo,
+                                    "nome": d.get("nome", ""),
+                                    "categoria": d.get("categoria", ""),
+                                    "qtd": d.get("qtd", ""),
+                                })
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        try:
+            data_entrega = (pd.to_datetime(o["data_orcamento"], errors="coerce") + pd.to_timedelta(int(n(obter_config("validade_orcamento", "7"), 7)), unit="D")).date().isoformat()
+        except Exception:
+            data_entrega = (datetime.now().date() + timedelta(days=7)).isoformat()
+
+        op_id = consultar("SELECT COALESCE(MAX(id),0)+1 AS proximo FROM ordens_producao").iloc[0]["proximo"]
+        codigo = codigo_visual("OP", int(op_id), ano=datetime.now().year)
+
+        return executar("""
+        INSERT INTO ordens_producao(
+            orcamento_id, codigo, cliente_nome, whatsapp, data_entrega,
+            status, itens_json, materiais_json, observacoes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            int(orcamento_id),
+            codigo,
+            str(o["cliente_nome"]),
+            str(o["whatsapp"]),
+            str(data_entrega),
+            "Aguardando",
+            json.dumps(itens_lista, ensure_ascii=False),
+            json.dumps(materiais, ensure_ascii=False),
+            str(o["observacoes"] or ""),
+        ))
+
+    except Exception:
+        return None
+
+
+def criar_html_etiqueta(orcamento_id):
+    orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+    if orc.empty:
+        return ""
+
+    o = orc.iloc[0]
+    codigo = codigo_visual("ORC", int(orcamento_id), ano=datetime.now().year)
+    empresa = obter_config("nome_empresa", EMPRESA)
+
+    qr_texto = f"{codigo} - {o['cliente_nome']} - {o['whatsapp']}"
+    try:
+        import urllib.parse
+        qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=" + urllib.parse.quote(qr_texto)
+    except Exception:
+        qr_url = ""
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Etiqueta {codigo}</title>
+<style>
+body {{
+    font-family: Arial, sans-serif;
+    background: #fff;
+    margin: 0;
+    padding: 20px;
+}}
+.etiqueta {{
+    width: 90mm;
+    min-height: 55mm;
+    border: 2px solid #111;
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}}
+h1 {{
+    font-size: 16px;
+    margin: 0 0 8px;
+}}
+p {{
+    margin: 4px 0;
+    font-size: 12px;
+}}
+.codigo {{
+    font-size: 14px;
+    font-weight: 800;
+    margin-top: 8px;
+}}
+.qr img {{
+    width: 95px;
+    height: 95px;
+}}
+@media print {{
+    @page {{ size: auto; margin: 8mm; }}
+    button {{ display: none; }}
+}}
+button {{
+    margin-bottom: 12px;
+    background: #111;
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-weight: 700;
+}}
+</style>
+</head>
+<body>
+<button onclick="window.print()">Imprimir etiqueta</button>
+<div class="etiqueta">
+    <div>
+        <h1>{empresa}</h1>
+        <p><b>Cliente:</b> {o['cliente_nome']}</p>
+        <p><b>WhatsApp:</b> {o['whatsapp'] or '-'}</p>
+        <p><b>Status:</b> {o['status']}</p>
+        <p class="codigo">{codigo}</p>
+    </div>
+    <div class="qr">
+        <img src="{qr_url}">
+    </div>
+</div>
+</body>
+</html>"""
+    return html
+
+
+def gerar_html_catalogo_publico():
+    produtos = consultar("""
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, foto, ativo, descricao_catalogo
+    FROM produtos
+    WHERE ativo='Sim'
+    ORDER BY categoria, nome
+    """)
+
+    empresa = obter_config("nome_empresa", EMPRESA)
+    whatsapp = obter_whatsapp_limpo()
+    instagram = obter_config("instagram", "")
+
+    cards = ""
+
+    if produtos.empty:
+        cards = "<p>Nenhum produto ativo no catálogo no momento.</p>"
+    else:
+        for _, p in produtos.iterrows():
+            preco = n(p["preco_escolhido"]) if n(p["preco_escolhido"]) > 0 else n(p["preco_sugerido"])
+            foto_html = ""
+            foto = str(p.get("foto", "") or "")
+
+            if foto and Path(foto).exists():
+                try:
+                    b64 = imagem_base64(foto)
+                    ext = Path(foto).suffix.replace(".", "").lower() or "png"
+                    foto_html = f'<img class="foto" src="data:image/{ext};base64,{b64}">'
+                except Exception:
+                    foto_html = '<div class="semfoto">Sophi</div>'
+            else:
+                foto_html = '<div class="semfoto">Sophi</div>'
+
+            mensagem = f"Olá, tenho interesse no produto {p['nome']} do catálogo da Sophi."
+            link_wpp = f"https://wa.me/{whatsapp}?text={mensagem.replace(' ', '%20')}" if whatsapp else "#"
+            descricao = str(p.get("descricao_catalogo", "") or "")
+
+            cards += f"""
+            <div class="card-produto">
+                {foto_html}
+                <div class="conteudo">
+                    <div class="categoria">{p['categoria'] or ''}</div>
+                    <h2>{p['nome']}</h2>
+                    <p>{descricao}</p>
+                    <div class="preco">{real(preco)}</div>
+                    <a href="{link_wpp}" class="botao">Chamar no WhatsApp</a>
+                </div>
+            </div>
+            """
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Catálogo - {empresa}</title>
+<style>
+body {{
+    font-family: Arial, sans-serif;
+    background: #f6f6f6;
+    margin: 0;
+    color: #111;
+}}
+header {{
+    background: #000;
+    color: #fff;
+    padding: 28px 20px;
+    text-align: center;
+}}
+header h1 {{
+    margin: 0;
+    font-size: 30px;
+}}
+header p {{
+    margin: 8px 0 0;
+    color: #ddd;
+}}
+.container {{
+    max-width: 1100px;
+    margin: 24px auto;
+    padding: 0 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+}}
+.card-produto {{
+    background: #fff;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 10px 28px rgba(0,0,0,.08);
+}}
+.foto {{
+    width: 100%;
+    height: 230px;
+    object-fit: cover;
+}}
+.semfoto {{
+    height: 230px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #111;
+    color: #fff;
+    font-size: 34px;
+    font-weight: 800;
+}}
+.conteudo {{
+    padding: 18px;
+}}
+.categoria {{
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #777;
+    font-size: 11px;
+    margin-bottom: 8px;
+}}
+h2 {{
+    margin: 0 0 8px;
+    font-size: 22px;
+}}
+p {{
+    color: #555;
+    min-height: 36px;
+}}
+.preco {{
+    font-size: 24px;
+    font-weight: 900;
+    margin: 16px 0;
+}}
+.botao {{
+    display: block;
+    background: #000;
+    color: #fff;
+    text-decoration: none;
+    text-align: center;
+    padding: 12px;
+    border-radius: 12px;
+    font-weight: 800;
+}}
+footer {{
+    text-align: center;
+    padding: 25px;
+    color: #777;
+}}
+</style>
+</head>
+<body>
+<header>
+    <h1>{empresa}</h1>
+    <p>{instagram} • Catálogo de produtos personalizados</p>
+</header>
+<main class="container">
+{cards}
+</main>
+<footer>Catálogo gerado pelo Sophi ERP.</footer>
+</body>
+</html>"""
+    return html
+
+
+def mostrar_linha_tempo_cliente(cliente_id):
+    cli = consultar("SELECT * FROM clientes WHERE id=?", (int(cliente_id),))
+    if cli.empty:
+        st.warning("Cliente não encontrado.")
+        return
+
+    c = cli.iloc[0]
+    orcs = consultar("""
+    SELECT id, total, status, data_orcamento
+    FROM orcamentos
+    WHERE cliente_id=?
+    ORDER BY data_orcamento ASC
+    """, (int(cliente_id),))
+
+    st.subheader(f"Linha do tempo: {c['nome']}")
+
+    if orcs.empty:
+        st.info("Este cliente ainda não possui orçamentos.")
+        return
+
+    total_gasto = float(orcs["total"].sum())
+    ticket_medio = total_gasto / len(orcs) if len(orcs) else 0
+    ultimo = pd.to_datetime(orcs["data_orcamento"], errors="coerce").max()
+
+    dias_ultimo = ""
+    try:
+        dias = (datetime.now() - ultimo.to_pydatetime()).days
+        dias_ultimo = f"Último pedido há {dias} dias"
+    except Exception:
+        dias_ultimo = "Último pedido sem data"
+
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        card("Total gasto", real(total_gasto))
+    with t2:
+        card("Ticket médio", real(ticket_medio))
+    with t3:
+        card("Pedidos", str(len(orcs)), dias_ultimo)
+
+    for idx, row in orcs.iterrows():
+        codigo = codigo_visual("ORC", int(row["id"]), ano=datetime.now().year)
+        st.write(f"✔ **{codigo}** — {row['status']} — {real(row['total'])} — {row['data_orcamento']}")
+
+
+
+
+
+
+def tela_catalogo():
+    st.title("Catálogo público")
+    st.write("Gere um catálogo simples para enviar aos clientes. Ele mostra apenas foto, nome, descrição e preço.")
+
+    st.info("Baixe o HTML e hospede/mande o arquivo ou use como base para página pública. O cliente não vê custo, lucro ou insumos.")
+
+    html = gerar_html_catalogo_publico()
+
+    st.download_button(
+        "Baixar catálogo público em HTML",
+        data=html.encode("utf-8"),
+        file_name="catalogo_sophi.html",
+        mime="text/html",
+    )
+
+    st.subheader("Produtos ativos que aparecem no catálogo")
+    produtos = consultar("""
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, ativo, descricao_catalogo
+    FROM produtos
+    WHERE ativo='Sim'
+    ORDER BY categoria, nome
+    """)
+
+    if produtos.empty:
+        st.info("Nenhum produto ativo.")
+    else:
+        produtos = adicionar_codigo_visual(produtos, "PROD")
+        st.dataframe(formatar_valores_tabela(produtos), use_container_width=True, hide_index=True)
+
+
+def tela_ordens_producao():
+    st.title("Ordem de Produção")
+    st.write("Controle o que precisa produzir sem precisar abrir cada orçamento.")
+
+    st.subheader("Criar OPs pendentes automaticamente")
+
+    if st.button("Buscar orçamentos em produção e criar OP"):
+        orcs = consultar("""
+        SELECT id FROM orcamentos
+        WHERE status IN ('Produção', 'ProduÃ§Ã£o', 'Finalizado', 'Entregue')
+        ORDER BY id DESC
+        """)
+        criadas = 0
+        for _, row in orcs.iterrows():
+            antes = consultar("SELECT id FROM ordens_producao WHERE orcamento_id=?", (int(row["id"]),))
+            garantir_ordem_producao(int(row["id"]))
+            depois = consultar("SELECT id FROM ordens_producao WHERE orcamento_id=?", (int(row["id"]),))
+            if antes.empty and not depois.empty:
+                criadas += 1
+        st.success(f"{criadas} ordem(ns) de produção criada(s).")
+        st.rerun()
+
+    st.divider()
+
+    df = consultar("""
+    SELECT id, codigo, orcamento_id, cliente_nome, whatsapp, data_criacao, data_entrega, status, observacoes
+    FROM ordens_producao
+    ORDER BY id DESC
+    """)
+
+    st.subheader("Ordens cadastradas")
+
+    if df.empty:
+        st.info("Ainda não há ordens de produção.")
+    else:
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="editor_ordens_producao",
+            column_config={
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["Aguardando", "Produzindo", "Finalizado", "Entregue", "Cancelado"],
+                )
+            },
+        )
+
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            if st.button("Salvar alterações das OPs"):
+                for _, r in edited.iterrows():
+                    if str(r.get("codigo", "")).strip():
+                        executar("""
+                        UPDATE ordens_producao
+                        SET status=?, data_entrega=?, observacoes=?
+                        WHERE id=?
+                        """, (
+                            str(r.get("status", "Aguardando")),
+                            str(r.get("data_entrega", "")),
+                            str(r.get("observacoes", "")),
+                            int(r["id"]),
+                        ))
+                st.success("Ordens atualizadas.")
+                st.rerun()
+
+        with c2:
+            id_excluir = st.number_input("ID para excluir OP", min_value=0, step=1, key="del_op")
+            if st.button("Excluir OP"):
+                if id_excluir > 0:
+                    executar("DELETE FROM ordens_producao WHERE id=?", (int(id_excluir),))
+                    st.success("OP excluída.")
+                    st.rerun()
+
+    st.divider()
+    st.subheader("Ficha da OP")
+
+    id_op = st.number_input("ID da OP para visualizar", min_value=0, step=1, key="ver_op")
+    if id_op > 0:
+        op = consultar("SELECT * FROM ordens_producao WHERE id=?", (int(id_op),))
+        if op.empty:
+            st.warning("OP não encontrada.")
+        else:
+            o = op.iloc[0]
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                card("OP", o["codigo"])
+            with c2:
+                card("Cliente", o["cliente_nome"])
+            with c3:
+                card("Status", o["status"])
+
+            st.write(f"**WhatsApp:** {o['whatsapp'] or '-'}")
+            st.write(f"**Entrega:** {o['data_entrega'] or '-'}")
+            st.write(f"**Observações:** {o['observacoes'] or '-'}")
+
+            st.markdown("### Produtos")
+            try:
+                itens = json.loads(o["itens_json"] or "[]")
+                if itens:
+                    st.dataframe(formatar_valores_tabela(pd.DataFrame(itens)), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum item salvo.")
+            except Exception:
+                st.info("Não foi possível ler os itens.")
+
+            st.markdown("### Materiais necessários")
+            try:
+                materiais = json.loads(o["materiais_json"] or "[]")
+                if materiais:
+                    st.dataframe(formatar_valores_tabela(pd.DataFrame(materiais)), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum material encontrado automaticamente.")
+            except Exception:
+                st.info("Não foi possível ler os materiais.")
 
 
 # ============================================================
@@ -3131,6 +3700,10 @@ elif menu == "Clientes":
     tela_clientes()
 elif menu == "Orçamentos":
     tela_orcamentos()
+elif menu == "Ordem de Produção":
+    tela_ordens_producao()
+elif menu == "Catálogo público":
+    tela_catalogo()
 elif menu == "Produtos / Precificação":
     tela_produtos()
 elif menu == "Papéis":
