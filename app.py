@@ -3349,21 +3349,36 @@ def mostrar_linha_tempo_cliente(cliente_id):
 
 
 
+
 def tela_catalogo():
     st.title("Catálogo público")
-    st.write("Configure o catálogo que seus clientes acessam pelo link público.")
+    st.write("Configure o catálogo profissional que seus clientes acessam pelo link público.")
 
-    base_url = "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
+    link_publico = link_catalogo_publico()
 
-    st.success("Seu catálogo público está ativo.")
-    st.code(base_url)
-
-    st.link_button("Abrir catálogo público", base_url)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.success("Seu catálogo público está ativo.")
+        st.code(link_publico)
+    with c2:
+        st.link_button("Abrir catálogo", link_publico)
 
     st.divider()
-    st.subheader("Configurações do catálogo")
+    st.subheader("Personalização do catálogo")
 
-    with st.form("form_config_catalogo"):
+    logo_atual = obter_config("logo_path", "")
+    if logo_atual and Path(logo_atual).exists():
+        st.caption("Logo atual")
+        st.image(logo_atual, width=120)
+
+    logo_upload = st.file_uploader("Trocar logo do catálogo", type=["png", "jpg", "jpeg", "webp"], key="logo_catalogo_upload")
+    if logo_upload is not None:
+        caminho = salvar_upload(logo_upload, "logo_sophi")
+        salvar_config("logo_path", caminho)
+        st.success("Logo do catálogo atualizada.")
+        st.rerun()
+
+    with st.form("form_catalogo_profissional"):
         c1, c2 = st.columns(2)
 
         titulo = c1.text_input(
@@ -3381,30 +3396,36 @@ def tela_catalogo():
             value=obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido."),
         )
 
+        c3, c4 = st.columns(2)
+
+        cor = c3.text_input(
+            "Cor principal",
+            value=obter_config("catalogo_cor", "#000000"),
+            help="Exemplo: #000000, #D8A7B1, #F4C2C2",
+        )
+
+        texto_botao = c4.text_input(
+            "Texto do botão WhatsApp",
+            value=obter_config("catalogo_botao", "Chamar no WhatsApp"),
+        )
+
         aviso = st.text_input(
             "Aviso no rodapé",
             value=obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo."),
         )
 
-        cor = st.text_input(
-            "Cor principal do catálogo",
-            value=obter_config("catalogo_cor", "#000000"),
-            help="Use código hexadecimal. Exemplo: #000000, #D8A7B1, #F4C2C2",
-        )
-
-        salvar = st.form_submit_button("Salvar configurações do catálogo")
-
-        if salvar:
+        if st.form_submit_button("Salvar catálogo"):
             salvar_config("catalogo_titulo", titulo)
             salvar_config("catalogo_slogan", slogan)
             salvar_config("catalogo_descricao", descricao)
-            salvar_config("catalogo_aviso", aviso)
             salvar_config("catalogo_cor", cor)
-            st.success("Catálogo atualizado com sucesso.")
+            salvar_config("catalogo_botao", texto_botao)
+            salvar_config("catalogo_aviso", aviso)
+            st.success("Configurações do catálogo salvas.")
             st.rerun()
 
     st.divider()
-    st.subheader("Produtos ativos que aparecem no catálogo")
+    st.subheader("Produtos ativos no catálogo")
 
     produtos = consultar("""
     SELECT id, nome, categoria, preco_escolhido, preco_sugerido, ativo, descricao_catalogo
@@ -3414,12 +3435,12 @@ def tela_catalogo():
     """)
 
     if produtos.empty:
-        st.info("Nenhum produto ativo.")
+        st.info("Nenhum produto ativo no catálogo.")
     else:
         produtos = adicionar_codigo_visual(produtos, "PROD")
         st.dataframe(formatar_valores_tabela(produtos), use_container_width=True, hide_index=True)
 
-    st.info("Para alterar foto, preço ou descrição do produto, vá em Produtos / Precificação.")
+    st.info("Para editar foto, descrição e preço de cada item, vá em Produtos / Precificação.")
 
 
 def tela_ordens_producao():
@@ -3570,6 +3591,7 @@ def tela_catalogo_publico_cliente():
     descricao_topo = obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido.")
     aviso = obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo.")
     cor = obter_config("catalogo_cor", "#000000") or "#000000"
+    texto_botao = obter_config("catalogo_botao", "Chamar no WhatsApp") or "Chamar no WhatsApp"
     instagram = obter_config("instagram", "")
     whatsapp = obter_whatsapp_limpo()
     logo = obter_config("logo_path", "")
@@ -3590,24 +3612,24 @@ def tela_catalogo_publico_cliente():
         .catalogo-hero {{
             background: {cor};
             color: #fff;
-            border-radius: 0 0 28px 28px;
-            padding: 34px 24px;
+            border-radius: 0 0 30px 30px;
+            padding: 38px 24px;
             text-align: center;
-            margin: -1rem -1rem 28px -1rem;
+            margin: -1rem -1rem 30px -1rem;
         }}
         .catalogo-logo {{
-            max-width: 150px;
-            max-height: 90px;
+            max-width: 155px;
+            max-height: 95px;
             object-fit: contain;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
             background: #fff;
-            border-radius: 16px;
-            padding: 8px;
+            border-radius: 18px;
+            padding: 9px;
         }}
         .catalogo-hero h1 {{
             color: #fff !important;
-            font-size: 38px !important;
-            margin-bottom: 6px;
+            font-size: 40px !important;
+            margin-bottom: 8px;
         }}
         .catalogo-hero p {{
             color: #eee;
@@ -3617,12 +3639,12 @@ def tela_catalogo_publico_cliente():
         }}
         .produto-card {{
             background: #fff;
-            border-radius: 18px;
+            border-radius: 20px;
             padding: 16px;
             box-shadow: 0 10px 30px rgba(0,0,0,.08);
             border: 1px solid #eee;
             min-height: 100%;
-            margin-bottom: 18px;
+            margin-bottom: 20px;
         }}
         .categoria {{
             font-size: 11px;
@@ -3729,7 +3751,7 @@ def tela_catalogo_publico_cliente():
                 <h3>{p['nome']}</h3>
                 <p>{descricao}</p>
                 <div class="preco">{real(preco)}</div>
-                <a class="botao-wpp" href="{link}" target="_blank">Chamar no WhatsApp</a>
+                <a class="botao-wpp" href="{link}" target="_blank">{texto_botao}</a>
                 """,
                 unsafe_allow_html=True,
             )
@@ -3739,7 +3761,7 @@ def tela_catalogo_publico_cliente():
     st.markdown(
         f"""
         <div style="text-align:center;color:#777;margin-top:35px;font-size:13px;">
-            Catálogo gerado pela {empresa}. {aviso}
+            {aviso}
         </div>
         """,
         unsafe_allow_html=True,
