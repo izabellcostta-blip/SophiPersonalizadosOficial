@@ -469,6 +469,12 @@ def criar_banco():
         pass
 
 
+    try:
+        executar("ALTER TABLE produtos ADD COLUMN status_catalogo TEXT DEFAULT 'Disponível'")
+    except Exception:
+        pass
+
+
     executar("""
     CREATE TABLE IF NOT EXISTS ordens_producao (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -502,6 +508,18 @@ def criar_banco():
         "catalogo_descricao": "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido.",
         "catalogo_aviso": "Valores sujeitos à confirmação conforme personalização, material e prazo.",
         "catalogo_cor": "#000000",
+        "catalogo_cnpj": "",
+        "catalogo_endereco": "",
+        "catalogo_email": "",
+        "catalogo_pix": "",
+        "catalogo_horario": "Atendimento de segunda a sábado",
+        "catalogo_aceita_pix": "Sim",
+        "catalogo_aceita_cartao": "Sim",
+        "catalogo_parcelamento": "Consulte condições",
+        "catalogo_sinal": "Sinal para confirmação da encomenda",
+        "catalogo_prazo": "Prazo de produção combinado no atendimento",
+        "catalogo_info_extra": "Produtos personalizados sob encomenda.",
+        "catalogo_mostrar_status": "Sim",
     }
 
     for chave, valor in configuracoes_padrao.items():
@@ -2344,6 +2362,7 @@ def tela_produtos():
     categoria_produto = c2.text_input("Categoria do produto")
     ativo = c3.selectbox("Ativo?", ["Sim", "Não"])
     favorito = st.checkbox("⭐ Marcar como favorito", value=False)
+    status_catalogo = st.selectbox("Status no catálogo", ["Disponível", "Esgotado", "Sob encomenda"], key="status_catalogo_novo")
 
     foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
     descricao_catalogo = st.text_area("Descrição para catálogo público", placeholder="Texto curto que o cliente verá no catálogo.")
@@ -2467,9 +2486,9 @@ def tela_produtos():
                 equipamentos_json, tempo_min, valor_hora, reserva_erro,
                 margem_lucro, custo_insumos, custo_tintas, custo_equipamentos,
                 custo_mao_obra, custo_total_lote, custo_unitario, preco_sugerido,
-                preco_escolhido, lucro_unitario, margem_real, ativo, foto, favorito, descricao_catalogo
+                preco_escolhido, lucro_unitario, margem_real, ativo, foto, favorito, descricao_catalogo, status_catalogo
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 nome, categoria_produto, qtd_por_lote,
                 json.dumps(receita_para_salvar, ensure_ascii=False),
@@ -2478,7 +2497,7 @@ def tela_produtos():
                 tempo_min, valor_hora, reserva, margem,
                 custo_insumos_total, custo_tintas_total, custo_equip_total, custo_mao_obra,
                 custo_total_lote, custo_unitario, preco_sugerido, preco_final, lucro, margem_real,
-                ativo, foto_path, "Sim" if favorito else "Não", descricao_catalogo,
+                ativo, foto_path, "Sim" if favorito else "Não", descricao_catalogo, status_catalogo,
             ))
             st.success("Produto salvo.")
             st.rerun()
@@ -2486,7 +2505,7 @@ def tela_produtos():
     st.subheader("Produtos cadastrados")
     df = consultar("""
     SELECT id, nome, categoria, qtd_por_lote, custo_unitario, preco_sugerido,
-           preco_escolhido, lucro_unitario, margem_real, favorito, ativo
+           preco_escolhido, lucro_unitario, margem_real, favorito, status_catalogo, ativo
     FROM produtos
     ORDER BY id DESC
     """)
@@ -2523,12 +2542,12 @@ def tela_produtos():
                 UPDATE produtos
                 SET nome=?, categoria=?, qtd_por_lote=?, custo_unitario=?,
                     preco_sugerido=?, preco_escolhido=?, lucro_unitario=?,
-                    margem_real=?, favorito=?, ativo=?
+                    margem_real=?, favorito=?, status_catalogo=?, ativo=?
                 WHERE id=?
                 """, (
                     r["nome"], r["categoria"], n(r["qtd_por_lote"]), n(r["custo_unitario"]),
                     n(r["preco_sugerido"]), n(r["preco_escolhido"]), n(r["lucro_unitario"]),
-                    n(r["margem_real"]), r.get("favorito", "Não"), r["ativo"], int(r["id"]),
+                    n(r["margem_real"]), r.get("favorito", "Não"), r.get("status_catalogo", "Disponível"), r["ativo"], int(r["id"]),
                 ))
             st.success("Produtos atualizados.")
             st.rerun()
@@ -3351,8 +3370,8 @@ def mostrar_linha_tempo_cliente(cliente_id):
 
 
 def tela_catalogo():
-    st.title("Catálogo público")
-    st.write("Configure o catálogo profissional que seus clientes acessam pelo link público.")
+    st.title("Personalização do catálogo")
+    st.write("Configure todas as informações que aparecem para seus clientes no link público.")
 
     link_publico = link_catalogo_publico()
 
@@ -3364,12 +3383,11 @@ def tela_catalogo():
         st.link_button("Abrir catálogo", link_publico)
 
     st.divider()
-    st.subheader("Personalização do catálogo")
 
     logo_atual = obter_config("logo_path", "")
     if logo_atual and Path(logo_atual).exists():
         st.caption("Logo atual")
-        st.image(logo_atual, width=120)
+        st.image(logo_atual, width=130)
 
     logo_upload = st.file_uploader("Trocar logo do catálogo", type=["png", "jpg", "jpeg", "webp"], key="logo_catalogo_upload")
     if logo_upload is not None:
@@ -3378,57 +3396,70 @@ def tela_catalogo():
         st.success("Logo do catálogo atualizada.")
         st.rerun()
 
-    with st.form("form_catalogo_profissional"):
+    with st.form("form_catalogo_completo"):
+        st.subheader("Identidade do catálogo")
         c1, c2 = st.columns(2)
+        titulo = c1.text_input("Título do catálogo", value=obter_config("catalogo_titulo", obter_config("nome_empresa", EMPRESA)))
+        slogan = c2.text_input("Slogan", value=obter_config("catalogo_slogan", "Eternizando momentos com presentes personalizados"))
 
-        titulo = c1.text_input(
-            "Título do catálogo",
-            value=obter_config("catalogo_titulo", obter_config("nome_empresa", EMPRESA)),
-        )
-
-        slogan = c2.text_input(
-            "Slogan",
-            value=obter_config("catalogo_slogan", "Eternizando momentos com presentes personalizados"),
-        )
-
-        descricao = st.text_area(
-            "Texto de apresentação",
-            value=obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido."),
-        )
+        texto_apresentacao = st.text_area("Texto de apresentação", value=obter_config("catalogo_descricao", "Confira nossos produtos personalizados e chame no WhatsApp para fazer seu pedido."))
 
         c3, c4 = st.columns(2)
+        cor = c3.text_input("Cor principal", value=obter_config("catalogo_cor", "#000000"))
+        texto_botao = c4.text_input("Texto do botão WhatsApp", value=obter_config("catalogo_botao", "Chamar no WhatsApp"))
 
-        cor = c3.text_input(
-            "Cor principal",
-            value=obter_config("catalogo_cor", "#000000"),
-            help="Exemplo: #000000, #D8A7B1, #F4C2C2",
-        )
+        st.subheader("Informações da empresa")
+        c5, c6 = st.columns(2)
+        cnpj = c5.text_input("CNPJ", value=obter_config("catalogo_cnpj", ""))
+        endereco = c6.text_input("Endereço", value=obter_config("catalogo_endereco", ""))
 
-        texto_botao = c4.text_input(
-            "Texto do botão WhatsApp",
-            value=obter_config("catalogo_botao", "Chamar no WhatsApp"),
-        )
+        c7, c8 = st.columns(2)
+        email = c7.text_input("E-mail", value=obter_config("catalogo_email", obter_config("email", "")))
+        pix = c8.text_input("Chave PIX", value=obter_config("catalogo_pix", obter_config("pix", "")))
 
-        aviso = st.text_input(
-            "Aviso no rodapé",
-            value=obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo."),
-        )
+        horario = st.text_input("Horário de atendimento", value=obter_config("catalogo_horario", "Atendimento de segunda a sábado"))
 
-        if st.form_submit_button("Salvar catálogo"):
+        st.subheader("Pagamento e encomendas")
+        c9, c10, c11 = st.columns(3)
+        aceita_pix = c9.selectbox("Aceita Pix?", ["Sim", "Não"], index=0 if obter_config("catalogo_aceita_pix", "Sim") == "Sim" else 1)
+        aceita_cartao = c10.selectbox("Aceita cartão?", ["Sim", "Não"], index=0 if obter_config("catalogo_aceita_cartao", "Sim") == "Sim" else 1)
+        mostrar_status = c11.selectbox("Mostrar status do produto?", ["Sim", "Não"], index=0 if obter_config("catalogo_mostrar_status", "Sim") == "Sim" else 1)
+
+        parcelamento = st.text_input("Parcelamento / cartões", value=obter_config("catalogo_parcelamento", "Consulte condições"))
+        sinal = st.text_input("Sinal / reserva", value=obter_config("catalogo_sinal", "Sinal para confirmação da encomenda"))
+        prazo = st.text_input("Prazo de produção", value=obter_config("catalogo_prazo", "Prazo de produção combinado no atendimento"))
+
+        st.subheader("Rodapé e avisos")
+        aviso = st.text_input("Aviso no rodapé", value=obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo."))
+        info_extra = st.text_area("Informação extra", value=obter_config("catalogo_info_extra", "Produtos personalizados sob encomenda."))
+
+        if st.form_submit_button("Salvar personalização do catálogo"):
             salvar_config("catalogo_titulo", titulo)
             salvar_config("catalogo_slogan", slogan)
-            salvar_config("catalogo_descricao", descricao)
+            salvar_config("catalogo_descricao", texto_apresentacao)
             salvar_config("catalogo_cor", cor)
             salvar_config("catalogo_botao", texto_botao)
+            salvar_config("catalogo_cnpj", cnpj)
+            salvar_config("catalogo_endereco", endereco)
+            salvar_config("catalogo_email", email)
+            salvar_config("catalogo_pix", pix)
+            salvar_config("catalogo_horario", horario)
+            salvar_config("catalogo_aceita_pix", aceita_pix)
+            salvar_config("catalogo_aceita_cartao", aceita_cartao)
+            salvar_config("catalogo_mostrar_status", mostrar_status)
+            salvar_config("catalogo_parcelamento", parcelamento)
+            salvar_config("catalogo_sinal", sinal)
+            salvar_config("catalogo_prazo", prazo)
             salvar_config("catalogo_aviso", aviso)
-            st.success("Configurações do catálogo salvas.")
+            salvar_config("catalogo_info_extra", info_extra)
+            st.success("Catálogo atualizado com sucesso.")
             st.rerun()
 
     st.divider()
     st.subheader("Produtos ativos no catálogo")
 
     produtos = consultar("""
-    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, ativo, descricao_catalogo
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, status_catalogo, ativo, descricao_catalogo
     FROM produtos
     WHERE ativo='Sim'
     ORDER BY categoria, nome
@@ -3440,7 +3471,7 @@ def tela_catalogo():
         produtos = adicionar_codigo_visual(produtos, "PROD")
         st.dataframe(formatar_valores_tabela(produtos), use_container_width=True, hide_index=True)
 
-    st.info("Para editar foto, descrição e preço de cada item, vá em Produtos / Precificação.")
+    st.info("Para editar foto, preço, descrição e status de cada produto, vá em Produtos / Precificação.")
 
 
 def tela_ordens_producao():
@@ -3607,7 +3638,22 @@ def tela_catalogo_publico_cliente():
     aviso = obter_config("catalogo_aviso", "Valores sujeitos à confirmação conforme personalização, material e prazo.")
     cor = obter_config("catalogo_cor", "#000000") or "#000000"
     texto_botao = obter_config("catalogo_botao", "Chamar no WhatsApp") or "Chamar no WhatsApp"
+
+    cnpj = obter_config("catalogo_cnpj", "")
+    endereco = obter_config("catalogo_endereco", "")
+    email = obter_config("catalogo_email", obter_config("email", ""))
+    pix = obter_config("catalogo_pix", obter_config("pix", ""))
+    horario = obter_config("catalogo_horario", "")
+    aceita_pix = obter_config("catalogo_aceita_pix", "Sim")
+    aceita_cartao = obter_config("catalogo_aceita_cartao", "Sim")
+    parcelamento = obter_config("catalogo_parcelamento", "")
+    sinal = obter_config("catalogo_sinal", "")
+    prazo = obter_config("catalogo_prazo", "")
+    info_extra = obter_config("catalogo_info_extra", "")
+    mostrar_status = obter_config("catalogo_mostrar_status", "Sim")
+
     instagram = obter_config("instagram", "")
+    whatsapp_txt = obter_config("whatsapp", "")
     whatsapp = obter_whatsapp_limpo()
     logo = obter_config("logo_path", "")
 
@@ -3619,6 +3665,34 @@ def tela_catalogo_publico_cliente():
             logo_html = f'<img class="catalogo-logo" src="data:image/{ext};base64,{b64}">'
         except Exception:
             logo_html = ""
+
+    info_linhas = []
+    if whatsapp_txt:
+        info_linhas.append(f"WhatsApp: {whatsapp_txt}")
+    if instagram:
+        info_linhas.append(f"Instagram: {instagram}")
+    if email:
+        info_linhas.append(f"E-mail: {email}")
+    if endereco:
+        info_linhas.append(f"Endereço: {endereco}")
+    if cnpj:
+        info_linhas.append(f"CNPJ: {cnpj}")
+
+    pagamento_linhas = []
+    if aceita_pix == "Sim":
+        pagamento_linhas.append("Aceitamos Pix")
+    if aceita_cartao == "Sim":
+        pagamento_linhas.append("Aceitamos cartão")
+    if parcelamento:
+        pagamento_linhas.append(parcelamento)
+    if pix:
+        pagamento_linhas.append(f"PIX: {pix}")
+    if sinal:
+        pagamento_linhas.append(sinal)
+    if prazo:
+        pagamento_linhas.append(f"Prazo: {prazo}")
+    if horario:
+        pagamento_linhas.append(f"Horário: {horario}")
 
     st.markdown(
         f"""
@@ -3652,6 +3726,18 @@ def tela_catalogo_publico_cliente():
             max-width: 760px;
             margin: 7px auto;
         }}
+        .catalogo-box {{
+            background: #fff;
+            border-radius: 18px;
+            padding: 16px 18px;
+            border: 1px solid #eee;
+            box-shadow: 0 8px 24px rgba(0,0,0,.06);
+            margin-bottom: 20px;
+        }}
+        .catalogo-box h3 {{
+            margin-top: 0;
+            font-size: 18px;
+        }}
         .produto-card {{
             background: #fff;
             border-radius: 20px;
@@ -3667,6 +3753,15 @@ def tela_catalogo_publico_cliente():
             letter-spacing: 1.5px;
             color: #777;
             margin-top: 8px;
+        }}
+        .status {{
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 800;
+            background: #f1f1f1;
+            margin: 8px 0;
         }}
         .preco {{
             font-size: 25px;
@@ -3707,14 +3802,34 @@ def tela_catalogo_publico_cliente():
             <h1>{empresa}</h1>
             <p><b>{slogan}</b></p>
             <p>{descricao_topo}</p>
-            <p>{instagram}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    i1, i2 = st.columns(2)
+    with i1:
+        if info_linhas:
+            st.markdown(
+                "<div class='catalogo-box'><h3>Informações da empresa</h3>"
+                + "<br>".join(info_linhas)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+    with i2:
+        if pagamento_linhas:
+            st.markdown(
+                "<div class='catalogo-box'><h3>Pagamento e encomendas</h3>"
+                + "<br>".join(pagamento_linhas)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+    if info_extra:
+        st.info(info_extra)
+
     produtos = consultar("""
-    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, foto, ativo, descricao_catalogo
+    SELECT id, nome, categoria, preco_escolhido, preco_sugerido, foto, ativo, descricao_catalogo, status_catalogo
     FROM produtos
     WHERE ativo='Sim'
     ORDER BY categoria, nome
@@ -3745,6 +3860,7 @@ def tela_catalogo_publico_cliente():
             foto = str(p.get("foto", "") or "")
             preco = n(p["preco_escolhido"]) if n(p["preco_escolhido"]) > 0 else n(p["preco_sugerido"])
             descricao = str(p.get("descricao_catalogo", "") or "")
+            status = str(p.get("status_catalogo", "") or "Disponível")
             codigo = codigo_visual("PROD", int(p["id"]))
 
             mensagem = f"Olá, tenho interesse no produto {p['nome']} ({codigo}) do catálogo da Sophi."
@@ -3760,10 +3876,13 @@ def tela_catalogo_publico_cliente():
             else:
                 st.markdown('<div class="sem-foto">Sophi</div>', unsafe_allow_html=True)
 
+            status_html = f'<div class="status">{status}</div>' if mostrar_status == "Sim" else ""
+
             st.markdown(
                 f"""
                 <div class="categoria">{p['categoria'] or ''}</div>
                 <h3>{p['nome']}</h3>
+                {status_html}
                 <p>{descricao}</p>
                 <div class="preco">{real(preco)}</div>
                 <a class="botao-wpp" href="{link}" target="_blank">{texto_botao}</a>
@@ -3781,6 +3900,7 @@ def tela_catalogo_publico_cliente():
         """,
         unsafe_allow_html=True,
     )
+
 
 # ============================================================
 # LOGIN / SEGURANÇA
