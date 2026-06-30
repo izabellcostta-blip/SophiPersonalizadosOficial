@@ -84,10 +84,11 @@ def real(valor):
 
 
 def real4(valor):
+    # Mantido para compatibilidade, mas agora também mostra só 2 casas.
     try:
-        return f"R$ {float(valor):,.4f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return "R$ 0,0000"
+        return "R$ 0,00"
 
 
 def hoje_iso():
@@ -141,7 +142,53 @@ def salvar_config(chave, valor):
     )
 
 
+
+
+def formatar_valores_tabela(df):
+    """Deixa as tabelas mais limpas visualmente, com valores em 2 casas decimais."""
+    if df is None or getattr(df, "empty", True):
+        return df
+
+    df = df.copy()
+
+    palavras_valor = [
+        "valor", "preco", "preço", "custo", "lucro", "subtotal",
+        "total", "desconto", "frete", "mao_obra", "mão_obra",
+        "energia", "desgaste"
+    ]
+
+    for col in df.columns:
+        col_lower = str(col).lower()
+
+        if any(p in col_lower for p in palavras_valor):
+            try:
+                df[col] = df[col].apply(lambda x: real(x) if str(x).strip() not in ["", "None", "nan"] else "")
+            except Exception:
+                pass
+
+        elif "margem" in col_lower or "%" in col_lower:
+            try:
+                df[col] = df[col].apply(lambda x: f"{float(x):.2f}%".replace(".", ",") if str(x).strip() not in ["", "None", "nan"] else "")
+            except Exception:
+                pass
+
+        elif "folhas_a4" in col_lower or "folhas a4" in col_lower:
+            try:
+                df[col] = df[col].apply(lambda x: f"{float(x):.0f}" if str(x).strip() not in ["", "None", "nan"] else "")
+            except Exception:
+                pass
+
+    return df
+
 def card(titulo, valor, subtitulo=""):
+    # Garante exibição monetária sempre com 2 casas decimais.
+    try:
+        if isinstance(valor, str) and valor.strip().startswith("R$"):
+            numero = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
+            valor = real(float(numero))
+    except Exception:
+        pass
+
     st.markdown(
         f"""
         <div class="card">
@@ -1195,6 +1242,180 @@ def tela_categorias():
         else:
             st.warning("Digite um ID válido.")
 
+
+
+def tela_embalagens():
+    st.title("Embalagens")
+    st.write("Cadastre embalagens com categoria para usar na precificação dos produtos.")
+
+    st.subheader("Cadastrar embalagem")
+
+    categorias = categorias_ativas()
+    categorias_emb = [c for c in categorias if c] or ["Embalagem"]
+
+    with st.form("form_embalagem_melhorada"):
+        c1, c2 = st.columns(2)
+
+        nome = c1.text_input("Nome da embalagem", placeholder="Ex: Sacola kraft P")
+        categoria = c2.selectbox("Categoria", categorias_emb)
+
+        c3, c4 = st.columns(2)
+
+        valor_pacote = c3.number_input(
+            "Valor do pacote",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+            format="%.2f",
+        )
+
+        quantidade = c4.number_input(
+            "Quantidade no pacote",
+            min_value=1.0,
+            value=1.0,
+            step=1.0,
+            format="%.0f",
+        )
+
+        fornecedor = st.text_input("Fornecedor")
+        link = st.text_input("Link do produto")
+        observacao = st.text_input("Observação", placeholder="Ex: envios pelos Correios")
+        ativo = st.selectbox("Ativo?", ["Sim", "Não"])
+
+        custo = custo_insumo(valor_pacote, quantidade)
+
+        st.metric("Custo unitário", real(custo))
+
+        if st.form_submit_button("Salvar embalagem"):
+            if not nome.strip():
+                st.error("Digite o nome da embalagem.")
+            else:
+                executar("""
+                INSERT INTO insumos(
+                    nome,
+                    categoria,
+                    valor_pacote,
+                    quantidade_pacote,
+                    fornecedor,
+                    link_produto,
+                    ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    nome,
+                    categoria,
+                    valor_pacote,
+                    quantidade,
+                    fornecedor,
+                    link or observacao,
+                    ativo,
+                ))
+
+                st.success("Embalagem salva com sucesso.")
+                st.rerun()
+
+    st.divider()
+
+    st.subheader("Embalagens cadastradas")
+
+    df = consultar("""
+    SELECT
+        id,
+        nome,
+        categoria,
+        valor_pacote,
+        quantidade_pacote,
+        fornecedor,
+        link_produto,
+        ativo
+    FROM insumos
+    WHERE
+        LOWER(categoria) LIKE '%embalagem%'
+        OR LOWER(categoria) LIKE '%sacola%'
+        OR LOWER(categoria) LIKE '%caixa%'
+        OR LOWER(categoria) LIKE '%envelope%'
+    ORDER BY id DESC
+    """)
+
+    if not df.empty:
+        df["custo_unitario"] = df.apply(
+            lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]),
+            axis=1,
+        )
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "valor_pacote": st.column_config.NumberColumn("Valor pacote", format="R$ %.2f"),
+            "custo_unitario": st.column_config.NumberColumn("Custo unitário", format="R$ %.2f"),
+        },
+        key="editor_embalagens_melhoradas",
+    )
+
+    c1, c2 = st.columns([2, 1])
+
+    with c1:
+        if st.button("Salvar alterações das embalagens"):
+            ids_validos = []
+
+            for _, r in edited.iterrows():
+                rid = int(r["id"]) if "id" in r and str(r["id"]).strip() not in ["", "nan", "None"] else None
+                nome = str(r.get("nome", "")).strip()
+
+                if nome:
+                    if rid:
+                        executar("""
+                        UPDATE insumos
+                        SET nome=?, categoria=?, valor_pacote=?, quantidade_pacote=?,
+                            fornecedor=?, link_produto=?, ativo=?
+                        WHERE id=?
+                        """, (
+                            nome,
+                            str(r.get("categoria", "Embalagem")),
+                            n(r.get("valor_pacote", 0)),
+                            max(n(r.get("quantidade_pacote", 1), 1), 1),
+                            str(r.get("fornecedor", "")),
+                            str(r.get("link_produto", "")),
+                            str(r.get("ativo", "Sim")),
+                            rid,
+                        ))
+                        ids_validos.append(rid)
+                    else:
+                        novo_id = executar("""
+                        INSERT INTO insumos(
+                            nome, categoria, valor_pacote, quantidade_pacote,
+                            fornecedor, link_produto, ativo
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            nome,
+                            str(r.get("categoria", "Embalagem")),
+                            n(r.get("valor_pacote", 0)),
+                            max(n(r.get("quantidade_pacote", 1), 1), 1),
+                            str(r.get("fornecedor", "")),
+                            str(r.get("link_produto", "")),
+                            str(r.get("ativo", "Sim")),
+                        ))
+                        ids_validos.append(novo_id)
+
+            st.success("Embalagens atualizadas.")
+            st.rerun()
+
+    with c2:
+        id_excluir = st.number_input("ID para excluir", min_value=0, step=1, key="del_embalagem_melhorada")
+
+        if st.button("Excluir embalagem"):
+            if id_excluir > 0:
+                executar("DELETE FROM insumos WHERE id=?", (int(id_excluir),))
+                st.success("Embalagem excluída.")
+                st.rerun()
+            else:
+                st.warning("Digite um ID válido.")
+
+
 def tela_insumos():
     st.title("Insumos Gerais")
     st.subheader("Cadastrar insumo")
@@ -1279,7 +1500,7 @@ def tela_tintas():
         valor_kit = c1.number_input("Valor do kit", min_value=0.0, value=180.00, step=0.01, format="%.2f")
         rendimento = c2.number_input("Rendimento em impressões", min_value=1.0, value=7500.0, step=1.0)
         ativo = st.selectbox("Ativo?", ["Sim", "Não"])
-        st.metric("Custo por impressão", real4(custo_tinta(valor_kit, rendimento)))
+        st.metric("Custo por impressão", real(custo_tinta(valor_kit, rendimento)))
 
         if st.form_submit_button("Salvar tinta"):
             executar("INSERT INTO tintas(nome, valor_kit, rendimento_impressoes, ativo) VALUES (?, ?, ?, ?)",
@@ -1299,7 +1520,7 @@ def tela_tintas():
         num_rows="dynamic",
         column_config={
             "valor_kit": st.column_config.NumberColumn("Valor kit", format="R$ %.2f"),
-            "custo_automatico": st.column_config.NumberColumn("Custo automático", format="R$ %.4f"),
+            "custo_automatico": st.column_config.NumberColumn("Custo automático", format="R$ %.2f"),
         },
         key="editor_tintas",
     )
@@ -1564,9 +1785,9 @@ def tela_equipamentos():
         custo_minuto = desgaste + energia_min
 
         r1, r2, r3 = st.columns(3)
-        r1.metric("Desgaste por uso", real4(desgaste))
-        r2.metric("Energia por minuto", real4(energia_min))
-        r3.metric("Custo por minuto", real4(custo_minuto))
+        r1.metric("Desgaste por uso", real(desgaste))
+        r2.metric("Energia por minuto", real(energia_min))
+        r3.metric("Custo por minuto", real(custo_minuto))
 
         if st.form_submit_button("Salvar equipamento"):
             if not nome.strip():
@@ -1606,9 +1827,9 @@ def tela_equipamentos():
         num_rows="dynamic",
         column_config={
             "valor_pago": st.column_config.NumberColumn("Valor pago", format="R$ %.2f"),
-            "desgaste_uso": st.column_config.NumberColumn("Desgaste/uso", format="R$ %.4f"),
-            "energia_minuto": st.column_config.NumberColumn("Energia/min", format="R$ %.4f"),
-            "custo_minuto_total": st.column_config.NumberColumn("Custo/min total", format="R$ %.4f"),
+            "desgaste_uso": st.column_config.NumberColumn("Desgaste/uso", format="R$ %.2f"),
+            "energia_minuto": st.column_config.NumberColumn("Energia/min", format="R$ %.2f"),
+            "custo_minuto_total": st.column_config.NumberColumn("Custo/min total", format="R$ %.2f"),
         },
         key="editor_equipamentos",
     )
@@ -1703,7 +1924,7 @@ def seletor_tinta(linha):
 
     for _, r in df.iterrows():
         custo = custo_tinta(r["valor_kit"], r["rendimento_impressoes"])
-        label = f"{r['nome']} — {real4(custo)} por impressão"
+        label = f"{r['nome']} — {real(custo)} por impressão"
         opcoes.append(label)
         mapa[label] = {"nome": r["nome"], "custo_unitario": custo}
 
@@ -1725,6 +1946,78 @@ def seletor_tinta(linha):
     return item
 
 
+
+
+def embalagens_ativas():
+    """Busca embalagens cadastradas para usar na precificação."""
+    try:
+        df = consultar("""
+        SELECT id, nome, categoria, valor_pacote, quantidade_pacote, ativo
+        FROM insumos
+        WHERE ativo='Sim' AND (
+            LOWER(categoria) LIKE '%embalagem%'
+            OR LOWER(categoria) LIKE '%sacola%'
+            OR LOWER(categoria) LIKE '%caixa%'
+            OR LOWER(categoria) LIKE '%envelope%'
+        )
+        ORDER BY categoria, nome
+        """)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def seletor_embalagem_precificacao(linha):
+    df = embalagens_ativas()
+
+    c1, c2, c3 = st.columns([4, 2, 1.2])
+
+    if df.empty:
+        c1.selectbox("Embalagem", ["Nenhuma embalagem cadastrada"], key=f"emb_prec_{linha}")
+        c2.text_input("Categoria", value="", disabled=True, key=f"emb_cat_{linha}")
+        c3.number_input("Qtd", min_value=0.0, value=0.0, key=f"emb_qtd_{linha}")
+        return None
+
+    opcoes = ["Nenhuma"]
+    mapa = {}
+
+    for _, r in df.iterrows():
+        custo = custo_insumo(r["valor_pacote"], r["quantidade_pacote"])
+        label = f"{r['nome']} — {r['categoria']} — {real(custo)}"
+        opcoes.append(label)
+        mapa[label] = {
+            "nome": r["nome"],
+            "categoria": r["categoria"],
+            "custo_unitario": custo,
+        }
+
+    escolhido = c1.selectbox("Embalagem", opcoes, key=f"emb_prec_{linha}")
+
+    if escolhido == "Nenhuma":
+        c2.text_input("Categoria", value="", disabled=True, key=f"emb_cat_{linha}")
+        c3.number_input("Qtd", min_value=0.0, value=0.0, key=f"emb_qtd_{linha}")
+        return None
+
+    item = mapa[escolhido]
+
+    c2.text_input("Categoria", value=item["categoria"], disabled=True, key=f"emb_cat_{linha}")
+
+    qtd = c3.number_input(
+        "Qtd",
+        min_value=0.0,
+        value=1.0,
+        step=1.0,
+        key=f"emb_qtd_{linha}",
+    )
+
+    if qtd <= 0:
+        return None
+
+    item["qtd"] = qtd
+    item["total"] = item["custo_unitario"] * qtd
+    return item
+
+
 def tela_produtos():
     st.title("Produtos / Precificação")
     c1, c2, c3 = st.columns([3, 2, 1])
@@ -1736,7 +2029,7 @@ def tela_produtos():
 
     qtd_por_lote = st.number_input("Quantidade produzida por folha/lote", min_value=1.0, value=1.0, step=1.0)
 
-    st.subheader("Receita do produto")
+    st.subheader("Itens utilizados no produto")
     receita = []
     custo_insumos_total = 0.0
 
@@ -1756,6 +2049,34 @@ def tela_produtos():
             tintas.append(item)
             custo_tintas_total += item["total"]
 
+    st.subheader("Embalagens utilizadas")
+
+    embalagens_usadas = []
+    custo_embalagens_total = 0.0
+
+    usa_embalagens = st.checkbox("Vai utilizar embalagens neste produto?", value=False)
+
+    if usa_embalagens:
+        qtd_linhas_embalagens = st.number_input(
+            "Quantidade de embalagens diferentes",
+            min_value=1,
+            max_value=10,
+            value=1,
+            step=1,
+            key="qtd_linhas_embalagens",
+        )
+
+        for linha_emb in range(1, int(qtd_linhas_embalagens) + 1):
+            item_emb = seletor_embalagem_precificacao(linha_emb)
+
+            if item_emb:
+                embalagens_usadas.append(item_emb)
+                custo_embalagens_total += item_emb["total"]
+
+    else:
+        st.caption("Marque a opção acima se quiser somar embalagens no custo do produto.")
+
+
     st.subheader("Equipamentos usados")
     df_eq = consultar("SELECT * FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
     tempo_min = st.number_input("Tempo de produção do lote em minutos", min_value=0.0, value=10.0, step=1.0)
@@ -1772,7 +2093,7 @@ def tela_produtos():
                     custo = custo_equipamento(row, minutos=tempo_min)
                     equipamentos.append({"nome": row["nome"], "custo": custo})
                     custo_equip_total += custo
-                    st.caption(real4(custo))
+                    st.caption(real(custo))
 
     st.subheader("Mão de obra e precificação")
     c1, c2, c3 = st.columns(3)
@@ -1796,9 +2117,9 @@ def tela_produtos():
     with r1:
         card("Insumos", real(custo_insumos_total))
     with r2:
-        card("Tintas", real4(custo_tintas_total))
+        card("Tintas", real(custo_tintas_total))
     with r3:
-        card("Equipamentos", real4(custo_equip_total))
+        card("Equipamentos", real(custo_equip_total))
     with r4:
         card("Mão de obra", real(custo_mao_obra))
 
@@ -1811,6 +2132,8 @@ def tela_produtos():
         card("Preço escolhido", real(preco_final))
     with r8:
         card("Lucro / Margem", real(lucro), f"{margem_real:.2f}%")
+
+    receita_para_salvar = receita + embalagens_usadas
 
     if st.button("Salvar produto precificado"):
         if not nome.strip():
@@ -1828,7 +2151,7 @@ def tela_produtos():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 nome, categoria_produto, qtd_por_lote,
-                json.dumps(receita, ensure_ascii=False),
+                json.dumps(receita_para_salvar, ensure_ascii=False),
                 json.dumps(tintas, ensure_ascii=False),
                 json.dumps(equipamentos, ensure_ascii=False),
                 tempo_min, valor_hora, reserva, margem,
@@ -2486,7 +2809,7 @@ elif menu == "Produtos / Precificação":
 elif menu == "Papéis":
     tela_cadastro_por_categoria("Papéis", "Papel")
 elif menu == "Embalagens":
-    tela_cadastro_por_categoria("Embalagens", "Embalagem")
+    tela_embalagens()
 elif menu == "Laminação":
     tela_laminacao()
 elif menu == "Mantas / Ímã / Velcro":
