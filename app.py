@@ -3977,6 +3977,7 @@ menu = st.sidebar.radio(
         "Estoque",
         "Fluxo de Caixa",
         "Categorias",
+        "Catálogo público",
         "Configurações",
     ],
 )
