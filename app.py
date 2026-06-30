@@ -220,6 +220,40 @@ def imagem_base64(caminho):
         return ""
 
 
+
+
+# ============================================================
+# CÓDIGOS VISUAIS PROFISSIONAIS
+# ============================================================
+
+def codigo_visual(prefixo, id_valor, ano=None):
+    try:
+        numero = int(id_valor)
+    except Exception:
+        numero = 0
+
+    if ano:
+        return f"{prefixo}-{ano}-{numero:04d}"
+
+    return f"{prefixo}-{numero:04d}"
+
+
+def adicionar_codigo_visual(df, prefixo, coluna_id="id", nome_coluna="Código", ano=None):
+    if df is None or getattr(df, "empty", True) or coluna_id not in df.columns:
+        return df
+
+    df = df.copy()
+    if nome_coluna in df.columns:
+        return df
+
+    df.insert(
+        0,
+        nome_coluna,
+        df[coluna_id].apply(lambda x: codigo_visual(prefixo, x, ano=ano))
+    )
+    return df
+
+
 # ============================================================
 # BANCO
 # ============================================================
@@ -548,6 +582,13 @@ def gerar_html_orcamento(orc_id):
         return ""
 
     o = orc.iloc[0]
+    try:
+        ano_orc = pd.to_datetime(o["data_orcamento"], errors="coerce").year
+        if pd.isna(ano_orc):
+            ano_orc = datetime.now().year
+    except Exception:
+        ano_orc = datetime.now().year
+    codigo_orcamento = codigo_visual("ORC", orc_id, ano=int(ano_orc))
     itens = consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=?", (int(orc_id),))
 
     logo = obter_config("logo_path", "")
@@ -585,7 +626,7 @@ def gerar_html_orcamento(orc_id):
 <html>
 <head>
 <meta charset="utf-8">
-<title>Orçamento #{orc_id} - {empresa}</title>
+<title>{codigo_orcamento} - {empresa}</title>
 <style>
 * {{ 
     box-sizing: border-box; 
@@ -796,7 +837,7 @@ button {{
         </div>
         <div class="badge">
             <div class="label">Orçamento</div>
-            <div class="num">#{int(orc_id):06d}</div>
+            <div class="num">{codigo_orcamento}</div>
             <div class="status">{o['status']}</div>
         </div>
     </div>
@@ -949,6 +990,7 @@ def tela_inicio():
         ORDER BY id DESC
         LIMIT 8
         """)
+        ultimos = adicionar_codigo_visual(ultimos, "ORC", ano=ano)
         st.dataframe(
             ultimos,
             use_container_width=True,
@@ -1061,6 +1103,8 @@ def tela_clientes():
         ORDER BY id DESC
         """)
 
+    df_clientes = adicionar_codigo_visual(df_clientes, "CLI")
+
     edited = st.data_editor(
         df_clientes,
         use_container_width=True,
@@ -1146,6 +1190,9 @@ def tela_cadastro_por_categoria(titulo, categoria_padrao):
     if not df.empty:
         df["custo_unitario"] = df.apply(lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]), axis=1)
 
+    prefixo_categoria = {"Papel": "PAP", "Embalagem": "EMB"}.get(categoria_padrao, "INS")
+    df = adicionar_codigo_visual(df, prefixo_categoria)
+
     edited = st.data_editor(
         df,
         use_container_width=True,
@@ -1204,6 +1251,8 @@ def tela_categorias():
     st.divider()
     st.subheader("Modificar categorias cadastradas")
     df = consultar("SELECT id, nome, ativo FROM categorias ORDER BY nome")
+
+    df = adicionar_codigo_visual(df, "CAT")
 
     edited = st.data_editor(
         df,
@@ -1343,6 +1392,8 @@ def tela_embalagens():
             axis=1,
         )
 
+    df = adicionar_codigo_visual(df, "EMB")
+
     edited = st.data_editor(
         df,
         use_container_width=True,
@@ -1451,6 +1502,8 @@ def tela_insumos():
     if not df.empty:
         df["custo_automatico"] = df.apply(lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]), axis=1)
 
+    df = adicionar_codigo_visual(df, "INS")
+
     edited = st.data_editor(
         df,
         use_container_width=True,
@@ -1512,6 +1565,8 @@ def tela_tintas():
     df = consultar("SELECT * FROM tintas ORDER BY id DESC")
     if not df.empty:
         df["custo_automatico"] = df.apply(lambda r: custo_tinta(r["valor_kit"], r["rendimento_impressoes"]), axis=1)
+
+    df = adicionar_codigo_visual(df, "TIN")
 
     edited = st.data_editor(
         df,
@@ -1609,6 +1664,8 @@ def tela_laminacao():
     FROM laminacoes
     ORDER BY id DESC
     """)
+
+    df = adicionar_codigo_visual(df, "LAM")
 
     edited = st.data_editor(
         df,
@@ -1713,6 +1770,8 @@ def tela_mantas_imas():
     FROM mantas_imas
     ORDER BY id DESC
     """)
+
+    df = adicionar_codigo_visual(df, "MNT")
 
     edited = st.data_editor(
         df,
@@ -1819,6 +1878,8 @@ def tela_equipamentos():
             axis=1,
         )
         df["custo_minuto_total"] = df["desgaste_uso"] + df["energia_minuto"]
+
+    df = adicionar_codigo_visual(df, "EQP")
 
     edited = st.data_editor(
         df,
@@ -2170,6 +2231,10 @@ def tela_produtos():
     ORDER BY id DESC
     """)
 
+    df = adicionar_codigo_visual(df, "PROD")
+
+
+
     edited = st.data_editor(
         df,
         use_container_width=True,
@@ -2250,17 +2315,17 @@ def tela_orcamentos():
 
     c_add, c_remove, c_info = st.columns([1, 1, 3])
     with c_add:
-        if st.button("Adicionar item"):
+        if st.button(f"+ Adicionar item {st.session_state.qtd_itens_orcamento + 1}"):
             if st.session_state.qtd_itens_orcamento < 20:
                 st.session_state.qtd_itens_orcamento += 1
                 st.rerun()
     with c_remove:
-        if st.button("Remover item"):
+        if st.button("− Remover último item"):
             if st.session_state.qtd_itens_orcamento > 1:
                 st.session_state.qtd_itens_orcamento -= 1
                 st.rerun()
     with c_info:
-        st.info(f"Itens no orçamento: {st.session_state.qtd_itens_orcamento}")
+        st.info(f"Itens adicionados: {st.session_state.qtd_itens_orcamento}")
 
     modo_manual = True
     if not produtos.empty:
@@ -2360,7 +2425,7 @@ def tela_orcamentos():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (hoje_iso(), "Entrada", f"Orçamento #{ultimo} - {cliente['nome']}", "Venda", forma_pagamento, total_geral, "Orçamento", int(ultimo), observacoes))
 
-            st.success(f"Orçamento #{int(ultimo)} salvo com sucesso.")
+            st.success(f"Orçamento {codigo_visual('ORC', int(ultimo), ano=datetime.now().year)} salvo com sucesso.")
             st.rerun()
 
     st.divider()
@@ -2381,6 +2446,8 @@ def tela_orcamentos():
         FROM orcamentos
         ORDER BY id DESC
         """)
+
+    df_orc = adicionar_codigo_visual(df_orc, "ORC", ano=datetime.now().year)
 
     st.dataframe(
         df_orc,
@@ -2481,6 +2548,8 @@ def tela_financeiro():
         st.line_chart(pivot)
 
     st.subheader("Movimentos")
+    df = adicionar_codigo_visual(df, "FIN")
+
     edited = st.data_editor(
         df,
         use_container_width=True,
@@ -2557,6 +2626,8 @@ def tela_estoque():
         st.dataframe(saldo, use_container_width=True, hide_index=True)
 
     st.subheader("Movimentos de estoque")
+    df = adicionar_codigo_visual(df, "EST")
+
     edited = st.data_editor(
         df,
         use_container_width=True,
