@@ -144,6 +144,112 @@ def salvar_config(chave, valor):
 
 
 
+
+
+# ============================================================
+# DATAS EM FORMATO BRASILEIRO
+# ============================================================
+
+def data_br(valor):
+    """Converte datas salvas como AAAA-MM-DD ou timestamp para DD/MM/AAAA."""
+    try:
+        if valor is None:
+            return ""
+        texto = str(valor).strip()
+        if texto in ["", "None", "nan", "NaT"]:
+            return ""
+
+        dt = pd.to_datetime(texto, errors="coerce")
+        if pd.isna(dt):
+            return texto
+
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return str(valor)
+
+
+def data_hora_br(valor):
+    """Converte data/hora para DD/MM/AAAA HH:MM."""
+    try:
+        if valor is None:
+            return ""
+        texto = str(valor).strip()
+        if texto in ["", "None", "nan", "NaT"]:
+            return ""
+
+        dt = pd.to_datetime(texto, errors="coerce")
+        if pd.isna(dt):
+            return texto
+
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return str(valor)
+
+
+def data_iso(valor):
+    """Converte DD/MM/AAAA para AAAA-MM-DD antes de salvar."""
+    try:
+        texto = str(valor).strip()
+        if not texto:
+            return ""
+
+        if "/" in texto:
+            partes = texto.split("/")
+            if len(partes) == 3:
+                dia, mes, ano = partes
+                return f"{int(ano):04d}-{int(mes):02d}-{int(dia):02d}"
+
+        dt = pd.to_datetime(texto, errors="coerce")
+        if pd.isna(dt):
+            return texto
+
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return str(valor)
+
+
+def hoje_br():
+    return datetime.now().strftime("%d/%m/%Y")
+
+
+def daqui_dias_br(dias=7):
+    return (datetime.now().date() + timedelta(days=int(dias))).strftime("%d/%m/%Y")
+
+
+def formatar_datas_dataframe(df):
+    """Formata colunas de data para exibição em DD/MM/AAAA."""
+    if df is None or getattr(df, "empty", True):
+        return df
+
+    df = df.copy()
+
+    palavras_data = [
+        "data", "vencimento", "pagamento", "recebimento", "entrega",
+        "cadastro", "criacao", "criação", "upload", "emissao", "emissão",
+        "aniversario", "aniversário", "validade", "ultimo", "último"
+    ]
+
+    for col in df.columns:
+        col_lower = str(col).lower()
+
+        if any(p in col_lower for p in palavras_data):
+            try:
+                if "hora" in col_lower and "data" not in col_lower:
+                    continue
+
+                # aniversário muitas vezes vem como 15/08; mantém se não tiver ano.
+                if "anivers" in col_lower:
+                    df[col] = df[col].apply(lambda x: str(x) if str(x).count("/") == 1 else data_br(x))
+                elif "criacao" in col_lower or "criação" in col_lower or "upload" in col_lower or "ultimo" in col_lower or "último" in col_lower:
+                    df[col] = df[col].apply(data_hora_br)
+                else:
+                    df[col] = df[col].apply(data_br)
+            except Exception:
+                pass
+
+    return df
+
+
 def formatar_valores_tabela(df):
     """Deixa as tabelas mais limpas visualmente, com valores em 2 casas decimais."""
     if df is None or getattr(df, "empty", True):
@@ -3096,7 +3202,7 @@ def tela_orcamentos():
     e1, e2, e3 = st.columns(3)
     data_prevista_entrega = e1.text_input(
         "Data prevista de entrega",
-        value=(datetime.now().date() + timedelta(days=7)).isoformat(),
+        value=daqui_dias_br(7),
         key="novo_orc_data_entrega",
     )
     hora_prevista_entrega = e2.text_input(
@@ -3151,7 +3257,7 @@ def tela_orcamentos():
             """, (
                 int(cliente_id), str(cliente["nome"]), str(cliente["whatsapp"]), status,
                 forma_pagamento, subtotal, desconto_geral, frete, total_geral, observacoes,
-                data_prevista_entrega, hora_prevista_entrega, tipo_entrega_orc,
+                data_iso(data_prevista_entrega), hora_prevista_entrega, tipo_entrega_orc,
                 endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega,
             ))
 
@@ -3231,7 +3337,7 @@ def tela_orcamentos():
         WHERE orcamento_id = ?
         """, (int(id_ver),))
         st.dataframe(
-            itens_df,
+            formatar_valores_tabela(itens_df),
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -3271,7 +3377,7 @@ def tela_orcamentos():
             d1, d2, d3 = st.columns(3)
             data_prevista_edit = d1.text_input(
                 "Data prevista",
-                value=str(orc_status_df.iloc[0].get("data_prevista_entrega", "") or ""),
+                value=data_br(orc_status_df.iloc[0].get("data_prevista_entrega", "") or ""),
                 key=f"edit_data_entrega_{int(id_ver)}",
             )
             hora_prevista_edit = d2.text_input(
@@ -3331,7 +3437,7 @@ def tela_orcamentos():
                 WHERE id=?
                 """, (
                     novo_status_orc,
-                    data_prevista_edit,
+                    data_iso(data_prevista_edit),
                     hora_prevista_edit,
                     tipo_entrega_edit,
                     endereco_edit,
@@ -3498,7 +3604,7 @@ def tela_estoque():
         saldo = resumo.groupby(["item", "categoria"])["qtd_assinada"].sum().reset_index()
         saldo.columns = ["Item", "Categoria", "Saldo"]
         saldo["Status"] = saldo["Saldo"].apply(lambda x: "Baixo" if x <= 5 else "OK")
-        st.dataframe(saldo, use_container_width=True, hide_index=True)
+        st.dataframe(formatar_valores_tabela(saldo), use_container_width=True, hide_index=True)
 
     st.subheader("Movimentos de estoque")
     df = adicionar_codigo_visual(df, "EST")
@@ -7970,7 +8076,7 @@ def tela_agenda_entregas():
                 st.info("Nenhuma tarefa para hoje.")
             else:
                 tarefas["status_visual"] = tarefas["status"].apply(status_agenda_visual)
-                st.dataframe(tarefas, use_container_width=True, hide_index=True)
+                st.dataframe(formatar_valores_tabela(tarefas), use_container_width=True, hide_index=True)
 
         with col2:
             st.markdown("### Entregas de hoje")
@@ -8008,7 +8114,7 @@ def tela_agenda_entregas():
             st.info("Nenhuma tarefa no período.")
         else:
             tarefas["codigo"] = tarefas["id"].apply(codigo_tarefa)
-            st.dataframe(tarefas, use_container_width=True, hide_index=True)
+            st.dataframe(formatar_valores_tabela(tarefas), use_container_width=True, hide_index=True)
 
         st.markdown("### Entregas no período")
         if entregas_df.empty:
@@ -10439,6 +10545,251 @@ def aplicar_fluxo_status_orcamento(orcamento_id, novo_status):
         pass
 
 
+
+
+# ============================================================
+# CENTRAL DE MENSAGENS WHATSAPP
+# ============================================================
+
+def limpar_numero_whatsapp(numero):
+    numero = "".join([c for c in str(numero or "") if c.isdigit()])
+    if not numero:
+        return ""
+    if numero.startswith("55"):
+        return numero
+    return "55" + numero
+
+
+def link_whatsapp(numero, mensagem):
+    try:
+        import urllib.parse
+        numero_limpo = limpar_numero_whatsapp(numero)
+        if not numero_limpo:
+            return ""
+        return f"https://wa.me/{numero_limpo}?text={urllib.parse.quote(str(mensagem))}"
+    except Exception:
+        return ""
+
+
+def template_mensagem_whatsapp(tipo, cliente_nome="", codigo="", status="", data_entrega="", total="", empresa="Sophi Personalizados Oficial"):
+    nome = cliente_nome or "cliente"
+    codigo_txt = f" referente ao pedido {codigo}" if codigo else ""
+    data_txt = data_br(data_entrega) if data_entrega else ""
+
+    mensagens = {
+        "Orçamento enviado": f"Olá {nome}, tudo bem? 🤍 Segue seu orçamento{codigo_txt} da {empresa}. Qualquer dúvida, estou à disposição.",
+        "Orçamento aprovado": f"Olá {nome}! Seu orçamento{codigo_txt} foi aprovado com sucesso. 🤍 O próximo passo é a confirmação do pagamento para iniciarmos a produção.",
+        "Pagamento recebido": f"Olá {nome}! Recebemos seu pagamento{codigo_txt}. Muito obrigada! 🤍 Seu pedido seguirá para produção.",
+        "Pedido em produção": f"Olá {nome}! Passando para avisar que seu pedido{codigo_txt} já está em produção. ✨",
+        "Pedido em embalagem": f"Olá {nome}! Seu pedido{codigo_txt} está na etapa de acabamento/embalagem. Está ficando tudo pronto com muito carinho. 🤍",
+        "Pedido pronto": f"Olá {nome}! Seu pedido{codigo_txt} está pronto. 🤍 Podemos combinar a retirada ou entrega.",
+        "Saiu para entrega": f"Olá {nome}! Seu pedido{codigo_txt} saiu para entrega. 🚚",
+        "Pedido entregue": f"Olá {nome}! Seu pedido{codigo_txt} foi entregue. Muito obrigada pela confiança na {empresa}! 🤍",
+        "Pós-venda": f"Olá {nome}, tudo bem? Passando para saber se deu tudo certo com seu pedido da {empresa}. Sua opinião é muito importante para nós. 🤍",
+        "Aniversário": f"Olá {nome}! A {empresa} deseja um feliz aniversário, cheio de momentos especiais. 🎂✨",
+        "Recompra / cliente parado": f"Olá {nome}, tudo bem? Passando para te mostrar as novidades da {empresa}. Temos opções lindas de presentes personalizados para eternizar momentos. 🤍",
+        "Promoção / novidade": f"Olá {nome}! Temos novidades especiais na {empresa}. Se quiser, posso te enviar algumas opções personalizadas. ✨",
+        "Entrega prevista": f"Olá {nome}! Sua entrega{codigo_txt} está prevista para {data_txt}. Qualquer alteração, te aviso por aqui. 🤍",
+    }
+
+    return mensagens.get(tipo, f"Olá {nome}, tudo bem? 🤍")
+
+
+def tela_mensagens_whatsapp():
+    st.title("Mensagens WhatsApp")
+    st.write("Escolha um cliente ou pedido, selecione uma mensagem pronta e abra o WhatsApp com o texto preenchido.")
+
+    abas = st.tabs(["Por pedido", "Por cliente", "Aniversariantes", "Clientes parados"])
+
+    with abas[0]:
+        st.subheader("Mensagem por pedido/orçamento")
+
+        orcs = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, total, data_orcamento,
+               data_prevista_entrega, tipo_entrega
+        FROM orcamentos
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if orcs.empty:
+            st.info("Nenhum orçamento encontrado.")
+        else:
+            mapa = {
+                f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {r['status']} | {real(r['total'])}": int(r["id"])
+                for _, r in orcs.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha o pedido", list(mapa.keys()), key="msg_wpp_orc")
+            orc_id = mapa[escolhido]
+            o = orcs[orcs["id"] == orc_id].iloc[0]
+
+            tipo = st.selectbox(
+                "Tipo de mensagem",
+                [
+                    "Orçamento enviado",
+                    "Orçamento aprovado",
+                    "Pagamento recebido",
+                    "Pedido em produção",
+                    "Pedido em embalagem",
+                    "Pedido pronto",
+                    "Saiu para entrega",
+                    "Pedido entregue",
+                    "Entrega prevista",
+                    "Pós-venda",
+                    "Promoção / novidade",
+                ],
+                key="tipo_msg_pedido",
+            )
+
+            codigo = codigo_visual("ORC", int(o["id"]), ano=datetime.now().year)
+            mensagem = template_mensagem_whatsapp(
+                tipo,
+                cliente_nome=o["cliente_nome"],
+                codigo=codigo,
+                status=o["status"],
+                data_entrega=o.get("data_prevista_entrega", ""),
+                total=real(o["total"]),
+                empresa=obter_config("nome_empresa", EMPRESA),
+            )
+
+            mensagem_editada = st.text_area("Mensagem pronta", value=mensagem, height=160, key="msg_pedido_texto")
+
+            link = link_whatsapp(o["whatsapp"], mensagem_editada)
+            if link:
+                st.link_button("Abrir WhatsApp do cliente", link)
+            else:
+                st.warning("Este pedido não tem WhatsApp cadastrado.")
+
+            if st.button("Registrar mensagem no CRM", key="registrar_msg_pedido"):
+                try:
+                    executar("""
+                    INSERT INTO crm_interacoes(
+                        cliente_nome, tipo, canal, descricao, status, observacoes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(o["cliente_nome"]),
+                        tipo,
+                        "WhatsApp",
+                        mensagem_editada,
+                        "Registrado",
+                        f"Mensagem gerada pelo pedido {codigo}",
+                    ))
+                    st.success("Mensagem registrada no CRM.")
+                except Exception:
+                    st.info("Mensagem gerada. O CRM não registrou porque a tabela de interações não está disponível.")
+
+    with abas[1]:
+        st.subheader("Mensagem por cliente")
+
+        clientes = consultar("""
+        SELECT id, nome, whatsapp, aniversario, cidade
+        FROM clientes
+        WHERE ativo='Sim'
+        ORDER BY nome
+        """)
+
+        if clientes.empty:
+            st.info("Nenhum cliente cadastrado.")
+        else:
+            mapa_cli = {
+                f"{codigo_visual('CLI', r['id'])} | {r['nome']} | {r['whatsapp'] or '-'}": int(r["id"])
+                for _, r in clientes.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha o cliente", list(mapa_cli.keys()), key="msg_wpp_cliente")
+            cliente_id = mapa_cli[escolhido]
+            c = clientes[clientes["id"] == cliente_id].iloc[0]
+
+            tipo = st.selectbox(
+                "Tipo de mensagem",
+                ["Aniversário", "Recompra / cliente parado", "Promoção / novidade", "Pós-venda"],
+                key="tipo_msg_cliente",
+            )
+
+            mensagem = template_mensagem_whatsapp(
+                tipo,
+                cliente_nome=c["nome"],
+                empresa=obter_config("nome_empresa", EMPRESA),
+            )
+
+            mensagem_editada = st.text_area("Mensagem pronta", value=mensagem, height=160, key="msg_cliente_texto")
+
+            link = link_whatsapp(c["whatsapp"], mensagem_editada)
+            if link:
+                st.link_button("Abrir WhatsApp do cliente", link)
+            else:
+                st.warning("Este cliente não tem WhatsApp cadastrado.")
+
+    with abas[2]:
+        st.subheader("Aniversariantes do mês")
+
+        try:
+            anivers = aniversariantes_periodo()
+        except Exception:
+            anivers = pd.DataFrame()
+
+        if anivers.empty:
+            st.info("Nenhum aniversariante neste mês.")
+        else:
+            st.dataframe(formatar_valores_tabela(anivers), use_container_width=True, hide_index=True)
+
+            mapa_aniv = {
+                f"{codigo_visual('CLI', r['id'])} | {r['nome']} | {r.get('aniversario','')}": int(r["id"])
+                for _, r in anivers.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha aniversariante", list(mapa_aniv.keys()), key="msg_wpp_aniv")
+            cid = mapa_aniv[escolhido]
+            c = anivers[anivers["id"] == cid].iloc[0]
+
+            mensagem = template_mensagem_whatsapp("Aniversário", cliente_nome=c["nome"], empresa=obter_config("nome_empresa", EMPRESA))
+            mensagem_editada = st.text_area("Mensagem de aniversário", value=mensagem, height=140)
+
+            link = link_whatsapp(c.get("whatsapp", ""), mensagem_editada)
+            if link:
+                st.link_button("Abrir WhatsApp", link)
+
+    with abas[3]:
+        st.subheader("Clientes sem compra recente")
+
+        try:
+            fid = consultar("SELECT * FROM crm_fidelidade ORDER BY ultima_compra ASC")
+        except Exception:
+            fid = pd.DataFrame()
+
+        if fid.empty:
+            st.info("Atualize a fidelidade no CRM para gerar clientes parados.")
+        else:
+            fid["dias_sem_compra"] = fid["ultima_compra"].apply(dias_desde)
+            parados = fid[fid["dias_sem_compra"].apply(lambda x: isinstance(x, int) and x >= 30)].copy()
+
+            if parados.empty:
+                st.success("Nenhum cliente parado há mais de 30 dias.")
+            else:
+                st.dataframe(formatar_valores_tabela(parados), use_container_width=True, hide_index=True)
+
+                clientes = consultar("SELECT id, nome, whatsapp FROM clientes WHERE ativo='Sim'")
+                parados = parados.merge(clientes, left_on="cliente_id", right_on="id", how="left", suffixes=("", "_cli"))
+
+                mapa_parado = {
+                    f"{codigo_visual('CLI', r['cliente_id'])} | {r['cliente_nome']} | {r['dias_sem_compra']} dias": int(r["cliente_id"])
+                    for _, r in parados.iterrows()
+                }
+
+                escolhido = st.selectbox("Escolha cliente parado", list(mapa_parado.keys()), key="msg_wpp_parado")
+                cid = mapa_parado[escolhido]
+                c = parados[parados["cliente_id"] == cid].iloc[0]
+
+                mensagem = template_mensagem_whatsapp("Recompra / cliente parado", cliente_nome=c["cliente_nome"], empresa=obter_config("nome_empresa", EMPRESA))
+                mensagem_editada = st.text_area("Mensagem de recompra", value=mensagem, height=140)
+
+                link = link_whatsapp(c.get("whatsapp", ""), mensagem_editada)
+                if link:
+                    st.link_button("Abrir WhatsApp", link)
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -10909,13 +11260,15 @@ menu = st.sidebar.radio(
 
 
 menu_limpo = menu
-for _icone in ["🏠 ", "👥 ", "📝 ", "🏭 ", "🏷 ", "🧾 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🖼 ", "⚙ "]:
+for _icone in ["🏠 ", "👥 ", "💬 ", "📝 ", "🏭 ", "🏷 ", "🧾 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🖼 ", "⚙ "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 
 if menu_limpo == "Dashboard":
     tela_inicio()
 elif menu_limpo == "Clientes / CRM":
     tela_clientes_crm()
+elif menu_limpo == "Mensagens WhatsApp":
+    tela_mensagens_whatsapp()
 elif menu_limpo == "Orçamentos":
     tela_orcamentos()
 elif menu_limpo == "Produção / Agenda":
