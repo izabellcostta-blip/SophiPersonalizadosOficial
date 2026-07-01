@@ -8008,6 +8008,456 @@ def tela_agenda_entregas():
         st.info("Essa sincronização não duplica registros que já existem.")
 
 
+
+
+# ============================================================
+# MÓDULO 7 — RELATÓRIOS INTELIGENTES / BI
+# ============================================================
+
+def periodo_relatorio_bi():
+    anos = list(range(2026, 2031))
+    meses = [
+        "Ano inteiro", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ]
+
+    c1, c2 = st.columns(2)
+    ano = c1.selectbox("Ano do relatório", anos, index=0, key="bi_ano")
+    mes = c2.selectbox("Mês", meses, key="bi_mes")
+
+    try:
+        return periodo_datas_financeiro(ano, mes)
+    except Exception:
+        if mes == "Ano inteiro":
+            return date(int(ano), 1, 1).isoformat(), date(int(ano), 12, 31).isoformat()
+
+        mapa = {
+            "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
+            "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
+            "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12,
+        }
+
+        m = mapa.get(mes, datetime.now().month)
+        inicio = date(int(ano), m, 1)
+        fim = date(int(ano) + 1, 1, 1) - timedelta(days=1) if m == 12 else date(int(ano), m + 1, 1) - timedelta(days=1)
+        return inicio.isoformat(), fim.isoformat()
+
+
+def bi_orcamentos_periodo(inicio, fim):
+    try:
+        return consultar("""
+        SELECT *
+        FROM orcamentos
+        WHERE date(data_orcamento) BETWEEN ? AND ?
+        ORDER BY data_orcamento DESC
+        """, (inicio, fim))
+    except Exception:
+        return pd.DataFrame()
+
+
+def bi_itens_periodo(inicio, fim):
+    try:
+        return consultar("""
+        SELECT
+            oi.produto,
+            oi.categoria,
+            oi.quantidade,
+            oi.valor_unitario,
+            oi.desconto,
+            oi.total,
+            o.data_orcamento,
+            o.status,
+            o.cliente_nome
+        FROM orcamento_itens oi
+        LEFT JOIN orcamentos o ON o.id = oi.orcamento_id
+        WHERE date(o.data_orcamento) BETWEEN ? AND ?
+        """, (inicio, fim))
+    except Exception:
+        return pd.DataFrame()
+
+
+def bi_produtos_lucro(inicio, fim):
+    itens = bi_itens_periodo(inicio, fim)
+
+    if itens.empty:
+        return pd.DataFrame()
+
+    try:
+        produtos = consultar("""
+        SELECT nome, categoria, custo_unitario, preco_escolhido, preco_sugerido
+        FROM produtos
+        """)
+    except Exception:
+        produtos = pd.DataFrame()
+
+    df = itens.copy()
+
+    if not produtos.empty:
+        df = df.merge(produtos, left_on="produto", right_on="nome", how="left", suffixes=("", "_prod"))
+    else:
+        df["custo_unitario"] = 0
+
+    df["custo_unitario"] = df["custo_unitario"].fillna(0)
+    df["custo_total_estimado"] = df["quantidade"].fillna(0) * df["custo_unitario"].fillna(0)
+    df["lucro_estimado"] = df["total"].fillna(0) - df["custo_total_estimado"]
+    df["margem_estimada"] = df.apply(lambda r: (n(r["lucro_estimado"]) / n(r["total"]) * 100) if n(r["total"]) > 0 else 0, axis=1)
+
+    resumo = df.groupby(["produto", "categoria"]).agg(
+        quantidade=("quantidade", "sum"),
+        faturamento=("total", "sum"),
+        custo_estimado=("custo_total_estimado", "sum"),
+        lucro_estimado=("lucro_estimado", "sum"),
+    ).reset_index()
+
+    resumo["margem_estimada"] = resumo.apply(
+        lambda r: (n(r["lucro_estimado"]) / n(r["faturamento"]) * 100) if n(r["faturamento"]) > 0 else 0,
+        axis=1
+    )
+
+    return resumo.sort_values("faturamento", ascending=False)
+
+
+def bi_clientes_ranking(inicio, fim):
+    try:
+        df = consultar("""
+        SELECT
+            cliente_id,
+            cliente_nome,
+            COUNT(id) AS qtd_orcamentos,
+            SUM(total) AS total_gasto,
+            MAX(data_orcamento) AS ultima_compra
+        FROM orcamentos
+        WHERE date(data_orcamento) BETWEEN ? AND ?
+          AND status NOT IN ('Cancelado')
+        GROUP BY cliente_id, cliente_nome
+        ORDER BY total_gasto DESC
+        """, (inicio, fim))
+        if df.empty:
+            return df
+        df["ticket_medio"] = df.apply(lambda r: n(r["total_gasto"]) / max(n(r["qtd_orcamentos"], 1), 1), axis=1)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def bi_producao_periodo(inicio, fim):
+    try:
+        return consultar("""
+        SELECT *
+        FROM ordens_producao
+        WHERE date(data_criacao) BETWEEN ? AND ?
+        ORDER BY id DESC
+        """, (inicio, fim))
+    except Exception:
+        return pd.DataFrame()
+
+
+def bi_estoque_consumo_periodo(inicio, fim):
+    try:
+        return consultar("""
+        SELECT item_nome, categoria, SUM(quantidade) AS quantidade_total
+        FROM estoque_consumo
+        WHERE date(data) BETWEEN ? AND ?
+        GROUP BY item_nome, categoria
+        ORDER BY quantidade_total DESC
+        """, (inicio, fim))
+    except Exception:
+        return pd.DataFrame()
+
+
+def bi_html_relatorio_completo(inicio, fim, dados):
+    empresa = obter_config("nome_empresa", EMPRESA)
+
+    def linhas_tabela(df, cols):
+        if df is None or df.empty:
+            return "<tr><td colspan='10'>Sem dados.</td></tr>"
+        linhas = ""
+        for _, r in df.head(30).iterrows():
+            linhas += "<tr>"
+            for c in cols:
+                val = r.get(c, "")
+                if isinstance(val, (int, float)):
+                    if any(p in c.lower() for p in ["valor", "total", "faturamento", "lucro", "custo", "gasto", "ticket"]):
+                        val = real(val)
+                    else:
+                        val = f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                linhas += f"<td>{val}</td>"
+            linhas += "</tr>"
+        return linhas
+
+    prod = dados.get("produtos", pd.DataFrame())
+    cli = dados.get("clientes", pd.DataFrame())
+    consumo = dados.get("consumo", pd.DataFrame())
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Relatório BI - {empresa}</title>
+<style>
+body {{ font-family: Arial, sans-serif; color:#111; padding:24px; }}
+.header {{ border-bottom:3px solid #111; padding-bottom:14px; margin-bottom:18px; }}
+h1 {{ margin:0; font-size:30px; }}
+.grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:18px 0; }}
+.card {{ border:1px solid #ddd; border-radius:12px; padding:12px; }}
+.label {{ color:#777; font-size:11px; text-transform:uppercase; }}
+.value {{ font-size:22px; font-weight:900; }}
+table {{ width:100%; border-collapse:collapse; margin:12px 0 24px; font-size:12px; }}
+th {{ background:#000; color:#fff; padding:8px; text-align:left; }}
+td {{ border-bottom:1px solid #eee; padding:7px; }}
+button {{ position:fixed; right:18px; top:18px; background:#111; color:#fff; border:0; border-radius:8px; padding:10px 16px; font-weight:800; }}
+@media print {{ button {{ display:none; }} }}
+</style>
+</head>
+<body>
+<button onclick="window.print()">Imprimir / salvar PDF</button>
+
+<div class="header">
+<h1>{empresa}</h1>
+<p>Relatório Inteligente / BI — {inicio} até {fim}</p>
+</div>
+
+<div class="grid">
+<div class="card"><div class="label">Faturamento</div><div class="value">{real(dados.get('faturamento',0))}</div></div>
+<div class="card"><div class="label">Lucro estimado</div><div class="value">{real(dados.get('lucro',0))}</div></div>
+<div class="card"><div class="label">Pedidos</div><div class="value">{dados.get('pedidos',0)}</div></div>
+<div class="card"><div class="label">Ticket médio</div><div class="value">{real(dados.get('ticket',0))}</div></div>
+</div>
+
+<h2>Produtos mais vendidos / lucrativos</h2>
+<table>
+<tr><th>Produto</th><th>Categoria</th><th>Qtd</th><th>Faturamento</th><th>Custo</th><th>Lucro</th><th>Margem</th></tr>
+{linhas_tabela(prod, ['produto','categoria','quantidade','faturamento','custo_estimado','lucro_estimado','margem_estimada'])}
+</table>
+
+<h2>Clientes que mais compraram</h2>
+<table>
+<tr><th>Cliente</th><th>Pedidos</th><th>Total gasto</th><th>Ticket médio</th><th>Última compra</th></tr>
+{linhas_tabela(cli, ['cliente_nome','qtd_orcamentos','total_gasto','ticket_medio','ultima_compra'])}
+</table>
+
+<h2>Materiais mais consumidos</h2>
+<table>
+<tr><th>Item</th><th>Categoria</th><th>Quantidade</th></tr>
+{linhas_tabela(consumo, ['item_nome','categoria','quantidade_total'])}
+</table>
+
+</body>
+</html>"""
+    return html
+
+
+def tela_relatorios_inteligentes():
+    st.title("Relatórios Inteligentes")
+    st.write("BI da Sophi Personalizados: vendas, lucro, produtos, clientes, produção, estoque e exportação.")
+
+    inicio, fim = periodo_relatorio_bi()
+
+    abas = st.tabs([
+        "Visão geral",
+        "Produtos",
+        "Clientes",
+        "Produção",
+        "Estoque",
+        "Exportar",
+    ])
+
+    orcs = bi_orcamentos_periodo(inicio, fim)
+    itens = bi_itens_periodo(inicio, fim)
+    produtos_lucro = bi_produtos_lucro(inicio, fim)
+    clientes_rank = bi_clientes_ranking(inicio, fim)
+    producao = bi_producao_periodo(inicio, fim)
+    consumo = bi_estoque_consumo_periodo(inicio, fim)
+
+    faturamento = float(orcs["total"].fillna(0).sum()) if not orcs.empty else 0.0
+    pedidos = len(orcs) if not orcs.empty else 0
+    ticket = faturamento / pedidos if pedidos else 0
+    lucro_estimado = float(produtos_lucro["lucro_estimado"].fillna(0).sum()) if not produtos_lucro.empty else 0.0
+    margem_geral = lucro_estimado / faturamento * 100 if faturamento else 0
+
+    with abas[0]:
+        st.subheader("Visão geral do período")
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            card("Faturamento", real(faturamento))
+        with c2:
+            card("Lucro estimado", real(lucro_estimado))
+        with c3:
+            card("Margem estimada", f"{margem_geral:.2f}%")
+        with c4:
+            card("Pedidos", str(pedidos))
+        with c5:
+            card("Ticket médio", real(ticket))
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("Vendas por status")
+            if orcs.empty:
+                st.info("Sem vendas no período.")
+            else:
+                status_df = orcs.groupby("status")["total"].sum().reset_index()
+                st.dataframe(formatar_valores_tabela(status_df), use_container_width=True, hide_index=True)
+                st.bar_chart(status_df.set_index("status"))
+
+        with col2:
+            st.subheader("Vendas por forma de pagamento")
+            if orcs.empty:
+                st.info("Sem vendas no período.")
+            else:
+                pag_df = orcs.groupby("forma_pagamento")["total"].sum().reset_index()
+                st.dataframe(formatar_valores_tabela(pag_df), use_container_width=True, hide_index=True)
+                st.bar_chart(pag_df.set_index("forma_pagamento"))
+
+        st.divider()
+
+        st.subheader("Evolução diária de faturamento")
+        if orcs.empty:
+            st.info("Sem dados para gráfico diário.")
+        else:
+            temp = orcs.copy()
+            temp["data"] = pd.to_datetime(temp["data_orcamento"], errors="coerce").dt.date
+            diario = temp.groupby("data")["total"].sum().reset_index()
+            st.line_chart(diario.set_index("data"))
+
+    with abas[1]:
+        st.subheader("Produtos mais vendidos e mais lucrativos")
+
+        if produtos_lucro.empty:
+            st.info("Sem produtos vendidos no período.")
+        else:
+            st.markdown("### Ranking por faturamento")
+            st.dataframe(formatar_valores_tabela(produtos_lucro), use_container_width=True, hide_index=True)
+
+            top_fat = produtos_lucro.sort_values("faturamento", ascending=False).head(10)
+            st.bar_chart(top_fat.set_index("produto")["faturamento"])
+
+            st.markdown("### Ranking por lucro estimado")
+            top_lucro = produtos_lucro.sort_values("lucro_estimado", ascending=False).head(10)
+            st.dataframe(formatar_valores_tabela(top_lucro), use_container_width=True, hide_index=True)
+            st.bar_chart(top_lucro.set_index("produto")["lucro_estimado"])
+
+            st.markdown("### Produtos com margem baixa")
+            baixa = produtos_lucro[produtos_lucro["margem_estimada"] < 30].copy()
+            if baixa.empty:
+                st.success("Nenhum produto com margem abaixo de 30%.")
+            else:
+                st.warning("Atenção: produtos com margem abaixo de 30%.")
+                st.dataframe(formatar_valores_tabela(baixa), use_container_width=True, hide_index=True)
+
+    with abas[2]:
+        st.subheader("Clientes e relacionamento")
+
+        if clientes_rank.empty:
+            st.info("Sem clientes com compras no período.")
+        else:
+            st.markdown("### Clientes que mais compraram")
+            st.dataframe(formatar_valores_tabela(clientes_rank), use_container_width=True, hide_index=True)
+            st.bar_chart(clientes_rank.head(10).set_index("cliente_nome")["total_gasto"])
+
+            st.markdown("### Clientes com ticket alto")
+            alto = clientes_rank.sort_values("ticket_medio", ascending=False).head(15)
+            st.dataframe(formatar_valores_tabela(alto), use_container_width=True, hide_index=True)
+
+    with abas[3]:
+        st.subheader("Produção")
+
+        if producao.empty:
+            st.info("Sem OPs no período.")
+        else:
+            producao["codigo_visual"] = producao["id"].apply(codigo_op_seguro)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                card("OPs criadas", str(len(producao)))
+            with c2:
+                card("Entregues", str(len(producao[producao["status"] == "Entregue"])))
+            with c3:
+                card("Em aberto", str(len(producao[~producao["status"].isin(["Entregue", "Cancelado"])])))
+
+            status_prod = producao.groupby("status")["id"].count().reset_index()
+            status_prod.columns = ["Status", "Quantidade"]
+            st.dataframe(status_prod, use_container_width=True, hide_index=True)
+            st.bar_chart(status_prod.set_index("Status"))
+
+            st.markdown("### OPs do período")
+            st.dataframe(producao, use_container_width=True, hide_index=True)
+
+    with abas[4]:
+        st.subheader("Estoque e consumo")
+
+        if consumo.empty:
+            st.info("Sem consumo de materiais no período.")
+        else:
+            st.markdown("### Materiais mais consumidos")
+            st.dataframe(formatar_valores_tabela(consumo), use_container_width=True, hide_index=True)
+            st.bar_chart(consumo.head(15).set_index("item_nome")["quantidade_total"])
+
+        try:
+            resumo = resumo_estoque_inteligente()
+        except Exception:
+            resumo = pd.DataFrame()
+
+        st.markdown("### Situação atual do estoque")
+        if resumo.empty:
+            st.info("Sem resumo de estoque.")
+        else:
+            criticos = resumo[resumo["status"].astype(str).str.contains("Crítico|Atenção", na=False)]
+            if criticos.empty:
+                st.success("Nenhum item crítico ou em atenção.")
+            else:
+                st.warning("Itens que precisam de atenção:")
+                st.dataframe(formatar_valores_tabela(criticos), use_container_width=True, hide_index=True)
+
+    with abas[5]:
+        st.subheader("Exportar relatório completo")
+
+        dados = {
+            "faturamento": faturamento,
+            "lucro": lucro_estimado,
+            "pedidos": pedidos,
+            "ticket": ticket,
+            "produtos": produtos_lucro,
+            "clientes": clientes_rank,
+            "consumo": consumo,
+        }
+
+        html = bi_html_relatorio_completo(inicio, fim, dados)
+
+        st.download_button(
+            "Baixar relatório BI em HTML/PDF",
+            data=html.encode("utf-8"),
+            file_name=f"relatorio_bi_{inicio}_a_{fim}.html",
+            mime="text/html",
+        )
+
+        if not produtos_lucro.empty:
+            st.download_button(
+                "Baixar produtos em CSV",
+                data=produtos_lucro.to_csv(index=False).encode("utf-8"),
+                file_name=f"bi_produtos_{inicio}_a_{fim}.csv",
+                mime="text/csv",
+            )
+
+        if not clientes_rank.empty:
+            st.download_button(
+                "Baixar clientes em CSV",
+                data=clientes_rank.to_csv(index=False).encode("utf-8"),
+                file_name=f"bi_clientes_{inicio}_a_{fim}.csv",
+                mime="text/csv",
+            )
+
+        if not consumo.empty:
+            st.download_button(
+                "Baixar consumo em CSV",
+                data=consumo.to_csv(index=False).encode("utf-8"),
+                file_name=f"bi_consumo_{inicio}_a_{fim}.csv",
+                mime="text/csv",
+            )
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -8224,6 +8674,7 @@ menu = st.sidebar.radio(
         "Fluxo de Caixa",
         "Financeiro Profissional",
         "Dashboard Financeiro",
+        "Relatórios Inteligentes",
         "Categorias",
         "Catálogo público",
         "Configurações",
@@ -8273,6 +8724,8 @@ elif menu == "Financeiro Profissional":
     tela_financeiro_profissional()
 elif menu == "Dashboard Financeiro":
     tela_dashboard_financeiro()
+elif menu == "Relatórios Inteligentes":
+    tela_relatorios_inteligentes()
 elif menu == "Categorias":
     tela_categorias()
 elif menu == "Catálogo público":
