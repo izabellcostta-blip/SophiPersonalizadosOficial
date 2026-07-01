@@ -181,24 +181,19 @@ def formatar_valores_tabela(df):
     return df
 
 def card(titulo, valor, subtitulo=""):
-    # Garante exibição monetária sempre com 2 casas decimais.
-    try:
-        if isinstance(valor, str) and valor.strip().startswith("R$"):
-            numero = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
-            valor = real(float(numero))
-    except Exception:
-        pass
-
     st.markdown(
         f"""
-        <div class="card">
-            <div class="card-title">{titulo}</div>
-            <div class="card-value">{valor}</div>
-            <div class="card-subtitle">{subtitulo}</div>
+        <div class="sophi-card">
+            <div class="sophi-card-top">
+                <div class="sophi-card-title">{titulo}</div>
+            </div>
+            <div class="sophi-card-value">{valor}</div>
+            <div class="sophi-card-subtitle">{subtitulo}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 
 def salvar_upload(upload, nome_base):
@@ -10080,22 +10075,264 @@ try:
 except Exception:
     pass
 
+
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background: #ffffff; color: #111111; }
-section[data-testid="stSidebar"] { background: linear-gradient(180deg, #000000 0%, #151515 100%); }
-section[data-testid="stSidebar"] * { color: #ffffff !important; }
-h1 { font-family: 'Playfair Display', serif; font-size: 42px !important; color: #000000; }
-.stButton button { background: #000000; color: #ffffff; border: none; border-radius: 10px; padding: 0.55rem 1rem; font-weight: 600; }
-.card { background: #ffffff; border: 1px solid #e8e8e8; border-radius: 18px; padding: 18px 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.045); min-height: 105px; }
-.card-title { color: #777777; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
-.card-value { color: #000000; font-size: 26px; font-weight: 800; }
-.card-subtitle { color: #777777; font-size: 12px; margin-top: 6px; }
-[data-testid="stMetricValue"] { color: #000000 !important; }
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --sophi-black: #070707;
+    --sophi-charcoal: #111111;
+    --sophi-soft-black: #1a1a1a;
+    --sophi-white: #ffffff;
+    --sophi-offwhite: #fbfaf8;
+    --sophi-border: #e9e5df;
+    --sophi-muted: #777777;
+    --sophi-accent: #d83f5f;
+    --sophi-gold: #c8a45d;
+    --sophi-shadow: 0 18px 45px rgba(0,0,0,0.08);
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+.stApp {
+    background:
+        radial-gradient(circle at top right, rgba(216,63,95,0.08), transparent 28%),
+        linear-gradient(180deg, #fffdfb 0%, #f8f6f2 100%);
+    color: #111111;
+}
+
+section[data-testid="stSidebar"] {
+    background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.10), transparent 25%),
+        linear-gradient(180deg, #050505 0%, #121212 55%, #1c1c1c 100%) !important;
+    border-right: 1px solid rgba(255,255,255,0.08);
+}
+
+section[data-testid="stSidebar"] * {
+    color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] img {
+    border-radius: 18px;
+    margin-bottom: 16px;
+    filter: drop-shadow(0 12px 28px rgba(0,0,0,0.35));
+}
+
+section[data-testid="stSidebar"] [role="radiogroup"] label {
+    border-radius: 14px;
+    padding: 8px 10px;
+    margin: 2px 0;
+    transition: all .18s ease;
+}
+
+section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(255,255,255,0.08);
+    transform: translateX(2px);
+}
+
+section[data-testid="stSidebar"] [role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
+    border-color: rgba(255,255,255,0.55) !important;
+}
+
+h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 46px !important;
+    font-weight: 800 !important;
+    color: #111111;
+    letter-spacing: -0.6px;
+    margin-bottom: 0.2rem !important;
+}
+
+h2, h3 {
+    letter-spacing: -0.3px;
+}
+
+[data-testid="stMarkdownContainer"] p {
+    color: #5f5f5f;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 10px;
+    border-bottom: 1px solid var(--sophi-border);
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid var(--sophi-border);
+    border-radius: 16px 16px 0 0;
+    padding: 12px 18px;
+    font-weight: 700;
+}
+
+.stTabs [aria-selected="true"] {
+    background: #ffffff !important;
+    border-top: 3px solid var(--sophi-accent) !important;
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.04);
+}
+
+.sophi-card {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.88));
+    border: 1px solid rgba(20,20,20,0.08);
+    border-radius: 24px;
+    padding: 20px 22px;
+    box-shadow: var(--sophi-shadow);
+    min-height: 118px;
+    position: relative;
+    overflow: hidden;
+}
+
+.sophi-card::before {
+    content: "";
+    position: absolute;
+    width: 96px;
+    height: 96px;
+    border-radius: 999px;
+    right: -38px;
+    top: -42px;
+    background: radial-gradient(circle, rgba(216,63,95,0.14), transparent 68%);
+}
+
+.sophi-card-title {
+    color: #777777;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    font-weight: 800;
+    margin-bottom: 10px;
+}
+
+.sophi-card-value {
+    color: #111111;
+    font-size: 30px;
+    line-height: 1.05;
+    font-weight: 900;
+    letter-spacing: -0.8px;
+}
+
+.sophi-card-subtitle {
+    color: #7a7a7a;
+    font-size: 12px;
+    margin-top: 9px;
+}
+
+.card {
+    background: #ffffff;
+    border: 1px solid rgba(20,20,20,0.08);
+    border-radius: 24px;
+    padding: 20px 22px;
+    box-shadow: var(--sophi-shadow);
+    min-height: 118px;
+}
+
+.card-title {
+    color: #777777;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    margin-bottom: 10px;
+    font-weight: 800;
+}
+
+.card-value {
+    color: #111111;
+    font-size: 30px;
+    font-weight: 900;
+    letter-spacing: -0.8px;
+}
+
+.card-subtitle {
+    color: #777777;
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.stButton button, .stDownloadButton button, div[data-testid="stLinkButton"] a {
+    background: linear-gradient(135deg, #050505 0%, #1b1b1b 100%) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 14px !important;
+    padding: 0.68rem 1.1rem !important;
+    font-weight: 800 !important;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.16);
+    transition: all .18s ease;
+}
+
+.stButton button:hover, .stDownloadButton button:hover, div[data-testid="stLinkButton"] a:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 35px rgba(0,0,0,0.22);
+}
+
+input, textarea, select, [data-baseweb="select"] > div {
+    border-radius: 14px !important;
+}
+
+[data-testid="stDataFrame"] {
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--sophi-border);
+    box-shadow: 0 12px 28px rgba(0,0,0,0.04);
+}
+
+[data-testid="stMetricValue"] {
+    color: #111111 !important;
+    font-weight: 900 !important;
+}
+
+hr {
+    border-color: var(--sophi-border);
+}
+
+.sophi-hero {
+    background:
+        radial-gradient(circle at top right, rgba(216,63,95,0.18), transparent 24%),
+        linear-gradient(135deg, #050505 0%, #191919 72%, #2a1d20 100%);
+    border-radius: 30px;
+    padding: 30px 34px;
+    margin: 8px 0 24px 0;
+    box-shadow: 0 22px 50px rgba(0,0,0,0.18);
+    color: #fff;
+}
+
+.sophi-hero h1 {
+    color: #fff !important;
+    margin: 0 !important;
+    font-size: 48px !important;
+}
+
+.sophi-hero p {
+    color: rgba(255,255,255,0.78) !important;
+    margin-top: 8px;
+    font-size: 15px;
+}
+
+.sophi-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+
+div[data-testid="stAlert"] {
+    border-radius: 18px;
+    border: 1px solid rgba(0,0,0,0.06);
+}
+
 </style>
 """, unsafe_allow_html=True)
+
 
 logo = obter_config("logo_path", "")
 if logo and Path(logo).exists():
@@ -10114,11 +10351,14 @@ except Exception:
 exigir_login()
 
 st.sidebar.markdown("""
-<div style="font-family:'Playfair Display',serif;font-size:30px;line-height:1;margin-top:10px;">
-    Sophi
-</div>
-<div style="font-size:12px;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:24px;">
-    Personalizados Oficial
+<div style="padding:10px 4px 18px 4px;">
+    <div style="font-family:'Playfair Display',serif;font-size:34px;line-height:.95;font-weight:800;">
+        Sophi
+    </div>
+    <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;margin-top:6px;color:rgba(255,255,255,.72)!important;">
+        Personalizados Oficial
+    </div>
+    <div style="height:1px;background:rgba(255,255,255,.12);margin-top:18px;"></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -10127,50 +10367,54 @@ botao_sair()
 menu = st.sidebar.radio(
     "Menu",
     [
-        "Dashboard",
-        "Clientes / CRM",
-        "Orçamentos",
-        "Produção / Agenda",
-        "Produtos / Precificação",
-        "Materiais",
-        "Kits",
-        "Estoque",
-        "Financeiro",
-        "Relatórios",
-        "Central de Automação",
-        "Catálogo / Portal",
-        "Biblioteca de Artes",
-        "Configurações",
+        "🏠 Dashboard",
+        "👥 Clientes / CRM",
+        "📝 Orçamentos",
+        "🏭 Produção / Agenda",
+        "🏷 Produtos / Precificação",
+        "🧾 Materiais",
+        "🎁 Kits",
+        "📦 Estoque",
+        "💰 Financeiro",
+        "📊 Relatórios",
+        "⚡ Central de Automação",
+        "🛒 Catálogo / Portal",
+        "🖼 Biblioteca de Artes",
+        "⚙ Configurações",
     ],
 )
 
 
-if menu == "Dashboard":
+menu_limpo = menu
+for _icone in ["🏠 ", "👥 ", "📝 ", "🏭 ", "🏷 ", "🧾 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🖼 ", "⚙ "]:
+    menu_limpo = menu_limpo.replace(_icone, "")
+
+if menu_limpo == "Dashboard":
     tela_inicio()
-elif menu == "Clientes / CRM":
+elif menu_limpo == "Clientes / CRM":
     tela_clientes_crm()
-elif menu == "Orçamentos":
+elif menu_limpo == "Orçamentos":
     tela_orcamentos()
-elif menu == "Produção / Agenda":
+elif menu_limpo == "Produção / Agenda":
     tela_producao_agenda()
-elif menu == "Produtos / Precificação":
+elif menu_limpo == "Produtos / Precificação":
     tela_produtos()
-elif menu == "Materiais":
+elif menu_limpo == "Materiais":
     tela_materiais()
-elif menu == "Kits":
+elif menu_limpo == "Kits":
     tela_kits()
-elif menu == "Estoque":
+elif menu_limpo == "Estoque":
     tela_estoque_unificado()
-elif menu == "Financeiro":
+elif menu_limpo == "Financeiro":
     tela_financeiro_unificado()
-elif menu == "Relatórios":
+elif menu_limpo == "Relatórios":
     tela_relatorios_inteligentes()
-elif menu == "Central de Automação":
+elif menu_limpo == "Central de Automação":
     tela_central_automacao()
-elif menu == "Catálogo / Portal":
+elif menu_limpo == "Catálogo / Portal":
     tela_catalogo_portal()
-elif menu == "Biblioteca de Artes":
+elif menu_limpo == "Biblioteca de Artes":
     tela_biblioteca_artes()
-elif menu == "Configurações":
+elif menu_limpo == "Configurações":
     tela_configuracoes()
 
