@@ -3616,7 +3616,66 @@ def calcular_preco_kit(custo_total, margem):
 
 
 
+
+
+def garantir_tabela_producao():
+    """Garante que a tabela de produção tenha todas as colunas, mesmo em banco antigo."""
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS ordens_producao (
+            id INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+        """)
+    except Exception:
+        pass
+
+    colunas = {
+        "codigo": "TEXT",
+        "orcamento_id": "INTEGER",
+        "cliente_nome": "TEXT",
+        "whatsapp": "TEXT",
+        "data_criacao": "TEXT DEFAULT CURRENT_TIMESTAMP",
+        "data_entrega": "TEXT",
+        "prioridade": "TEXT DEFAULT 'Normal'",
+        "status": "TEXT DEFAULT 'Aguardando'",
+        "itens_json": "TEXT",
+        "materiais_json": "TEXT",
+        "checklist_json": "TEXT",
+        "observacoes": "TEXT",
+        "ativo": "TEXT DEFAULT 'Sim'",
+    }
+
+    for coluna, tipo in colunas.items():
+        try:
+            executar(f"ALTER TABLE ordens_producao ADD COLUMN {coluna} {tipo}")
+        except Exception:
+            pass
+
+    try:
+        executar("""
+        UPDATE ordens_producao
+        SET codigo = 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)
+        WHERE codigo IS NULL OR codigo = ''
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS historico_producao (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            op_id INTEGER,
+            data TEXT DEFAULT CURRENT_TIMESTAMP,
+            acao TEXT,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+
 def tela_producao():
+    garantir_tabela_producao()
     st.title("Produção")
     st.write("Central de produção com Ordem de Produção, checklist, prioridade, prazos e ficha para impressão.")
 
@@ -3626,16 +3685,8 @@ def tela_producao():
         st.subheader("Painel de produção")
 
         ops = consultar("""
-        SELECT id,
-               COALESCE(codigo, 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)) AS codigo,
-               orcamento_id,
-               cliente_nome,
-               whatsapp,
-               data_criacao,
-               data_entrega,
-               prioridade,
-               status,
-               observacoes
+        SELECT id, orcamento_id, cliente_nome, whatsapp, data_criacao,
+               data_entrega, prioridade, status, observacoes
         FROM ordens_producao
         WHERE ativo='Sim'
         ORDER BY
@@ -3652,6 +3703,7 @@ def tela_producao():
         if ops.empty:
             st.info("Ainda não há ordens de produção.")
         else:
+            ops["codigo"] = ops["id"].apply(codigo_op_seguro)
             hoje = datetime.now().date()
 
             atrasadas = 0
@@ -3786,12 +3838,7 @@ def tela_producao():
         st.subheader("Ficha da Ordem de Produção")
 
         ops = consultar("""
-        SELECT id,
-               COALESCE(codigo, 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)) AS codigo,
-               cliente_nome,
-               status,
-               prioridade,
-               data_entrega
+        SELECT id, cliente_nome, status, prioridade, data_entrega
         FROM ordens_producao
         WHERE ativo='Sim'
         ORDER BY id DESC
@@ -3800,6 +3847,7 @@ def tela_producao():
         if ops.empty:
             st.info("Nenhuma OP cadastrada.")
         else:
+            ops["codigo"] = ops["id"].apply(codigo_op_seguro)
             mapa = {
                 f"{row['codigo']} | {row['cliente_nome']} | {row['status']}": int(row["id"])
                 for _, row in ops.iterrows()
@@ -3882,7 +3930,7 @@ def tela_producao():
                     st.download_button(
                         "Baixar ficha de produção para imprimir",
                         data=html.encode("utf-8"),
-                        file_name=f"ficha_producao_{o['codigo']}.html",
+                        file_name=f"ficha_producao_{codigo_op_seguro(o['id'])}.html",
                         mime="text/html",
                     )
 
@@ -3890,7 +3938,12 @@ def tela_producao():
         st.subheader("Histórico de produção")
 
         hist = consultar("""
-        SELECT h.data, o.codigo, o.cliente_nome, h.acao, h.observacoes
+        SELECT
+            h.data,
+            COALESCE(o.codigo, 'OP-' || strftime('%Y','now') || '-' || printf('%04d', o.id)) AS codigo,
+            o.cliente_nome,
+            h.acao,
+            h.observacoes
         FROM historico_producao h
         LEFT JOIN ordens_producao o ON o.id = h.op_id
         ORDER BY h.id DESC
@@ -3900,6 +3953,10 @@ def tela_producao():
         if hist.empty:
             st.info("Sem histórico ainda.")
         else:
+            if "op_id" in hist.columns:
+                hist["codigo"] = hist["op_id"].apply(lambda x: codigo_op_seguro(x) if pd.notna(x) else "")
+                cols = ["data", "codigo", "cliente_nome", "acao", "observacoes"]
+                hist = hist[[c for c in cols if c in hist.columns]]
             st.dataframe(hist, use_container_width=True, hide_index=True)
 
 
@@ -4729,6 +4786,12 @@ def codigo_op(op_id):
     except Exception:
         return f"OP-{datetime.now().year}-{int(op_id):04d}"
 
+def codigo_op_seguro(op_id):
+    try:
+        return f"OP-{datetime.now().year}-{int(op_id):04d}"
+    except Exception:
+        return "OP"
+
 
 def checklist_padrao_producao():
     return {
@@ -4946,7 +5009,7 @@ def gerar_html_ficha_producao(op_id):
 <html>
 <head>
 <meta charset="utf-8">
-<title>Ficha de Produção {o['codigo']}</title>
+<title>Ficha de Produção {codigo_op_seguro(o['id'])}</title>
 <style>
 body {{
     font-family: Arial, sans-serif;
@@ -5029,7 +5092,7 @@ button {{
             <h1>{empresa}</h1>
             <p>Ficha de produção</p>
         </div>
-        <div class="badge">{o['codigo']}</div>
+        <div class="badge">{codigo_op_seguro(o['id'])}</div>
     </div>
 
     <div class="grid">
