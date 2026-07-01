@@ -7483,7 +7483,6 @@ def sincronizar_op_com_agenda():
             """, (
                 f"Produzir {codigo_op_seguro(op_id)} - {cliente_nome}",
                 "Produção",
-        "Agenda e Entregas",
                 cliente_nome,
                 "OP",
                 op_id,
@@ -8210,6 +8209,7 @@ menu = st.sidebar.radio(
         "CRM Inteligente",
         "Orçamentos",
         "Produção",
+        "Agenda e Entregas",
         "Produtos / Precificação",
         "Kits",
         "Papéis",
