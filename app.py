@@ -744,6 +744,49 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS agenda_tarefas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        titulo TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Tarefa',
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        referencia_tipo TEXT,
+        referencia_id INTEGER,
+        data TEXT,
+        hora TEXT,
+        prioridade TEXT DEFAULT 'Normal',
+        status TEXT DEFAULT 'Pendente',
+        descricao TEXT,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim',
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS entregas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        whatsapp TEXT,
+        referencia_tipo TEXT,
+        referencia_id INTEGER,
+        codigo TEXT,
+        data_entrega TEXT,
+        hora_entrega TEXT,
+        tipo_entrega TEXT DEFAULT 'Retirada',
+        endereco TEXT,
+        taxa_entrega REAL DEFAULT 0,
+        status TEXT DEFAULT 'Pendente',
+        responsavel TEXT,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim',
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -7328,6 +7371,644 @@ def tela_crm_inteligente():
                 st.rerun()
 
 
+
+
+# ============================================================
+# MÓDULO 6 — AGENDA / ENTREGAS / TAREFAS
+# ============================================================
+
+def garantir_agenda_entregas():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS agenda_tarefas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL,
+            tipo TEXT DEFAULT 'Tarefa',
+            cliente_id INTEGER,
+            cliente_nome TEXT,
+            referencia_tipo TEXT,
+            referencia_id INTEGER,
+            data TEXT,
+            hora TEXT,
+            prioridade TEXT DEFAULT 'Normal',
+            status TEXT DEFAULT 'Pendente',
+            descricao TEXT,
+            observacoes TEXT,
+            ativo TEXT DEFAULT 'Sim',
+            data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS entregas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            cliente_nome TEXT,
+            whatsapp TEXT,
+            referencia_tipo TEXT,
+            referencia_id INTEGER,
+            codigo TEXT,
+            data_entrega TEXT,
+            hora_entrega TEXT,
+            tipo_entrega TEXT DEFAULT 'Retirada',
+            endereco TEXT,
+            taxa_entrega REAL DEFAULT 0,
+            status TEXT DEFAULT 'Pendente',
+            responsavel TEXT,
+            observacoes TEXT,
+            ativo TEXT DEFAULT 'Sim',
+            data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    except Exception:
+        pass
+
+
+def codigo_entrega(entrega_id):
+    try:
+        return codigo_visual("ENT", int(entrega_id))
+    except Exception:
+        return f"ENT-{int(entrega_id):04d}"
+
+
+def codigo_tarefa(tarefa_id):
+    try:
+        return codigo_visual("AGE", int(tarefa_id))
+    except Exception:
+        return f"AGE-{int(tarefa_id):04d}"
+
+
+def sincronizar_op_com_agenda():
+    garantir_agenda_entregas()
+
+    try:
+        ops = consultar("""
+        SELECT id, cliente_nome, whatsapp, data_entrega, prioridade, status, observacoes
+        FROM ordens_producao
+        WHERE ativo='Sim'
+        ORDER BY id DESC
+        """)
+    except Exception:
+        return 0, 0
+
+    criadas_tarefas = 0
+    criadas_entregas = 0
+
+    if ops.empty:
+        return 0, 0
+
+    for _, op in ops.iterrows():
+        op_id = int(op["id"])
+        data_entrega = str(op.get("data_entrega", "") or "")
+        cliente_nome = str(op.get("cliente_nome", "") or "")
+        whatsapp = str(op.get("whatsapp", "") or "")
+        prioridade = str(op.get("prioridade", "Normal") or "Normal")
+        status_op = str(op.get("status", "Aguardando") or "Aguardando")
+
+        existe_tarefa = consultar("""
+        SELECT id FROM agenda_tarefas
+        WHERE referencia_tipo='OP' AND referencia_id=? AND ativo='Sim'
+        """, (op_id,))
+
+        if existe_tarefa.empty:
+            executar("""
+            INSERT INTO agenda_tarefas(
+                titulo, tipo, cliente_nome, referencia_tipo, referencia_id,
+                data, hora, prioridade, status, descricao, observacoes, ativo
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"Produzir {codigo_op_seguro(op_id)} - {cliente_nome}",
+                "Produção",
+        "Agenda e Entregas",
+                cliente_nome,
+                "OP",
+                op_id,
+                data_entrega or hoje_iso(),
+                "",
+                prioridade,
+                "Concluída" if status_op in ["Entregue", "Finalizado"] else "Pendente",
+                f"Produção vinculada à {codigo_op_seguro(op_id)}",
+                str(op.get("observacoes", "") or ""),
+                "Sim",
+            ))
+            criadas_tarefas += 1
+
+        existe_entrega = consultar("""
+        SELECT id FROM entregas
+        WHERE referencia_tipo='OP' AND referencia_id=? AND ativo='Sim'
+        """, (op_id,))
+
+        if existe_entrega.empty:
+            entrega_id_prev = consultar("SELECT COALESCE(MAX(id),0)+1 AS prox FROM entregas").iloc[0]["prox"]
+            executar("""
+            INSERT INTO entregas(
+                cliente_nome, whatsapp, referencia_tipo, referencia_id, codigo,
+                data_entrega, hora_entrega, tipo_entrega, endereco, taxa_entrega,
+                status, responsavel, observacoes, ativo
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                cliente_nome,
+                whatsapp,
+                "OP",
+                op_id,
+                codigo_entrega(int(entrega_id_prev)),
+                data_entrega or hoje_iso(),
+                "",
+                "Retirada",
+                "",
+                0,
+                "Entregue" if status_op == "Entregue" else "Pendente",
+                "",
+                f"Entrega vinculada à {codigo_op_seguro(op_id)}",
+                "Sim",
+            ))
+            criadas_entregas += 1
+
+    return criadas_tarefas, criadas_entregas
+
+
+def sincronizar_orcamentos_com_agenda():
+    garantir_agenda_entregas()
+
+    try:
+        orcs = consultar("""
+        SELECT id, cliente_id, cliente_nome, whatsapp, data_orcamento, status, observacoes
+        FROM orcamentos
+        WHERE status NOT IN ('Cancelado')
+        ORDER BY id DESC
+        """)
+    except Exception:
+        return 0
+
+    criadas = 0
+
+    if orcs.empty:
+        return 0
+
+    for _, o in orcs.iterrows():
+        orc_id = int(o["id"])
+
+        existe = consultar("""
+        SELECT id FROM agenda_tarefas
+        WHERE referencia_tipo='Orçamento' AND referencia_id=? AND tipo='Follow-up' AND ativo='Sim'
+        """, (orc_id,))
+
+        if not existe.empty:
+            continue
+
+        try:
+            data_follow = (pd.to_datetime(o["data_orcamento"], errors="coerce") + pd.to_timedelta(2, unit="D")).date().isoformat()
+        except Exception:
+            data_follow = (datetime.now().date() + timedelta(days=2)).isoformat()
+
+        executar("""
+        INSERT INTO agenda_tarefas(
+            titulo, tipo, cliente_id, cliente_nome, referencia_tipo, referencia_id,
+            data, hora, prioridade, status, descricao, observacoes, ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            f"Follow-up orçamento ORC-{orc_id:04d} - {o['cliente_nome']}",
+            "Follow-up",
+            int(o["cliente_id"]) if pd.notna(o["cliente_id"]) else None,
+            str(o["cliente_nome"]),
+            "Orçamento",
+            orc_id,
+            data_follow,
+            "",
+            "Normal",
+            "Pendente",
+            "Entrar em contato para saber se o cliente vai fechar o orçamento.",
+            str(o.get("observacoes", "") or ""),
+            "Sim",
+        ))
+        criadas += 1
+
+    return criadas
+
+
+def dataframe_agenda_periodo(inicio, fim):
+    garantir_agenda_entregas()
+
+    tarefas = consultar("""
+    SELECT id, titulo, tipo, cliente_nome, referencia_tipo, referencia_id,
+           data, hora, prioridade, status, descricao, observacoes
+    FROM agenda_tarefas
+    WHERE ativo='Sim' AND data BETWEEN ? AND ?
+    ORDER BY data ASC, hora ASC, id DESC
+    """, (inicio, fim))
+
+    entregas_df = consultar("""
+    SELECT id, codigo, cliente_nome, whatsapp, data_entrega AS data, hora_entrega AS hora,
+           tipo_entrega, endereco, taxa_entrega, status, responsavel, observacoes
+    FROM entregas
+    WHERE ativo='Sim' AND data_entrega BETWEEN ? AND ?
+    ORDER BY data_entrega ASC, hora_entrega ASC, id DESC
+    """, (inicio, fim))
+
+    return tarefas, entregas_df
+
+
+def status_agenda_visual(status):
+    s = str(status)
+    if s in ["Concluída", "Entregue", "Finalizado"]:
+        return "🟢 " + s
+    if s in ["Atrasado", "Pendente"]:
+        return "🟡 " + s
+    if s in ["Cancelado"]:
+        return "🔴 " + s
+    return "🔵 " + s
+
+
+def tela_agenda_entregas():
+    garantir_agenda_entregas()
+
+    st.title("Agenda e Entregas")
+    st.write("Organize produção, entregas, follow-ups, tarefas e calendário da Sophi Personalizados.")
+
+    abas = st.tabs([
+        "Hoje",
+        "Calendário",
+        "Tarefas",
+        "Entregas",
+        "Sincronizar",
+    ])
+
+    with abas[0]:
+        st.subheader("Painel de hoje")
+
+        hoje = hoje_iso()
+        tarefas, entregas_df = dataframe_agenda_periodo(hoje, hoje)
+
+        atrasadas = consultar("""
+        SELECT *
+        FROM agenda_tarefas
+        WHERE ativo='Sim'
+          AND data < ?
+          AND status NOT IN ('Concluída', 'Cancelado')
+        ORDER BY data ASC
+        """, (hoje,))
+
+        entregas_atrasadas = consultar("""
+        SELECT *
+        FROM entregas
+        WHERE ativo='Sim'
+          AND data_entrega < ?
+          AND status NOT IN ('Entregue', 'Cancelado')
+        ORDER BY data_entrega ASC
+        """, (hoje,))
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            card("Tarefas hoje", str(len(tarefas)))
+        with c2:
+            card("Entregas hoje", str(len(entregas_df)))
+        with c3:
+            card("Tarefas atrasadas", str(len(atrasadas)))
+        with c4:
+            card("Entregas atrasadas", str(len(entregas_atrasadas)))
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Tarefas de hoje")
+            if tarefas.empty:
+                st.info("Nenhuma tarefa para hoje.")
+            else:
+                tarefas["status_visual"] = tarefas["status"].apply(status_agenda_visual)
+                st.dataframe(tarefas, use_container_width=True, hide_index=True)
+
+        with col2:
+            st.markdown("### Entregas de hoje")
+            if entregas_df.empty:
+                st.info("Nenhuma entrega para hoje.")
+            else:
+                entregas_df["status_visual"] = entregas_df["status"].apply(status_agenda_visual)
+                st.dataframe(formatar_valores_tabela(entregas_df), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.subheader("Pendências atrasadas")
+
+        if atrasadas.empty and entregas_atrasadas.empty:
+            st.success("Nenhuma pendência atrasada.")
+        else:
+            if not atrasadas.empty:
+                st.markdown("#### Tarefas atrasadas")
+                st.dataframe(atrasadas, use_container_width=True, hide_index=True)
+            if not entregas_atrasadas.empty:
+                st.markdown("#### Entregas atrasadas")
+                st.dataframe(formatar_valores_tabela(entregas_atrasadas), use_container_width=True, hide_index=True)
+
+    with abas[1]:
+        st.subheader("Calendário por período")
+
+        c1, c2 = st.columns(2)
+        inicio = c1.text_input("Data inicial", value=hoje_iso())
+        fim = c2.text_input("Data final", value=(datetime.now().date() + timedelta(days=7)).isoformat())
+
+        tarefas, entregas_df = dataframe_agenda_periodo(inicio, fim)
+
+        st.markdown("### Tarefas no período")
+        if tarefas.empty:
+            st.info("Nenhuma tarefa no período.")
+        else:
+            tarefas["codigo"] = tarefas["id"].apply(codigo_tarefa)
+            st.dataframe(tarefas, use_container_width=True, hide_index=True)
+
+        st.markdown("### Entregas no período")
+        if entregas_df.empty:
+            st.info("Nenhuma entrega no período.")
+        else:
+            st.dataframe(formatar_valores_tabela(entregas_df), use_container_width=True, hide_index=True)
+
+        st.markdown("### Visão diária")
+        partes = []
+        if not tarefas.empty:
+            t = tarefas.copy()
+            t["origem"] = "Tarefa"
+            t["titulo_resumo"] = t["titulo"]
+            partes.append(t[["data", "origem", "titulo_resumo", "cliente_nome", "status"]])
+        if not entregas_df.empty:
+            e = entregas_df.copy()
+            e["origem"] = "Entrega"
+            e["titulo_resumo"] = e["tipo_entrega"] + " - " + e["cliente_nome"].astype(str)
+            partes.append(e[["data", "origem", "titulo_resumo", "cliente_nome", "status"]])
+
+        if partes:
+            agenda = pd.concat(partes, ignore_index=True)
+            agenda = agenda.sort_values("data")
+            for data_ag, grupo in agenda.groupby("data"):
+                st.markdown(f"#### {data_ag}")
+                for _, r in grupo.iterrows():
+                    st.write(f"• **{r['origem']}** — {r['titulo_resumo']} — {r['cliente_nome']} — {r['status']}")
+
+    with abas[2]:
+        st.subheader("Criar tarefa")
+
+        clientes = consultar("SELECT id, nome FROM clientes WHERE ativo='Sim' ORDER BY nome")
+        cliente_opcoes = ["Sem cliente"]
+        cliente_mapa = {"Sem cliente": (None, "")}
+
+        if not clientes.empty:
+            for _, c in clientes.iterrows():
+                label = f"{codigo_visual('CLI', c['id'])} - {c['nome']}"
+                cliente_opcoes.append(label)
+                cliente_mapa[label] = (int(c["id"]), str(c["nome"]))
+
+        with st.form("form_tarefa_agenda"):
+            c1, c2 = st.columns(2)
+            titulo = c1.text_input("Título da tarefa")
+            tipo = c2.selectbox("Tipo", ["Tarefa", "Produção", "Entrega", "Follow-up", "Compra", "Cliente", "Outro"])
+
+            cliente_sel = st.selectbox("Cliente", cliente_opcoes)
+
+            c3, c4, c5 = st.columns(3)
+            data = c3.text_input("Data", value=hoje_iso())
+            hora = c4.text_input("Hora", placeholder="Ex: 14:30")
+            prioridade = c5.selectbox("Prioridade", ["Normal", "Urgente", "Baixa"])
+
+            status = st.selectbox("Status", ["Pendente", "Em andamento", "Concluída", "Cancelado"])
+            descricao = st.text_area("Descrição")
+            observacoes = st.text_area("Observações")
+
+            if st.form_submit_button("Salvar tarefa"):
+                if not titulo.strip():
+                    st.error("Digite o título da tarefa.")
+                else:
+                    cliente_id, cliente_nome = cliente_mapa[cliente_sel]
+                    executar("""
+                    INSERT INTO agenda_tarefas(
+                        titulo, tipo, cliente_id, cliente_nome, data, hora,
+                        prioridade, status, descricao, observacoes, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        titulo, tipo, cliente_id, cliente_nome, data, hora,
+                        prioridade, status, descricao, observacoes, "Sim",
+                    ))
+                    st.success("Tarefa salva.")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("Tarefas cadastradas")
+
+        df = consultar("""
+        SELECT *
+        FROM agenda_tarefas
+        WHERE ativo='Sim'
+        ORDER BY data ASC, hora ASC, id DESC
+        """)
+
+        if df.empty:
+            st.info("Nenhuma tarefa cadastrada.")
+        else:
+            df["codigo"] = df["id"].apply(codigo_tarefa)
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_agenda_tarefas",
+                column_config={
+                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Em andamento", "Concluída", "Cancelado"]),
+                    "prioridade": st.column_config.SelectboxColumn("Prioridade", options=["Urgente", "Normal", "Baixa"]),
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Tarefa", "Produção", "Entrega", "Follow-up", "Compra", "Cliente", "Outro"]),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações das tarefas"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("titulo", "")).strip():
+                            executar("""
+                            UPDATE agenda_tarefas
+                            SET titulo=?, tipo=?, cliente_nome=?, data=?, hora=?,
+                                prioridade=?, status=?, descricao=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("titulo", "")),
+                                str(r.get("tipo", "")),
+                                str(r.get("cliente_nome", "")),
+                                str(r.get("data", "")),
+                                str(r.get("hora", "")),
+                                str(r.get("prioridade", "Normal")),
+                                str(r.get("status", "Pendente")),
+                                str(r.get("descricao", "")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                    st.success("Tarefas atualizadas.")
+                    st.rerun()
+
+            with c2:
+                id_del = st.number_input("ID para excluir tarefa", min_value=0, step=1, key="del_tarefa")
+                if st.button("Excluir tarefa"):
+                    if id_del > 0:
+                        executar("UPDATE agenda_tarefas SET ativo='Não' WHERE id=?", (int(id_del),))
+                        st.success("Tarefa excluída.")
+                        st.rerun()
+
+    with abas[3]:
+        st.subheader("Criar entrega")
+
+        clientes = consultar("SELECT id, nome, whatsapp, endereco FROM clientes WHERE ativo='Sim' ORDER BY nome")
+        cliente_opcoes = ["Sem cliente"]
+        cliente_mapa = {"Sem cliente": (None, "", "", "")}
+
+        if not clientes.empty:
+            for _, c in clientes.iterrows():
+                label = f"{codigo_visual('CLI', c['id'])} - {c['nome']}"
+                cliente_opcoes.append(label)
+                cliente_mapa[label] = (int(c["id"]), str(c["nome"]), str(c["whatsapp"] or ""), str(c["endereco"] or ""))
+
+        with st.form("form_entrega_agenda"):
+            cliente_sel = st.selectbox("Cliente", cliente_opcoes, key="entrega_cliente")
+            cliente_id, cliente_nome, whatsapp, endereco_padrao = cliente_mapa[cliente_sel]
+
+            c1, c2, c3 = st.columns(3)
+            data_entrega = c1.text_input("Data entrega", value=hoje_iso())
+            hora_entrega = c2.text_input("Hora entrega", placeholder="Ex: 16:00")
+            tipo_entrega = c3.selectbox("Tipo de entrega", ["Retirada", "Motoboy", "Correios", "Uber/99", "Entrega própria", "Outro"])
+
+            endereco = st.text_area("Endereço", value=endereco_padrao)
+            c4, c5, c6 = st.columns(3)
+            taxa = c4.number_input("Taxa entrega", min_value=0.0, step=0.01, format="%.2f")
+            status = c5.selectbox("Status", ["Pendente", "Separado", "Saiu para entrega", "Entregue", "Cancelado"])
+            responsavel = c6.text_input("Responsável")
+
+            obs = st.text_area("Observações da entrega")
+
+            if st.form_submit_button("Salvar entrega"):
+                entrega_id_prev = consultar("SELECT COALESCE(MAX(id),0)+1 AS prox FROM entregas").iloc[0]["prox"]
+                executar("""
+                INSERT INTO entregas(
+                    cliente_id, cliente_nome, whatsapp, referencia_tipo, referencia_id,
+                    codigo, data_entrega, hora_entrega, tipo_entrega, endereco,
+                    taxa_entrega, status, responsavel, observacoes, ativo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    cliente_id, cliente_nome, whatsapp, "Manual", None,
+                    codigo_entrega(int(entrega_id_prev)),
+                    data_entrega, hora_entrega, tipo_entrega, endereco,
+                    taxa, status, responsavel, obs, "Sim",
+                ))
+                st.success("Entrega salva.")
+                st.rerun()
+
+        st.divider()
+        st.subheader("Entregas cadastradas")
+
+        df = consultar("""
+        SELECT *
+        FROM entregas
+        WHERE ativo='Sim'
+        ORDER BY data_entrega ASC, hora_entrega ASC, id DESC
+        """)
+
+        if df.empty:
+            st.info("Nenhuma entrega cadastrada.")
+        else:
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_entregas",
+                column_config={
+                    "taxa_entrega": st.column_config.NumberColumn("Taxa", format="R$ %.2f"),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Separado", "Saiu para entrega", "Entregue", "Cancelado"]),
+                    "tipo_entrega": st.column_config.SelectboxColumn("Tipo", options=["Retirada", "Motoboy", "Correios", "Uber/99", "Entrega própria", "Outro"]),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações das entregas"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("cliente_nome", "")).strip():
+                            executar("""
+                            UPDATE entregas
+                            SET cliente_nome=?, whatsapp=?, data_entrega=?, hora_entrega=?,
+                                tipo_entrega=?, endereco=?, taxa_entrega=?, status=?,
+                                responsavel=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("cliente_nome", "")),
+                                str(r.get("whatsapp", "")),
+                                str(r.get("data_entrega", "")),
+                                str(r.get("hora_entrega", "")),
+                                str(r.get("tipo_entrega", "")),
+                                str(r.get("endereco", "")),
+                                n(r.get("taxa_entrega", 0)),
+                                str(r.get("status", "Pendente")),
+                                str(r.get("responsavel", "")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                    st.success("Entregas atualizadas.")
+                    st.rerun()
+
+            with c2:
+                id_del = st.number_input("ID para excluir entrega", min_value=0, step=1, key="del_entrega")
+                if st.button("Excluir entrega"):
+                    if id_del > 0:
+                        executar("UPDATE entregas SET ativo='Não' WHERE id=?", (int(id_del),))
+                        st.success("Entrega excluída.")
+                        st.rerun()
+
+        st.subheader("Mensagem rápida de entrega")
+
+        if not df.empty:
+            mapa_ent = {
+                f"{row['codigo']} - {row['cliente_nome']} - {row['status']}": int(row["id"])
+                for _, row in df.iterrows()
+            }
+            escolha = st.selectbox("Escolha entrega para mensagem", list(mapa_ent.keys()))
+            ent_id = mapa_ent[escolha]
+            ent = consultar("SELECT * FROM entregas WHERE id=?", (int(ent_id),))
+
+            if not ent.empty:
+                e = ent.iloc[0]
+                msg = f"Olá {e['cliente_nome']}, sua encomenda da Sophi Personalizados está com status: {e['status']}. Data prevista: {e['data_entrega']}."
+                st.text_area("Mensagem", value=msg, height=110)
+                numero = "".join([c for c in str(e["whatsapp"]) if c.isdigit()])
+                if numero:
+                    import urllib.parse
+                    link = f"https://wa.me/55{numero}?text={urllib.parse.quote(msg)}" if not numero.startswith("55") else f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
+                    st.link_button("Abrir WhatsApp", link)
+
+    with abas[4]:
+        st.subheader("Sincronizar agenda automaticamente")
+
+        st.write("Crie tarefas e entregas automaticamente com base nas Ordens de Produção e Orçamentos.")
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("Sincronizar OPs com Agenda/Entregas"):
+                tarefas, entregas_novas = sincronizar_op_com_agenda()
+                st.success(f"{tarefas} tarefa(s) e {entregas_novas} entrega(s) criadas.")
+                st.rerun()
+
+        with c2:
+            if st.button("Criar follow-ups dos orçamentos"):
+                qtd = sincronizar_orcamentos_com_agenda()
+                st.success(f"{qtd} follow-up(s) criado(s).")
+                st.rerun()
+
+        st.info("Essa sincronização não duplica registros que já existem.")
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -7560,6 +8241,8 @@ elif menu == "Orçamentos":
     tela_orcamentos()
 elif menu == "Produção":
     tela_producao()
+elif menu == "Agenda e Entregas":
+    tela_agenda_entregas()
 elif menu == "Ordem de Produção":
     tela_ordens_producao()
 elif menu == "Produtos / Precificação":
