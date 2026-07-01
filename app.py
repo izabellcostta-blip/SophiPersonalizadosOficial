@@ -787,6 +787,52 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS automacoes_erp (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Alerta',
+        regra TEXT,
+        canal TEXT DEFAULT 'ERP',
+        mensagem TEXT,
+        ativo TEXT DEFAULT 'Sim',
+        ultima_execucao TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS alertas_erp (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        tipo TEXT,
+        origem TEXT,
+        referencia_id INTEGER,
+        titulo TEXT,
+        mensagem TEXT,
+        prioridade TEXT DEFAULT 'Normal',
+        status TEXT DEFAULT 'Novo',
+        acao_sugerida TEXT,
+        link_interno TEXT
+    )
+    """)
+
+    automacoes_padrao = [
+        ("Estoque baixo", "Alerta", "estoque_baixo", "ERP", "Avisar quando itens estiverem abaixo do mínimo.", "Sim"),
+        ("Contas atrasadas", "Alerta", "contas_atrasadas", "ERP", "Avisar quando contas a pagar ou receber estiverem atrasadas.", "Sim"),
+        ("Entregas de hoje", "Alerta", "entregas_hoje", "ERP", "Avisar entregas programadas para hoje.", "Sim"),
+        ("OP atrasada", "Alerta", "op_atrasada", "ERP", "Avisar ordens de produção atrasadas.", "Sim"),
+        ("Follow-up orçamento", "Alerta", "followup_orcamento", "ERP", "Avisar orçamentos aguardando resposta.", "Sim"),
+        ("Aniversariantes", "Alerta", "aniversariantes", "ERP", "Avisar clientes aniversariantes do mês.", "Sim"),
+    ]
+
+    for auto in automacoes_padrao:
+        executar("""
+        INSERT OR IGNORE INTO automacoes_erp(nome, tipo, regra, canal, mensagem, ativo)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, auto)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -8699,6 +8745,582 @@ def tela_portal_cliente_admin():
                     st.rerun()
 
 
+
+
+# ============================================================
+# MÓDULO 9 — CENTRAL DE AUTOMAÇÃO / ALERTAS INTELIGENTES
+# ============================================================
+
+def garantir_automacoes_erp():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS automacoes_erp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            tipo TEXT DEFAULT 'Alerta',
+            regra TEXT,
+            canal TEXT DEFAULT 'ERP',
+            mensagem TEXT,
+            ativo TEXT DEFAULT 'Sim',
+            ultima_execucao TEXT,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS alertas_erp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT DEFAULT CURRENT_TIMESTAMP,
+            tipo TEXT,
+            origem TEXT,
+            referencia_id INTEGER,
+            titulo TEXT,
+            mensagem TEXT,
+            prioridade TEXT DEFAULT 'Normal',
+            status TEXT DEFAULT 'Novo',
+            acao_sugerida TEXT,
+            link_interno TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    automacoes_padrao = [
+        ("Estoque baixo", "Alerta", "estoque_baixo", "ERP", "Avisar quando itens estiverem abaixo do mínimo.", "Sim"),
+        ("Contas atrasadas", "Alerta", "contas_atrasadas", "ERP", "Avisar quando contas a pagar ou receber estiverem atrasadas.", "Sim"),
+        ("Entregas de hoje", "Alerta", "entregas_hoje", "ERP", "Avisar entregas programadas para hoje.", "Sim"),
+        ("OP atrasada", "Alerta", "op_atrasada", "ERP", "Avisar ordens de produção atrasadas.", "Sim"),
+        ("Follow-up orçamento", "Alerta", "followup_orcamento", "ERP", "Avisar orçamentos aguardando resposta.", "Sim"),
+        ("Aniversariantes", "Alerta", "aniversariantes", "ERP", "Avisar clientes aniversariantes do mês.", "Sim"),
+    ]
+
+    for auto in automacoes_padrao:
+        try:
+            executar("""
+            INSERT OR IGNORE INTO automacoes_erp(nome, tipo, regra, canal, mensagem, ativo)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, auto)
+        except Exception:
+            pass
+
+
+def alerta_existe(tipo, origem, referencia_id, titulo):
+    try:
+        df = consultar("""
+        SELECT id
+        FROM alertas_erp
+        WHERE tipo=? AND origem=? AND COALESCE(referencia_id,0)=COALESCE(?,0)
+          AND titulo=? AND status IN ('Novo', 'Lido')
+        LIMIT 1
+        """, (str(tipo), str(origem), int(referencia_id or 0), str(titulo)))
+        return not df.empty
+    except Exception:
+        return False
+
+
+def criar_alerta_erp(tipo, origem, referencia_id, titulo, mensagem, prioridade="Normal", acao_sugerida="", link_interno=""):
+    garantir_automacoes_erp()
+
+    if alerta_existe(tipo, origem, referencia_id or 0, titulo):
+        return False
+
+    executar("""
+    INSERT INTO alertas_erp(
+        tipo, origem, referencia_id, titulo, mensagem,
+        prioridade, status, acao_sugerida, link_interno
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 'Novo', ?, ?)
+    """, (
+        str(tipo),
+        str(origem),
+        int(referencia_id or 0),
+        str(titulo),
+        str(mensagem),
+        str(prioridade),
+        str(acao_sugerida),
+        str(link_interno),
+    ))
+
+    return True
+
+
+def automacao_ativa(regra):
+    garantir_automacoes_erp()
+    try:
+        df = consultar("""
+        SELECT ativo FROM automacoes_erp
+        WHERE regra=?
+        LIMIT 1
+        """, (str(regra),))
+        if df.empty:
+            return True
+        return str(df.iloc[0]["ativo"]) == "Sim"
+    except Exception:
+        return True
+
+
+def executar_automacoes_erp():
+    garantir_automacoes_erp()
+    criados = 0
+    hoje = datetime.now().date()
+    hoje_txt = hoje.isoformat()
+
+    # 1) Estoque baixo
+    if automacao_ativa("estoque_baixo"):
+        try:
+            resumo = resumo_estoque_inteligente()
+        except Exception:
+            resumo = pd.DataFrame()
+
+        if not resumo.empty:
+            baixos = resumo[resumo["disponivel"] <= resumo["estoque_minimo"]]
+            for _, r in baixos.iterrows():
+                prioridade = "Alta" if n(r["disponivel"]) <= 0 else "Normal"
+                ok = criar_alerta_erp(
+                    "Estoque",
+                    "Estoque Inteligente",
+                    0,
+                    f"Estoque baixo: {r['item']}",
+                    f"O item {r['item']} está com disponível {r['disponivel']} e mínimo {r['estoque_minimo']}.",
+                    prioridade,
+                    "Verificar compra ou reposição do material.",
+                    "Estoque Inteligente",
+                )
+                criados += 1 if ok else 0
+
+    # 2) Contas atrasadas
+    if automacao_ativa("contas_atrasadas"):
+        try:
+            pagar = consultar("""
+            SELECT id, descricao, valor, data_vencimento, status
+            FROM contas_pagar
+            WHERE ativo='Sim'
+              AND status NOT IN ('Pago', 'Cancelado')
+              AND data_vencimento < ?
+            """, (hoje_txt,))
+        except Exception:
+            pagar = pd.DataFrame()
+
+        for _, r in pagar.iterrows():
+            ok = criar_alerta_erp(
+                "Financeiro",
+                "Contas a pagar",
+                int(r["id"]),
+                f"Conta a pagar atrasada: {r['descricao']}",
+                f"A conta {r['descricao']} venceu em {r['data_vencimento']} no valor de {real(r['valor'])}.",
+                "Alta",
+                "Verificar pagamento da conta.",
+                "Financeiro Profissional",
+            )
+            criados += 1 if ok else 0
+
+        try:
+            receber = consultar("""
+            SELECT id, descricao, cliente_nome, valor, data_vencimento, status
+            FROM contas_receber
+            WHERE ativo='Sim'
+              AND status NOT IN ('Recebido', 'Cancelado')
+              AND data_vencimento < ?
+            """, (hoje_txt,))
+        except Exception:
+            receber = pd.DataFrame()
+
+        for _, r in receber.iterrows():
+            ok = criar_alerta_erp(
+                "Financeiro",
+                "Contas a receber",
+                int(r["id"]),
+                f"Recebimento atrasado: {r['cliente_nome']}",
+                f"O recebimento {r['descricao']} venceu em {r['data_vencimento']} no valor de {real(r['valor'])}.",
+                "Alta",
+                "Entrar em contato com o cliente.",
+                "Financeiro Profissional",
+            )
+            criados += 1 if ok else 0
+
+    # 3) Entregas de hoje
+    if automacao_ativa("entregas_hoje"):
+        try:
+            ent = consultar("""
+            SELECT id, codigo, cliente_nome, status, data_entrega, tipo_entrega
+            FROM entregas
+            WHERE ativo='Sim'
+              AND data_entrega=?
+              AND status NOT IN ('Entregue', 'Cancelado')
+            """, (hoje_txt,))
+        except Exception:
+            ent = pd.DataFrame()
+
+        for _, r in ent.iterrows():
+            ok = criar_alerta_erp(
+                "Entrega",
+                "Entregas",
+                int(r["id"]),
+                f"Entrega hoje: {r['cliente_nome']}",
+                f"Entrega {r.get('codigo','')} para {r['cliente_nome']} está marcada para hoje. Tipo: {r['tipo_entrega']}.",
+                "Normal",
+                "Separar pedido e confirmar entrega.",
+                "Agenda e Entregas",
+            )
+            criados += 1 if ok else 0
+
+    # 4) OP atrasada
+    if automacao_ativa("op_atrasada"):
+        try:
+            ops = consultar("""
+            SELECT id, cliente_nome, status, data_entrega, prioridade
+            FROM ordens_producao
+            WHERE ativo='Sim'
+              AND data_entrega < ?
+              AND status NOT IN ('Entregue', 'Cancelado', 'Finalizado')
+            """, (hoje_txt,))
+        except Exception:
+            ops = pd.DataFrame()
+
+        for _, r in ops.iterrows():
+            ok = criar_alerta_erp(
+                "Produção",
+                "Ordem de Produção",
+                int(r["id"]),
+                f"OP atrasada: {codigo_op_seguro(r['id'])}",
+                f"A OP {codigo_op_seguro(r['id'])} de {r['cliente_nome']} está atrasada. Previsão era {r['data_entrega']}.",
+                "Alta",
+                "Verificar produção e atualizar prazo.",
+                "Produção",
+            )
+            criados += 1 if ok else 0
+
+    # 5) Follow-up orçamento
+    if automacao_ativa("followup_orcamento"):
+        try:
+            limite = (hoje - timedelta(days=2)).isoformat()
+            orcs = consultar("""
+            SELECT id, cliente_nome, whatsapp, status, total, data_orcamento
+            FROM orcamentos
+            WHERE date(data_orcamento) <= ?
+              AND status IN ('Em orçamento', 'Em orÃ§amento', 'Aguardando pagamento')
+            ORDER BY id DESC
+            """, (limite,))
+        except Exception:
+            orcs = pd.DataFrame()
+
+        for _, r in orcs.iterrows():
+            ok = criar_alerta_erp(
+                "Comercial",
+                "Orçamento",
+                int(r["id"]),
+                f"Follow-up orçamento: {r['cliente_nome']}",
+                f"O orçamento {codigo_visual('ORC', r['id'], ano=datetime.now().year)} de {r['cliente_nome']} está aguardando resposta.",
+                "Normal",
+                "Enviar mensagem de follow-up pelo WhatsApp.",
+                "Orçamentos",
+            )
+            criados += 1 if ok else 0
+
+    # 6) Aniversariantes
+    if automacao_ativa("aniversariantes"):
+        try:
+            anivers = aniversariantes_periodo()
+        except Exception:
+            anivers = pd.DataFrame()
+
+        if not anivers.empty:
+            for _, r in anivers.iterrows():
+                ok = criar_alerta_erp(
+                    "CRM",
+                    "Aniversário",
+                    int(r["id"]),
+                    f"Aniversariante do mês: {r['nome']}",
+                    f"O cliente {r['nome']} faz aniversário neste mês. WhatsApp: {r.get('whatsapp','')}.",
+                    "Baixa",
+                    "Enviar mensagem de aniversário ou cupom especial.",
+                    "CRM Inteligente",
+                )
+                criados += 1 if ok else 0
+
+    try:
+        executar("UPDATE automacoes_erp SET ultima_execucao=CURRENT_TIMESTAMP WHERE ativo='Sim'")
+    except Exception:
+        pass
+
+    return criados
+
+
+def mensagem_whatsapp_alerta(alerta):
+    titulo = str(alerta.get("titulo", ""))
+    mensagem = str(alerta.get("mensagem", ""))
+    acao = str(alerta.get("acao_sugerida", ""))
+    return f"Alerta Sophi ERP%0A%0A{titulo}%0A{mensagem}%0A%0AAção sugerida: {acao}"
+
+
+def tela_central_automacao():
+    garantir_automacoes_erp()
+
+    st.title("Central de Automação")
+    st.write("Alertas inteligentes, painel executivo e ações rápidas do Sophi ERP.")
+
+    abas = st.tabs([
+        "Painel executivo",
+        "Alertas",
+        "Automações",
+        "Ações rápidas",
+    ])
+
+    with abas[0]:
+        st.subheader("Painel executivo")
+
+        if st.button("Executar automações agora"):
+            novos = executar_automacoes_erp()
+            st.success(f"{novos} novo(s) alerta(s) gerado(s).")
+            st.rerun()
+
+        alertas = consultar("""
+        SELECT *
+        FROM alertas_erp
+        WHERE status IN ('Novo', 'Lido')
+        ORDER BY
+            CASE prioridade
+                WHEN 'Alta' THEN 1
+                WHEN 'Normal' THEN 2
+                WHEN 'Baixa' THEN 3
+                ELSE 4
+            END,
+            id DESC
+        """)
+
+        qtd_alta = len(alertas[alertas["prioridade"] == "Alta"]) if not alertas.empty else 0
+        qtd_total = len(alertas) if not alertas.empty else 0
+
+        try:
+            ops_abertas = consultar("""
+            SELECT COUNT(*) AS total FROM ordens_producao
+            WHERE ativo='Sim' AND status NOT IN ('Entregue', 'Cancelado')
+            """).iloc[0]["total"]
+        except Exception:
+            ops_abertas = 0
+
+        try:
+            entregas_hoje = consultar("""
+            SELECT COUNT(*) AS total FROM entregas
+            WHERE ativo='Sim' AND data_entrega=? AND status NOT IN ('Entregue', 'Cancelado')
+            """, (hoje_iso(),)).iloc[0]["total"]
+        except Exception:
+            entregas_hoje = 0
+
+        try:
+            contas_atrasadas = consultar("""
+            SELECT COUNT(*) AS total FROM contas_pagar
+            WHERE ativo='Sim' AND status NOT IN ('Pago', 'Cancelado') AND data_vencimento < ?
+            """, (hoje_iso(),)).iloc[0]["total"]
+        except Exception:
+            contas_atrasadas = 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            card("Alertas ativos", str(qtd_total))
+        with c2:
+            card("Alertas alta prioridade", str(qtd_alta))
+        with c3:
+            card("OPs abertas", str(ops_abertas))
+        with c4:
+            card("Entregas hoje", str(entregas_hoje))
+
+        c5, c6 = st.columns(2)
+        with c5:
+            card("Contas atrasadas", str(contas_atrasadas))
+        with c6:
+            try:
+                resumo = resumo_estoque_inteligente()
+                baixo = len(resumo[resumo["disponivel"] <= resumo["estoque_minimo"]]) if not resumo.empty else 0
+            except Exception:
+                baixo = 0
+            card("Estoque em atenção", str(baixo))
+
+        st.divider()
+
+        st.subheader("Alertas principais")
+        if alertas.empty:
+            st.success("Nenhum alerta ativo no momento.")
+        else:
+            st.dataframe(alertas.head(15), use_container_width=True, hide_index=True)
+
+    with abas[1]:
+        st.subheader("Gerenciar alertas")
+
+        alertas = consultar("""
+        SELECT *
+        FROM alertas_erp
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if alertas.empty:
+            st.info("Nenhum alerta gerado ainda.")
+        else:
+            filtro_status = st.selectbox("Filtrar status", ["Todos", "Novo", "Lido", "Resolvido", "Arquivado"])
+            filtro_prioridade = st.selectbox("Filtrar prioridade", ["Todas", "Alta", "Normal", "Baixa"])
+
+            df = alertas.copy()
+            if filtro_status != "Todos":
+                df = df[df["status"] == filtro_status]
+            if filtro_prioridade != "Todas":
+                df = df[df["prioridade"] == filtro_prioridade]
+
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_alertas_erp",
+                column_config={
+                    "status": st.column_config.SelectboxColumn("Status", options=["Novo", "Lido", "Resolvido", "Arquivado"]),
+                    "prioridade": st.column_config.SelectboxColumn("Prioridade", options=["Alta", "Normal", "Baixa"]),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações dos alertas"):
+                    for _, r in edited.iterrows():
+                        executar("""
+                        UPDATE alertas_erp
+                        SET status=?, prioridade=?, acao_sugerida=?
+                        WHERE id=?
+                        """, (
+                            str(r.get("status", "Novo")),
+                            str(r.get("prioridade", "Normal")),
+                            str(r.get("acao_sugerida", "")),
+                            int(r["id"]),
+                        ))
+                    st.success("Alertas atualizados.")
+                    st.rerun()
+
+            with c2:
+                if st.button("Arquivar alertas resolvidos"):
+                    executar("UPDATE alertas_erp SET status='Arquivado' WHERE status='Resolvido'")
+                    st.success("Alertas resolvidos arquivados.")
+                    st.rerun()
+
+    with abas[2]:
+        st.subheader("Configurar automações")
+
+        autos = consultar("""
+        SELECT *
+        FROM automacoes_erp
+        ORDER BY id ASC
+        """)
+
+        if autos.empty:
+            st.info("Nenhuma automação cadastrada.")
+        else:
+            edited = st.data_editor(
+                autos,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_automacoes_erp",
+                column_config={
+                    "ativo": st.column_config.SelectboxColumn("Ativo", options=["Sim", "Não"]),
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Alerta", "Ação", "Lembrete"]),
+                    "canal": st.column_config.SelectboxColumn("Canal", options=["ERP", "WhatsApp manual", "E-mail manual"]),
+                },
+            )
+
+            if st.button("Salvar automações"):
+                for _, r in edited.iterrows():
+                    if str(r.get("nome", "")).strip():
+                        if pd.isna(r.get("id")):
+                            executar("""
+                            INSERT INTO automacoes_erp(nome, tipo, regra, canal, mensagem, ativo, observacoes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(r.get("nome", "")),
+                                str(r.get("tipo", "Alerta")),
+                                str(r.get("regra", "")),
+                                str(r.get("canal", "ERP")),
+                                str(r.get("mensagem", "")),
+                                str(r.get("ativo", "Sim")),
+                                str(r.get("observacoes", "")),
+                            ))
+                        else:
+                            executar("""
+                            UPDATE automacoes_erp
+                            SET nome=?, tipo=?, regra=?, canal=?, mensagem=?, ativo=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("nome", "")),
+                                str(r.get("tipo", "Alerta")),
+                                str(r.get("regra", "")),
+                                str(r.get("canal", "ERP")),
+                                str(r.get("mensagem", "")),
+                                str(r.get("ativo", "Sim")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                st.success("Automações salvas.")
+                st.rerun()
+
+    with abas[3]:
+        st.subheader("Ações rápidas")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Criar tarefas automáticas")
+            if st.button("Sincronizar OPs com Agenda"):
+                try:
+                    tarefas, entregas = sincronizar_op_com_agenda()
+                    st.success(f"{tarefas} tarefa(s) e {entregas} entrega(s) criadas.")
+                except Exception as e:
+                    st.error(f"Não foi possível sincronizar: {e}")
+
+            if st.button("Criar follow-ups de orçamentos"):
+                try:
+                    qtd = sincronizar_orcamentos_com_agenda()
+                    st.success(f"{qtd} follow-up(s) criado(s).")
+                except Exception as e:
+                    st.error(f"Não foi possível criar follow-ups: {e}")
+
+            if st.button("Atualizar fidelidade dos clientes"):
+                try:
+                    qtd = sincronizar_fidelidade_clientes()
+                    st.success(f"{qtd} cliente(s) atualizado(s).")
+                except Exception as e:
+                    st.error(f"Não foi possível atualizar fidelidade: {e}")
+
+        with col2:
+            st.markdown("### Gerar alertas")
+            if st.button("Verificar estoque, financeiro, produção e CRM"):
+                novos = executar_automacoes_erp()
+                st.success(f"{novos} novo(s) alerta(s) gerado(s).")
+
+            st.markdown("### Mensagem WhatsApp de alerta")
+            alertas_novos = consultar("""
+            SELECT *
+            FROM alertas_erp
+            WHERE status IN ('Novo', 'Lido')
+            ORDER BY id DESC
+            LIMIT 50
+            """)
+
+            if alertas_novos.empty:
+                st.info("Nenhum alerta ativo para mensagem.")
+            else:
+                mapa = {
+                    f"{r['id']} - {r['titulo']}": int(r["id"])
+                    for _, r in alertas_novos.iterrows()
+                }
+
+                esc = st.selectbox("Escolha alerta", list(mapa.keys()))
+                aid = mapa[esc]
+                alerta = alertas_novos[alertas_novos["id"] == aid].iloc[0].to_dict()
+                msg = mensagem_whatsapp_alerta(alerta)
+                st.text_area("Mensagem pronta", value=msg.replace("%0A", "\n"), height=160)
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -8926,6 +9548,7 @@ menu = st.sidebar.radio(
         "Financeiro Profissional",
         "Dashboard Financeiro",
         "Relatórios Inteligentes",
+        "Central de Automação",
         "Categorias",
         "Catálogo público",
         "Portal do Cliente",
@@ -8978,6 +9601,8 @@ elif menu == "Dashboard Financeiro":
     tela_dashboard_financeiro()
 elif menu == "Relatórios Inteligentes":
     tela_relatorios_inteligentes()
+elif menu == "Central de Automação":
+    tela_central_automacao()
 elif menu == "Categorias":
     tela_categorias()
 elif menu == "Portal do Cliente":
