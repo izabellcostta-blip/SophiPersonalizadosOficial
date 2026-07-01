@@ -523,6 +523,41 @@ def criar_banco():
     )
     """)
 
+
+    # Migração automática das Ordens de Produção para bancos já existentes.
+    # Se a tabela foi criada antes sem alguma coluna, o sistema adiciona sem apagar seus dados.
+    migracoes_op = {
+        "codigo": "TEXT",
+        "orcamento_id": "INTEGER",
+        "cliente_nome": "TEXT",
+        "whatsapp": "TEXT",
+        "data_criacao": "TEXT DEFAULT CURRENT_TIMESTAMP",
+        "data_entrega": "TEXT",
+        "prioridade": "TEXT DEFAULT 'Normal'",
+        "status": "TEXT DEFAULT 'Aguardando'",
+        "itens_json": "TEXT",
+        "materiais_json": "TEXT",
+        "checklist_json": "TEXT",
+        "observacoes": "TEXT",
+        "ativo": "TEXT DEFAULT 'Sim'",
+    }
+
+    for coluna, tipo in migracoes_op.items():
+        try:
+            executar(f"ALTER TABLE ordens_producao ADD COLUMN {coluna} {tipo}")
+        except Exception:
+            pass
+
+    try:
+        executar("""
+        UPDATE ordens_producao
+        SET codigo = 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)
+        WHERE codigo IS NULL OR codigo = ''
+        """)
+    except Exception:
+        pass
+
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -3591,8 +3626,16 @@ def tela_producao():
         st.subheader("Painel de produção")
 
         ops = consultar("""
-        SELECT id, codigo, orcamento_id, cliente_nome, whatsapp, data_criacao,
-               data_entrega, prioridade, status, observacoes
+        SELECT id,
+               COALESCE(codigo, 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)) AS codigo,
+               orcamento_id,
+               cliente_nome,
+               whatsapp,
+               data_criacao,
+               data_entrega,
+               prioridade,
+               status,
+               observacoes
         FROM ordens_producao
         WHERE ativo='Sim'
         ORDER BY
@@ -3743,7 +3786,12 @@ def tela_producao():
         st.subheader("Ficha da Ordem de Produção")
 
         ops = consultar("""
-        SELECT id, codigo, cliente_nome, status, prioridade, data_entrega
+        SELECT id,
+               COALESCE(codigo, 'OP-' || strftime('%Y','now') || '-' || printf('%04d', id)) AS codigo,
+               cliente_nome,
+               status,
+               prioridade,
+               data_entrega
         FROM ordens_producao
         WHERE ativo='Sim'
         ORDER BY id DESC
