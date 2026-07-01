@@ -2762,6 +2762,8 @@ def tela_orcamentos():
                 """, (hoje_iso(), "Entrada", f"Orçamento #{ultimo} - {cliente['nome']}", "Venda", forma_pagamento, total_geral, "Orçamento", int(ultimo), observacoes))
 
             garantir_ordem_producao(int(ultimo))
+            if status in ["Produção", "ProduÃ§Ã£o", "Finalizado", "Entregue"]:
+                criar_op_de_orcamento(int(ultimo), prioridade="Normal", observacoes_extra="Criada automaticamente ao salvar orçamento.")
             st.success(f"Orçamento {codigo_visual('ORC', int(ultimo), ano=datetime.now().year)} salvo com sucesso.")
             st.rerun()
 
@@ -3574,6 +3576,283 @@ def registrar_historico_kit(kit_id, acao, observacoes=""):
 
 def calcular_preco_kit(custo_total, margem):
     return n(custo_total) * (1 + n(margem) / 100)
+
+
+
+
+
+def tela_producao():
+    st.title("Produção")
+    st.write("Central de produção com Ordem de Produção, checklist, prioridade, prazos e ficha para impressão.")
+
+    abas = st.tabs(["Painel de produção", "Criar OP", "Ficha da OP", "Histórico"])
+
+    with abas[0]:
+        st.subheader("Painel de produção")
+
+        ops = consultar("""
+        SELECT id, codigo, orcamento_id, cliente_nome, whatsapp, data_criacao,
+               data_entrega, prioridade, status, observacoes
+        FROM ordens_producao
+        WHERE ativo='Sim'
+        ORDER BY
+            CASE prioridade
+                WHEN 'Urgente' THEN 1
+                WHEN 'Normal' THEN 2
+                WHEN 'Baixa' THEN 3
+                ELSE 4
+            END,
+            data_entrega ASC,
+            id DESC
+        """)
+
+        if ops.empty:
+            st.info("Ainda não há ordens de produção.")
+        else:
+            hoje = datetime.now().date()
+
+            atrasadas = 0
+            entregas_hoje = 0
+            produzindo = 0
+            aguardando = 0
+
+            for _, r in ops.iterrows():
+                try:
+                    d = pd.to_datetime(r["data_entrega"], errors="coerce").date()
+                    if d < hoje and r["status"] not in ["Entregue", "Cancelado"]:
+                        atrasadas += 1
+                    if d == hoje and r["status"] not in ["Entregue", "Cancelado"]:
+                        entregas_hoje += 1
+                except Exception:
+                    pass
+
+                if r["status"] == "Produzindo":
+                    produzindo += 1
+                if r["status"] == "Aguardando":
+                    aguardando += 1
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                card("Aguardando", str(aguardando))
+            with c2:
+                card("Produzindo", str(produzindo))
+            with c3:
+                card("Entregas hoje", str(entregas_hoje))
+            with c4:
+                card("Atrasadas", str(atrasadas))
+
+            st.divider()
+
+            filtro_status = st.selectbox("Filtrar por status", ["Todos", "Aguardando", "Produzindo", "Finalizado", "Entregue", "Cancelado"])
+            filtro_prioridade = st.selectbox("Filtrar por prioridade", ["Todas", "Urgente", "Normal", "Baixa"])
+
+            df_view = ops.copy()
+
+            if filtro_status != "Todos":
+                df_view = df_view[df_view["status"] == filtro_status]
+
+            if filtro_prioridade != "Todas":
+                df_view = df_view[df_view["prioridade"] == filtro_prioridade]
+
+            edited = st.data_editor(
+                df_view,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_ops",
+                column_config={
+                    "status": st.column_config.SelectboxColumn(
+                        "Status",
+                        options=["Aguardando", "Produzindo", "Finalizado", "Entregue", "Cancelado"],
+                    ),
+                    "prioridade": st.column_config.SelectboxColumn(
+                        "Prioridade",
+                        options=["Urgente", "Normal", "Baixa"],
+                    ),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações das OPs"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("codigo", "")).strip():
+                            executar("""
+                            UPDATE ordens_producao
+                            SET data_entrega=?, prioridade=?, status=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("data_entrega", "")),
+                                str(r.get("prioridade", "Normal")),
+                                str(r.get("status", "Aguardando")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                            registrar_historico_producao(int(r["id"]), "OP atualizada", f"Status: {r.get('status', '')}")
+                    st.success("Produção atualizada.")
+                    st.rerun()
+
+            with c2:
+                id_cancelar = st.number_input("ID para cancelar/excluir", min_value=0, step=1, key="cancelar_op")
+                if st.button("Cancelar OP"):
+                    if id_cancelar > 0:
+                        executar("UPDATE ordens_producao SET ativo='Não', status='Cancelado' WHERE id=?", (int(id_cancelar),))
+                        registrar_historico_producao(int(id_cancelar), "OP cancelada", "Cancelada pelo painel.")
+                        st.success("OP cancelada.")
+                        st.rerun()
+
+    with abas[1]:
+        st.subheader("Criar OP manualmente ou a partir de orçamento")
+
+        orcs = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, total, data_orcamento
+        FROM orcamentos
+        ORDER BY id DESC
+        """)
+
+        if orcs.empty:
+            st.info("Ainda não há orçamentos para gerar OP.")
+        else:
+            opcoes = []
+            mapa = {}
+
+            for _, r in orcs.iterrows():
+                label = f"ORC-{int(r['id']):04d} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}"
+                opcoes.append(label)
+                mapa[label] = int(r["id"])
+
+            escolhido = st.selectbox("Escolha um orçamento", opcoes)
+
+            c1, c2 = st.columns(2)
+            prioridade = c1.selectbox("Prioridade", ["Normal", "Urgente", "Baixa"])
+            data_entrega = c2.text_input("Data de entrega", value=(datetime.now().date() + timedelta(days=7)).isoformat())
+
+            obs = st.text_area("Observações extras da produção")
+
+            if st.button("Criar Ordem de Produção"):
+                orc_id = mapa[escolhido]
+                op_id = criar_op_de_orcamento(orc_id, prioridade=prioridade, data_entrega=data_entrega, observacoes_extra=obs)
+
+                if op_id:
+                    st.success(f"OP criada: {codigo_op(op_id)}")
+                    st.rerun()
+                else:
+                    st.error("Não foi possível criar OP. Talvez ela já exista para este orçamento.")
+
+    with abas[2]:
+        st.subheader("Ficha da Ordem de Produção")
+
+        ops = consultar("""
+        SELECT id, codigo, cliente_nome, status, prioridade, data_entrega
+        FROM ordens_producao
+        WHERE ativo='Sim'
+        ORDER BY id DESC
+        """)
+
+        if ops.empty:
+            st.info("Nenhuma OP cadastrada.")
+        else:
+            mapa = {
+                f"{row['codigo']} | {row['cliente_nome']} | {row['status']}": int(row["id"])
+                for _, row in ops.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha uma OP", list(mapa.keys()), key="select_ficha_op")
+            op_id = mapa[escolhido]
+
+            op = consultar("SELECT * FROM ordens_producao WHERE id=?", (int(op_id),))
+
+            if not op.empty:
+                o = op.iloc[0]
+
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    card("OP", o["codigo"])
+                with c2:
+                    card("Cliente", o["cliente_nome"])
+                with c3:
+                    card("Status", o["status"])
+                with c4:
+                    card("Prioridade", o["prioridade"])
+
+                st.write(f"**WhatsApp:** {o['whatsapp'] or '-'}")
+                st.write(f"**Orçamento:** #{o['orcamento_id'] or '-'}")
+                st.write(f"**Data de entrega:** {o['data_entrega'] or '-'}")
+                st.write(f"**Observações:** {o['observacoes'] or '-'}")
+
+                st.markdown("### Checklist da produção")
+
+                try:
+                    checklist = json.loads(o["checklist_json"] or "{}")
+                except Exception:
+                    checklist = checklist_padrao_producao()
+
+                novo_checklist = {}
+
+                cks = st.columns(3)
+                for idx, (nome_check, valor) in enumerate(checklist.items()):
+                    with cks[idx % 3]:
+                        novo_checklist[nome_check] = st.checkbox(nome_check, value=bool(valor), key=f"check_{op_id}_{nome_check}")
+
+                if st.button("Salvar checklist da OP"):
+                    novo_status = status_por_checklist(novo_checklist)
+                    executar("""
+                    UPDATE ordens_producao
+                    SET checklist_json=?, status=?
+                    WHERE id=?
+                    """, (
+                        json.dumps(novo_checklist, ensure_ascii=False),
+                        novo_status,
+                        int(op_id),
+                    ))
+                    registrar_historico_producao(int(op_id), "Checklist atualizado", f"Novo status: {novo_status}")
+                    st.success("Checklist salvo.")
+                    st.rerun()
+
+                st.markdown("### Itens do pedido")
+                try:
+                    itens = json.loads(o["itens_json"] or "[]")
+                    if itens:
+                        st.dataframe(formatar_valores_tabela(pd.DataFrame(itens)), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Nenhum item salvo.")
+                except Exception:
+                    st.warning("Não foi possível ler os itens.")
+
+                st.markdown("### Materiais necessários")
+                try:
+                    materiais = json.loads(o["materiais_json"] or "[]")
+                    if materiais:
+                        st.dataframe(formatar_valores_tabela(pd.DataFrame(materiais)), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Nenhum material encontrado automaticamente.")
+                except Exception:
+                    st.warning("Não foi possível ler os materiais.")
+
+                html = gerar_html_ficha_producao(int(op_id))
+                if html:
+                    st.download_button(
+                        "Baixar ficha de produção para imprimir",
+                        data=html.encode("utf-8"),
+                        file_name=f"ficha_producao_{o['codigo']}.html",
+                        mime="text/html",
+                    )
+
+    with abas[3]:
+        st.subheader("Histórico de produção")
+
+        hist = consultar("""
+        SELECT h.data, o.codigo, o.cliente_nome, h.acao, h.observacoes
+        FROM historico_producao h
+        LEFT JOIN ordens_producao o ON o.id = h.op_id
+        ORDER BY h.id DESC
+        LIMIT 300
+        """)
+
+        if hist.empty:
+            st.info("Sem histórico ainda.")
+        else:
+            st.dataframe(hist, use_container_width=True, hide_index=True)
 
 
 def tela_kits():
@@ -4390,6 +4669,365 @@ def tela_catalogo_publico_cliente():
     )
 
 
+
+
+# ============================================================
+# MÓDULO 2 — PRODUÇÃO / ORDEM DE PRODUÇÃO
+# ============================================================
+
+def codigo_op(op_id):
+    try:
+        return codigo_visual("OP", int(op_id), ano=datetime.now().year)
+    except Exception:
+        return f"OP-{datetime.now().year}-{int(op_id):04d}"
+
+
+def checklist_padrao_producao():
+    return {
+        "Imprimir": False,
+        "Laminar": False,
+        "Cortar": False,
+        "Montar kit": False,
+        "Embalar": False,
+        "Etiqueta": False,
+        "Entregar": False,
+    }
+
+
+def registrar_historico_producao(op_id, acao, observacoes=""):
+    try:
+        executar("""
+        INSERT INTO historico_producao(op_id, acao, observacoes)
+        VALUES (?, ?, ?)
+        """, (int(op_id), str(acao), str(observacoes)))
+    except Exception:
+        pass
+
+
+def obter_itens_orcamento_para_op(orcamento_id):
+    try:
+        itens = consultar("""
+        SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+        FROM orcamento_itens
+        WHERE orcamento_id=?
+        """, (int(orcamento_id),))
+        if itens.empty:
+            return []
+        return itens.to_dict("records")
+    except Exception:
+        return []
+
+
+def obter_materiais_para_op(itens):
+    materiais = []
+
+    try:
+        for item in itens:
+            produto_nome = str(item.get("produto", ""))
+
+            prod = consultar("""
+            SELECT receita_json, tintas_json, equipamentos_json
+            FROM produtos
+            WHERE nome=?
+            LIMIT 1
+            """, (produto_nome,))
+
+            if not prod.empty:
+                p = prod.iloc[0]
+                for campo, tipo in [
+                    ("receita_json", "Item utilizado"),
+                    ("tintas_json", "Tinta"),
+                    ("equipamentos_json", "Equipamento"),
+                ]:
+                    try:
+                        dados = json.loads(p[campo] or "[]")
+                        for d in dados:
+                            materiais.append({
+                                "origem": produto_nome,
+                                "tipo": tipo,
+                                "nome": d.get("nome", ""),
+                                "categoria": d.get("categoria", ""),
+                                "qtd": d.get("qtd", ""),
+                            })
+                    except Exception:
+                        pass
+
+            kit = consultar("""
+            SELECT itens_json
+            FROM kits
+            WHERE nome=?
+            LIMIT 1
+            """, (produto_nome,))
+
+            if not kit.empty:
+                try:
+                    dados_kit = json.loads(kit.iloc[0]["itens_json"] or "[]")
+                    for d in dados_kit:
+                        materiais.append({
+                            "origem": produto_nome,
+                            "tipo": "Kit",
+                            "nome": d.get("nome", ""),
+                            "categoria": d.get("categoria", ""),
+                            "qtd": d.get("qtd", ""),
+                        })
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    return materiais
+
+
+def criar_op_de_orcamento(orcamento_id, prioridade="Normal", data_entrega="", observacoes_extra=""):
+    try:
+        existe = consultar("SELECT id FROM ordens_producao WHERE orcamento_id=? AND ativo='Sim'", (int(orcamento_id),))
+        if not existe.empty:
+            return int(existe.iloc[0]["id"])
+
+        orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+        if orc.empty:
+            return None
+
+        o = orc.iloc[0]
+        itens = obter_itens_orcamento_para_op(int(orcamento_id))
+        materiais = obter_materiais_para_op(itens)
+
+        if not data_entrega:
+            try:
+                validade = int(n(obter_config("validade_orcamento", "7"), 7))
+                data_entrega = (datetime.now().date() + timedelta(days=validade)).isoformat()
+            except Exception:
+                data_entrega = (datetime.now().date() + timedelta(days=7)).isoformat()
+
+        op_id_previsto = consultar("SELECT COALESCE(MAX(id),0)+1 AS proximo FROM ordens_producao").iloc[0]["proximo"]
+        codigo = codigo_op(int(op_id_previsto))
+
+        op_id = executar("""
+        INSERT INTO ordens_producao(
+            codigo, orcamento_id, cliente_nome, whatsapp, data_entrega,
+            prioridade, status, itens_json, materiais_json, checklist_json, observacoes, ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            codigo,
+            int(orcamento_id),
+            str(o.get("cliente_nome", "")),
+            str(o.get("whatsapp", "")),
+            str(data_entrega),
+            str(prioridade),
+            "Aguardando",
+            json.dumps(itens, ensure_ascii=False),
+            json.dumps(materiais, ensure_ascii=False),
+            json.dumps(checklist_padrao_producao(), ensure_ascii=False),
+            str(o.get("observacoes", "") or "") + ("\n" + observacoes_extra if observacoes_extra else ""),
+            "Sim",
+        ))
+
+        registrar_historico_producao(op_id, "OP criada", f"Criada a partir do orçamento #{orcamento_id}")
+        return op_id
+
+    except Exception as e:
+        return None
+
+
+def status_por_checklist(checklist):
+    try:
+        if not checklist:
+            return "Aguardando"
+        valores = list(checklist.values())
+        if all(valores):
+            return "Entregue" if checklist.get("Entregar") else "Finalizado"
+        if any(valores):
+            return "Produzindo"
+        return "Aguardando"
+    except Exception:
+        return "Aguardando"
+
+
+def gerar_html_ficha_producao(op_id):
+    op = consultar("SELECT * FROM ordens_producao WHERE id=?", (int(op_id),))
+    if op.empty:
+        return ""
+
+    o = op.iloc[0]
+    empresa = obter_config("nome_empresa", EMPRESA)
+
+    try:
+        itens = json.loads(o["itens_json"] or "[]")
+    except Exception:
+        itens = []
+
+    try:
+        materiais = json.loads(o["materiais_json"] or "[]")
+    except Exception:
+        materiais = []
+
+    try:
+        checklist = json.loads(o["checklist_json"] or "{}")
+    except Exception:
+        checklist = checklist_padrao_producao()
+
+    linhas_itens = ""
+    for item in itens:
+        linhas_itens += f"""
+        <tr>
+            <td>{item.get('produto','')}</td>
+            <td>{item.get('categoria','')}</td>
+            <td>{item.get('quantidade','')}</td>
+        </tr>
+        """
+
+    linhas_materiais = ""
+    for m in materiais:
+        linhas_materiais += f"""
+        <tr>
+            <td>{m.get('origem','')}</td>
+            <td>{m.get('tipo','')}</td>
+            <td>{m.get('nome','')}</td>
+            <td>{m.get('qtd','')}</td>
+        </tr>
+        """
+
+    checklist_html = ""
+    for nome, feito in checklist.items():
+        marca = "☑" if feito else "☐"
+        checklist_html += f"<div class='check'>{marca} {nome}</div>"
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ficha de Produção {o['codigo']}</title>
+<style>
+body {{
+    font-family: Arial, sans-serif;
+    background: #fff;
+    color: #111;
+    padding: 20px;
+}}
+.page {{
+    max-width: 900px;
+    margin: 0 auto;
+}}
+.header {{
+    border-bottom: 3px solid #111;
+    padding-bottom: 12px;
+    margin-bottom: 18px;
+    display: flex;
+    justify-content: space-between;
+}}
+h1 {{
+    margin: 0;
+    font-size: 28px;
+}}
+.badge {{
+    border: 2px solid #111;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-weight: 800;
+}}
+.grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}}
+.box {{
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 12px;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+}}
+th {{
+    background: #000;
+    color: #fff;
+    text-align: left;
+    padding: 8px;
+}}
+td {{
+    border-bottom: 1px solid #eee;
+    padding: 7px;
+}}
+.check {{
+    font-size: 17px;
+    margin: 8px 0;
+}}
+button {{
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    background: #111;
+    color: #fff;
+    border: 0;
+    border-radius: 10px;
+    padding: 12px 18px;
+    font-weight: 800;
+}}
+@media print {{
+    button {{ display:none; }}
+}}
+</style>
+</head>
+<body>
+<button onclick="window.print()">Imprimir</button>
+<div class="page">
+    <div class="header">
+        <div>
+            <h1>{empresa}</h1>
+            <p>Ficha de produção</p>
+        </div>
+        <div class="badge">{o['codigo']}</div>
+    </div>
+
+    <div class="grid">
+        <div class="box">
+            <b>Cliente:</b> {o['cliente_nome']}<br>
+            <b>WhatsApp:</b> {o['whatsapp'] or '-'}<br>
+            <b>Orçamento:</b> #{o['orcamento_id'] or '-'}
+        </div>
+        <div class="box">
+            <b>Status:</b> {o['status']}<br>
+            <b>Prioridade:</b> {o['prioridade']}<br>
+            <b>Entrega:</b> {o['data_entrega'] or '-'}
+        </div>
+    </div>
+
+    <div class="box">
+        <h2>Checklist</h2>
+        {checklist_html}
+    </div>
+
+    <div class="box">
+        <h2>Itens do pedido</h2>
+        <table>
+            <thead><tr><th>Produto/Kit</th><th>Categoria</th><th>Qtd</th></tr></thead>
+            <tbody>{linhas_itens}</tbody>
+        </table>
+    </div>
+
+    <div class="box">
+        <h2>Materiais necessários</h2>
+        <table>
+            <thead><tr><th>Origem</th><th>Tipo</th><th>Material</th><th>Qtd</th></tr></thead>
+            <tbody>{linhas_materiais}</tbody>
+        </table>
+    </div>
+
+    <div class="box">
+        <h2>Observações</h2>
+        <p>{o['observacoes'] or '-'}</p>
+    </div>
+</div>
+</body>
+</html>"""
+    return html
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -4589,6 +5227,7 @@ menu = st.sidebar.radio(
         "Dashboard",
         "Clientes",
         "Orçamentos",
+        "Produção",
         "Produtos / Precificação",
         "Kits",
         "Papéis",
@@ -4613,6 +5252,8 @@ elif menu == "Clientes":
     tela_clientes()
 elif menu == "Orçamentos":
     tela_orcamentos()
+elif menu == "Produção":
+    tela_producao()
 elif menu == "Ordem de Produção":
     tela_ordens_producao()
 elif menu == "Produtos / Precificação":
