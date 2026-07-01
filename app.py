@@ -595,6 +595,111 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS contas_pagar (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        descricao TEXT NOT NULL,
+        fornecedor TEXT,
+        categoria TEXT,
+        centro_custo TEXT,
+        forma_pagamento TEXT,
+        valor REAL DEFAULT 0,
+        data_emissao TEXT DEFAULT CURRENT_DATE,
+        data_vencimento TEXT,
+        data_pagamento TEXT,
+        status TEXT DEFAULT 'Pendente',
+        recorrente TEXT DEFAULT 'Não',
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS contas_receber (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        descricao TEXT NOT NULL,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        categoria TEXT,
+        forma_pagamento TEXT,
+        valor REAL DEFAULT 0,
+        valor_recebido REAL DEFAULT 0,
+        data_emissao TEXT DEFAULT CURRENT_DATE,
+        data_vencimento TEXT,
+        data_recebimento TEXT,
+        status TEXT DEFAULT 'Pendente',
+        origem TEXT,
+        referencia_id INTEGER,
+        observacoes TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS centros_custo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL,
+        tipo TEXT DEFAULT 'Despesa',
+        ativo TEXT DEFAULT 'Sim',
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS categorias_financeiras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE NOT NULL,
+        tipo TEXT DEFAULT 'Despesa',
+        ativo TEXT DEFAULT 'Sim',
+        observacoes TEXT
+    )
+    """)
+
+    # Padrões iniciais do financeiro profissional
+    centros_padrao = [
+        ("Impressão", "Despesa"),
+        ("Embalagens", "Despesa"),
+        ("Marketing", "Despesa"),
+        ("Equipamentos", "Despesa"),
+        ("Entregas", "Despesa"),
+        ("Insumos", "Despesa"),
+        ("Produtos para kits", "Despesa"),
+        ("Administrativo", "Despesa"),
+        ("Vendas", "Receita"),
+        ("Outros", "Despesa"),
+    ]
+
+    for nome_centro, tipo_centro in centros_padrao:
+        executar("""
+        INSERT OR IGNORE INTO centros_custo(nome, tipo, ativo)
+        VALUES (?, ?, 'Sim')
+        """, (nome_centro, tipo_centro))
+
+    categorias_fin_padrao = [
+        ("Venda", "Receita"),
+        ("Encomenda", "Receita"),
+        ("Kit", "Receita"),
+        ("Papel", "Despesa"),
+        ("Tinta", "Despesa"),
+        ("BOPP / Laminação", "Despesa"),
+        ("Embalagem", "Despesa"),
+        ("Manta / Ímã", "Despesa"),
+        ("Energia", "Despesa"),
+        ("Internet", "Despesa"),
+        ("Marketing", "Despesa"),
+        ("Entrega / Motoboy", "Despesa"),
+        ("Equipamento", "Despesa"),
+        ("Fornecedor", "Despesa"),
+        ("Outros", "Despesa"),
+    ]
+
+    for nome_cat, tipo_cat in categorias_fin_padrao:
+        executar("""
+        INSERT OR IGNORE INTO categorias_financeiras(nome, tipo, ativo)
+        VALUES (?, ?, 'Sim')
+        """, (nome_cat, tipo_cat))
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -5669,6 +5774,650 @@ def tela_estoque_inteligente():
             st.dataframe(formatar_valores_tabela(ranking), use_container_width=True, hide_index=True)
 
 
+
+
+# ============================================================
+# MÓDULO 4A — FINANCEIRO PROFISSIONAL
+# ============================================================
+
+def garantir_financeiro_profissional():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS contas_pagar (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL,
+            fornecedor TEXT,
+            categoria TEXT,
+            centro_custo TEXT,
+            forma_pagamento TEXT,
+            valor REAL DEFAULT 0,
+            data_emissao TEXT DEFAULT CURRENT_DATE,
+            data_vencimento TEXT,
+            data_pagamento TEXT,
+            status TEXT DEFAULT 'Pendente',
+            recorrente TEXT DEFAULT 'Não',
+            observacoes TEXT,
+            ativo TEXT DEFAULT 'Sim'
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS contas_receber (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL,
+            cliente_id INTEGER,
+            cliente_nome TEXT,
+            categoria TEXT,
+            forma_pagamento TEXT,
+            valor REAL DEFAULT 0,
+            valor_recebido REAL DEFAULT 0,
+            data_emissao TEXT DEFAULT CURRENT_DATE,
+            data_vencimento TEXT,
+            data_recebimento TEXT,
+            status TEXT DEFAULT 'Pendente',
+            origem TEXT,
+            referencia_id INTEGER,
+            observacoes TEXT,
+            ativo TEXT DEFAULT 'Sim'
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS centros_custo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE NOT NULL,
+            tipo TEXT DEFAULT 'Despesa',
+            ativo TEXT DEFAULT 'Sim',
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS categorias_financeiras (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE NOT NULL,
+            tipo TEXT DEFAULT 'Despesa',
+            ativo TEXT DEFAULT 'Sim',
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+
+def codigo_conta(prefixo, id_valor):
+    try:
+        return codigo_visual(prefixo, int(id_valor))
+    except Exception:
+        return f"{prefixo}-{int(id_valor):04d}"
+
+
+def categorias_financeiras_ativas(tipo=None):
+    try:
+        if tipo:
+            df = consultar("""
+            SELECT nome FROM categorias_financeiras
+            WHERE ativo='Sim' AND tipo=?
+            ORDER BY nome
+            """, (tipo,))
+        else:
+            df = consultar("""
+            SELECT nome FROM categorias_financeiras
+            WHERE ativo='Sim'
+            ORDER BY nome
+            """)
+        return df["nome"].tolist()
+    except Exception:
+        return ["Outros"]
+
+
+def centros_custo_ativos(tipo=None):
+    try:
+        if tipo:
+            df = consultar("""
+            SELECT nome FROM centros_custo
+            WHERE ativo='Sim' AND tipo=?
+            ORDER BY nome
+            """, (tipo,))
+        else:
+            df = consultar("""
+            SELECT nome FROM centros_custo
+            WHERE ativo='Sim'
+            ORDER BY nome
+            """)
+        return df["nome"].tolist()
+    except Exception:
+        return ["Outros"]
+
+
+def status_financeiro(data_vencimento, valor=0, valor_pago=0, status_atual="Pendente"):
+    try:
+        if status_atual in ["Pago", "Recebido", "Cancelado"]:
+            return status_atual
+
+        if n(valor_pago) > 0 and n(valor_pago) < n(valor):
+            return "Parcial"
+
+        if n(valor_pago) >= n(valor) and n(valor) > 0:
+            return "Recebido"
+
+        if data_vencimento:
+            venc = pd.to_datetime(data_vencimento, errors="coerce")
+            if pd.notna(venc) and venc.date() < datetime.now().date():
+                return "Atrasado"
+
+        return status_atual or "Pendente"
+    except Exception:
+        return status_atual or "Pendente"
+
+
+def sincronizar_orcamentos_contas_receber():
+    """Cria contas a receber a partir de orçamentos que ainda não foram lançados."""
+    try:
+        orcs = consultar("""
+        SELECT id, cliente_id, cliente_nome, forma_pagamento, total, data_orcamento, status, observacoes
+        FROM orcamentos
+        WHERE status IN ('Aguardando pagamento', 'Produção', 'ProduÃ§Ã£o', 'Finalizado', 'Entregue')
+        ORDER BY id DESC
+        """)
+
+        criadas = 0
+
+        for _, o in orcs.iterrows():
+            existe = consultar("""
+            SELECT id FROM contas_receber
+            WHERE origem='Orçamento' AND referencia_id=? AND ativo='Sim'
+            """, (int(o["id"]),))
+
+            if not existe.empty:
+                continue
+
+            try:
+                data_venc = (pd.to_datetime(o["data_orcamento"], errors="coerce") + pd.to_timedelta(3, unit="D")).date().isoformat()
+            except Exception:
+                data_venc = (datetime.now().date() + timedelta(days=3)).isoformat()
+
+            status = "Recebido" if str(o["status"]) in ["Produção", "ProduÃ§Ã£o", "Finalizado", "Entregue"] else "Pendente"
+            valor_recebido = n(o["total"]) if status == "Recebido" else 0
+
+            executar("""
+            INSERT INTO contas_receber(
+                descricao, cliente_id, cliente_nome, categoria, forma_pagamento,
+                valor, valor_recebido, data_emissao, data_vencimento, data_recebimento,
+                status, origem, referencia_id, observacoes, ativo
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"Orçamento #{int(o['id'])} - {o['cliente_nome']}",
+                int(o["cliente_id"]) if pd.notna(o["cliente_id"]) else None,
+                str(o["cliente_nome"]),
+                "Venda",
+                str(o.get("forma_pagamento", "")),
+                n(o["total"]),
+                valor_recebido,
+                hoje_iso(),
+                data_venc,
+                hoje_iso() if status == "Recebido" else "",
+                status,
+                "Orçamento",
+                int(o["id"]),
+                str(o.get("observacoes", "") or ""),
+                "Sim",
+            ))
+            criadas += 1
+
+        return criadas
+
+    except Exception:
+        return 0
+
+
+def tela_financeiro_profissional():
+    garantir_financeiro_profissional()
+
+    st.title("Financeiro Profissional")
+    st.write("Controle contas a pagar, contas a receber, centros de custo e categorias financeiras.")
+
+    abas = st.tabs([
+        "Painel",
+        "Contas a receber",
+        "Contas a pagar",
+        "Centros de custo",
+        "Categorias financeiras",
+    ])
+
+    with abas[0]:
+        st.subheader("Resumo financeiro")
+
+        receber = consultar("SELECT * FROM contas_receber WHERE ativo='Sim'")
+        pagar = consultar("SELECT * FROM contas_pagar WHERE ativo='Sim'")
+
+        hoje_data = datetime.now().date()
+
+        total_receber = float(receber[receber["status"].isin(["Pendente", "Parcial", "Atrasado"])]["valor"].sum()) if not receber.empty else 0
+        recebido = float(receber[receber["status"].isin(["Recebido"])]["valor_recebido"].sum()) if not receber.empty else 0
+
+        total_pagar = float(pagar[pagar["status"].isin(["Pendente", "Parcial", "Atrasado"])]["valor"].sum()) if not pagar.empty else 0
+        pago = float(pagar[pagar["status"].isin(["Pago"])]["valor"].sum()) if not pagar.empty else 0
+
+        atrasado_receber = 0
+        atrasado_pagar = 0
+
+        if not receber.empty:
+            temp = receber.copy()
+            temp["venc"] = pd.to_datetime(temp["data_vencimento"], errors="coerce")
+            atrasado_receber = len(temp[(temp["venc"].dt.date < hoje_data) & (~temp["status"].isin(["Recebido", "Cancelado"]))])
+
+        if not pagar.empty:
+            temp = pagar.copy()
+            temp["venc"] = pd.to_datetime(temp["data_vencimento"], errors="coerce")
+            atrasado_pagar = len(temp[(temp["venc"].dt.date < hoje_data) & (~temp["status"].isin(["Pago", "Cancelado"]))])
+
+        saldo_previsto = total_receber - total_pagar
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            card("A receber", real(total_receber))
+        with c2:
+            card("Recebido", real(recebido))
+        with c3:
+            card("A pagar", real(total_pagar))
+        with c4:
+            card("Pago", real(pago))
+        with c5:
+            card("Saldo previsto", real(saldo_previsto))
+
+        a1, a2 = st.columns(2)
+        with a1:
+            card("Recebimentos atrasados", str(atrasado_receber))
+        with a2:
+            card("Pagamentos atrasados", str(atrasado_pagar))
+
+        st.divider()
+
+        if st.button("Sincronizar orçamentos com contas a receber"):
+            qtd = sincronizar_orcamentos_contas_receber()
+            st.success(f"{qtd} conta(s) a receber criada(s) a partir dos orçamentos.")
+            st.rerun()
+
+        st.subheader("Próximos vencimentos")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### A receber")
+            if receber.empty:
+                st.info("Nenhuma conta a receber.")
+            else:
+                prox = receber[~receber["status"].isin(["Recebido", "Cancelado"])].copy()
+                prox = prox.sort_values("data_vencimento").head(10)
+                st.dataframe(formatar_valores_tabela(prox), use_container_width=True, hide_index=True)
+
+        with col2:
+            st.markdown("### A pagar")
+            if pagar.empty:
+                st.info("Nenhuma conta a pagar.")
+            else:
+                prox = pagar[~pagar["status"].isin(["Pago", "Cancelado"])].copy()
+                prox = prox.sort_values("data_vencimento").head(10)
+                st.dataframe(formatar_valores_tabela(prox), use_container_width=True, hide_index=True)
+
+    with abas[1]:
+        st.subheader("Contas a receber")
+
+        clientes = consultar("SELECT id, nome FROM clientes WHERE ativo='Sim' ORDER BY nome")
+        lista_clientes = ["Sem cliente"]
+        mapa_clientes = {"Sem cliente": (None, "")}
+
+        if not clientes.empty:
+            for _, c in clientes.iterrows():
+                label = f"{int(c['id'])} - {c['nome']}"
+                lista_clientes.append(label)
+                mapa_clientes[label] = (int(c["id"]), str(c["nome"]))
+
+        with st.form("form_contas_receber"):
+            c1, c2 = st.columns(2)
+            descricao = c1.text_input("Descrição", placeholder="Ex: Pedido cliente Maria")
+            cliente_sel = c2.selectbox("Cliente", lista_clientes)
+
+            c3, c4, c5 = st.columns(3)
+            categoria = c3.selectbox("Categoria", categorias_financeiras_ativas("Receita") or ["Venda"])
+            forma = c4.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Mercado Pago", "Outro"])
+            valor = c5.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+
+            c6, c7, c8 = st.columns(3)
+            valor_recebido = c6.number_input("Valor recebido", min_value=0.0, step=0.01, format="%.2f")
+            vencimento = c7.text_input("Data vencimento", value=(datetime.now().date() + timedelta(days=3)).isoformat())
+            recebimento = c8.text_input("Data recebimento", value=hoje_iso() if valor_recebido > 0 else "")
+
+            status = st.selectbox("Status", ["Pendente", "Parcial", "Recebido", "Atrasado", "Cancelado"])
+            observacoes = st.text_area("Observações")
+
+            if st.form_submit_button("Salvar conta a receber"):
+                if not descricao.strip():
+                    st.error("Digite a descrição.")
+                else:
+                    cliente_id, cliente_nome = mapa_clientes[cliente_sel]
+
+                    status_final = status
+                    if valor_recebido >= valor and valor > 0:
+                        status_final = "Recebido"
+                    elif valor_recebido > 0:
+                        status_final = "Parcial"
+
+                    executar("""
+                    INSERT INTO contas_receber(
+                        descricao, cliente_id, cliente_nome, categoria, forma_pagamento,
+                        valor, valor_recebido, data_emissao, data_vencimento, data_recebimento,
+                        status, origem, referencia_id, observacoes, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        descricao, cliente_id, cliente_nome, categoria, forma,
+                        valor, valor_recebido, hoje_iso(), vencimento, recebimento,
+                        status_final, "Manual", None, observacoes, "Sim",
+                    ))
+
+                    if status_final == "Recebido":
+                        executar("""
+                        INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            recebimento or hoje_iso(),
+                            "Entrada",
+                            descricao,
+                            categoria,
+                            forma,
+                            valor_recebido,
+                            "Conta a receber",
+                            None,
+                            observacoes,
+                        ))
+
+                    st.success("Conta a receber salva.")
+                    st.rerun()
+
+        df = consultar("SELECT * FROM contas_receber WHERE ativo='Sim' ORDER BY data_vencimento ASC, id DESC")
+
+        if df.empty:
+            st.info("Nenhuma conta a receber cadastrada.")
+        else:
+            for idx, r in df.iterrows():
+                novo_status = status_financeiro(r["data_vencimento"], r["valor"], r["valor_recebido"], r["status"])
+                if novo_status != r["status"]:
+                    executar("UPDATE contas_receber SET status=? WHERE id=?", (novo_status, int(r["id"])))
+            df = consultar("SELECT * FROM contas_receber WHERE ativo='Sim' ORDER BY data_vencimento ASC, id DESC")
+            df = adicionar_codigo_visual(df, "REC")
+
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_contas_receber",
+                column_config={
+                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                    "valor_recebido": st.column_config.NumberColumn("Recebido", format="R$ %.2f"),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Parcial", "Recebido", "Atrasado", "Cancelado"]),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações - contas a receber"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("descricao", "")).strip():
+                            executar("""
+                            UPDATE contas_receber
+                            SET descricao=?, cliente_nome=?, categoria=?, forma_pagamento=?,
+                                valor=?, valor_recebido=?, data_vencimento=?, data_recebimento=?,
+                                status=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("descricao", "")),
+                                str(r.get("cliente_nome", "")),
+                                str(r.get("categoria", "")),
+                                str(r.get("forma_pagamento", "")),
+                                n(r.get("valor", 0)),
+                                n(r.get("valor_recebido", 0)),
+                                str(r.get("data_vencimento", "")),
+                                str(r.get("data_recebimento", "")),
+                                str(r.get("status", "Pendente")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                    st.success("Contas a receber atualizadas.")
+                    st.rerun()
+
+            with c2:
+                id_del = st.number_input("ID para excluir recebimento", min_value=0, step=1, key="del_receber")
+                if st.button("Excluir recebimento"):
+                    if id_del > 0:
+                        executar("UPDATE contas_receber SET ativo='Não' WHERE id=?", (int(id_del),))
+                        st.success("Conta a receber excluída.")
+                        st.rerun()
+
+    with abas[2]:
+        st.subheader("Contas a pagar")
+
+        with st.form("form_contas_pagar"):
+            c1, c2 = st.columns(2)
+            descricao = c1.text_input("Descrição", placeholder="Ex: Compra papel fotográfico")
+            fornecedor = c2.text_input("Fornecedor")
+
+            c3, c4, c5 = st.columns(3)
+            categoria = c3.selectbox("Categoria", categorias_financeiras_ativas("Despesa") or ["Outros"])
+            centro = c4.selectbox("Centro de custo", centros_custo_ativos("Despesa") or ["Outros"])
+            forma = c5.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Boleto", "Mercado Pago", "Outro"])
+
+            c6, c7, c8 = st.columns(3)
+            valor = c6.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+            vencimento = c7.text_input("Data vencimento", value=(datetime.now().date() + timedelta(days=7)).isoformat())
+            pagamento = c8.text_input("Data pagamento", value="")
+
+            c9, c10 = st.columns(2)
+            status = c9.selectbox("Status", ["Pendente", "Pago", "Atrasado", "Cancelado"])
+            recorrente = c10.selectbox("Recorrente?", ["Não", "Sim"])
+
+            observacoes = st.text_area("Observações", key="obs_pagar")
+
+            if st.form_submit_button("Salvar conta a pagar"):
+                if not descricao.strip():
+                    st.error("Digite a descrição.")
+                else:
+                    executar("""
+                    INSERT INTO contas_pagar(
+                        descricao, fornecedor, categoria, centro_custo, forma_pagamento,
+                        valor, data_emissao, data_vencimento, data_pagamento,
+                        status, recorrente, observacoes, ativo
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        descricao, fornecedor, categoria, centro, forma,
+                        valor, hoje_iso(), vencimento, pagamento,
+                        status, recorrente, observacoes, "Sim",
+                    ))
+
+                    if status == "Pago":
+                        executar("""
+                        INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            pagamento or hoje_iso(),
+                            "Saída",
+                            descricao,
+                            categoria,
+                            forma,
+                            valor,
+                            "Conta a pagar",
+                            None,
+                            observacoes,
+                        ))
+
+                    st.success("Conta a pagar salva.")
+                    st.rerun()
+
+        df = consultar("SELECT * FROM contas_pagar WHERE ativo='Sim' ORDER BY data_vencimento ASC, id DESC")
+
+        if df.empty:
+            st.info("Nenhuma conta a pagar cadastrada.")
+        else:
+            for idx, r in df.iterrows():
+                novo_status = status_financeiro(r["data_vencimento"], r["valor"], r["valor"] if r["status"] == "Pago" else 0, r["status"])
+                if novo_status != r["status"]:
+                    executar("UPDATE contas_pagar SET status=? WHERE id=?", (novo_status, int(r["id"])))
+            df = consultar("SELECT * FROM contas_pagar WHERE ativo='Sim' ORDER BY data_vencimento ASC, id DESC")
+            df = adicionar_codigo_visual(df, "PAG")
+
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_contas_pagar",
+                column_config={
+                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago", "Atrasado", "Cancelado"]),
+                    "recorrente": st.column_config.SelectboxColumn("Recorrente", options=["Sim", "Não"]),
+                },
+            )
+
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações - contas a pagar"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("descricao", "")).strip():
+                            executar("""
+                            UPDATE contas_pagar
+                            SET descricao=?, fornecedor=?, categoria=?, centro_custo=?, forma_pagamento=?,
+                                valor=?, data_vencimento=?, data_pagamento=?,
+                                status=?, recorrente=?, observacoes=?
+                            WHERE id=?
+                            """, (
+                                str(r.get("descricao", "")),
+                                str(r.get("fornecedor", "")),
+                                str(r.get("categoria", "")),
+                                str(r.get("centro_custo", "")),
+                                str(r.get("forma_pagamento", "")),
+                                n(r.get("valor", 0)),
+                                str(r.get("data_vencimento", "")),
+                                str(r.get("data_pagamento", "")),
+                                str(r.get("status", "Pendente")),
+                                str(r.get("recorrente", "Não")),
+                                str(r.get("observacoes", "")),
+                                int(r["id"]),
+                            ))
+                    st.success("Contas a pagar atualizadas.")
+                    st.rerun()
+
+            with c2:
+                id_del = st.number_input("ID para excluir pagamento", min_value=0, step=1, key="del_pagar")
+                if st.button("Excluir pagamento"):
+                    if id_del > 0:
+                        executar("UPDATE contas_pagar SET ativo='Não' WHERE id=?", (int(id_del),))
+                        st.success("Conta a pagar excluída.")
+                        st.rerun()
+
+    with abas[3]:
+        st.subheader("Centros de custo")
+
+        with st.form("form_centros_custo"):
+            c1, c2 = st.columns(2)
+            nome = c1.text_input("Nome do centro de custo")
+            tipo = c2.selectbox("Tipo", ["Despesa", "Receita"])
+            obs = st.text_input("Observação")
+            if st.form_submit_button("Adicionar centro de custo"):
+                if nome.strip():
+                    executar("""
+                    INSERT OR IGNORE INTO centros_custo(nome, tipo, ativo, observacoes)
+                    VALUES (?, ?, 'Sim', ?)
+                    """, (nome.strip(), tipo, obs))
+                    st.success("Centro de custo salvo.")
+                    st.rerun()
+
+        df = consultar("SELECT * FROM centros_custo ORDER BY tipo, nome")
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="editor_centros_custo",
+            column_config={
+                "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]),
+                "ativo": st.column_config.SelectboxColumn("Ativo", options=["Sim", "Não"]),
+            },
+        )
+
+        if st.button("Salvar centros de custo"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT OR IGNORE INTO centros_custo(nome, tipo, ativo, observacoes)
+                        VALUES (?, ?, ?, ?)
+                        """, (str(r["nome"]), str(r.get("tipo", "Despesa")), str(r.get("ativo", "Sim")), str(r.get("observacoes", ""))))
+                    else:
+                        executar("""
+                        UPDATE centros_custo SET nome=?, tipo=?, ativo=?, observacoes=? WHERE id=?
+                        """, (str(r["nome"]), str(r.get("tipo", "Despesa")), str(r.get("ativo", "Sim")), str(r.get("observacoes", "")), int(r["id"])))
+            st.success("Centros atualizados.")
+            st.rerun()
+
+    with abas[4]:
+        st.subheader("Categorias financeiras")
+
+        with st.form("form_categorias_financeiras"):
+            c1, c2 = st.columns(2)
+            nome = c1.text_input("Nome da categoria financeira")
+            tipo = c2.selectbox("Tipo", ["Despesa", "Receita"], key="tipo_cat_fin")
+            obs = st.text_input("Observação", key="obs_cat_fin")
+            if st.form_submit_button("Adicionar categoria financeira"):
+                if nome.strip():
+                    executar("""
+                    INSERT OR IGNORE INTO categorias_financeiras(nome, tipo, ativo, observacoes)
+                    VALUES (?, ?, 'Sim', ?)
+                    """, (nome.strip(), tipo, obs))
+                    st.success("Categoria financeira salva.")
+                    st.rerun()
+
+        df = consultar("SELECT * FROM categorias_financeiras ORDER BY tipo, nome")
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="editor_categorias_financeiras",
+            column_config={
+                "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]),
+                "ativo": st.column_config.SelectboxColumn("Ativo", options=["Sim", "Não"]),
+            },
+        )
+
+        if st.button("Salvar categorias financeiras"):
+            for _, r in edited.iterrows():
+                if str(r.get("nome", "")).strip():
+                    if pd.isna(r.get("id")):
+                        executar("""
+                        INSERT OR IGNORE INTO categorias_financeiras(nome, tipo, ativo, observacoes)
+                        VALUES (?, ?, ?, ?)
+                        """, (str(r["nome"]), str(r.get("tipo", "Despesa")), str(r.get("ativo", "Sim")), str(r.get("observacoes", ""))))
+                    else:
+                        executar("""
+                        UPDATE categorias_financeiras SET nome=?, tipo=?, ativo=?, observacoes=? WHERE id=?
+                        """, (str(r["nome"]), str(r.get("tipo", "Despesa")), str(r.get("ativo", "Sim")), str(r.get("observacoes", "")), int(r["id"])))
+            st.success("Categorias financeiras atualizadas.")
+            st.rerun()
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -5881,6 +6630,7 @@ menu = st.sidebar.radio(
         "Estoque",
         "Estoque Inteligente",
         "Fluxo de Caixa",
+        "Financeiro Profissional",
         "Categorias",
         "Catálogo público",
         "Configurações",
@@ -5922,6 +6672,8 @@ elif menu == "Estoque Inteligente":
     tela_estoque_inteligente()
 elif menu == "Fluxo de Caixa":
     tela_financeiro()
+elif menu == "Financeiro Profissional":
+    tela_financeiro_profissional()
 elif menu == "Categorias":
     tela_categorias()
 elif menu == "Catálogo público":
