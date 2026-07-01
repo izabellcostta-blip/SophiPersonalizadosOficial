@@ -8458,6 +8458,247 @@ def tela_relatorios_inteligentes():
             )
 
 
+
+
+# ============================================================
+# MÓDULO 8 — PORTAL DO CLIENTE
+# ============================================================
+
+def garantir_portal_cliente():
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT,
+        referencia_id INTEGER,
+        token TEXT UNIQUE,
+        ativo TEXT DEFAULT 'Sim',
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
+        validade TEXT,
+        acessos INTEGER DEFAULT 0,
+        ultimo_acesso TEXT
+    )
+    """)
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_mensagens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT,
+        cliente_nome TEXT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        mensagem TEXT,
+        status TEXT DEFAULT 'Nova'
+    )
+    """)
+
+
+def gerar_token_portal(tipo, referencia_id):
+    garantir_portal_cliente()
+    import secrets
+
+    existente = consultar("""
+    SELECT token FROM portal_tokens
+    WHERE tipo=? AND referencia_id=? AND ativo='Sim'
+    ORDER BY id DESC LIMIT 1
+    """, (str(tipo), int(referencia_id)))
+
+    if not existente.empty:
+        return str(existente.iloc[0]["token"])
+
+    token = secrets.token_urlsafe(12)
+    validade = (datetime.now().date() + timedelta(days=30)).isoformat()
+
+    executar("""
+    INSERT INTO portal_tokens(tipo, referencia_id, token, ativo, validade)
+    VALUES (?, ?, ?, 'Sim', ?)
+    """, (str(tipo), int(referencia_id), token, validade))
+
+    return token
+
+
+def tela_portal_cliente_publico():
+    garantir_portal_cliente()
+
+    try:
+        token = st.query_params.get("token", "")
+    except Exception:
+        token = ""
+
+    st.title("Portal do Cliente")
+    st.write("Acompanhe seu pedido da Sophi Personalizados.")
+
+    if not token:
+        st.error("Link inválido.")
+        st.stop()
+
+    token_df = consultar("""
+    SELECT * FROM portal_tokens
+    WHERE token=? AND ativo='Sim'
+    LIMIT 1
+    """, (str(token),))
+
+    if token_df.empty:
+        st.error("Link inválido ou expirado.")
+        st.stop()
+
+    try:
+        executar("""
+        UPDATE portal_tokens
+        SET acessos=COALESCE(acessos,0)+1, ultimo_acesso=CURRENT_TIMESTAMP
+        WHERE token=?
+        """, (str(token),))
+    except Exception:
+        pass
+
+    t = token_df.iloc[0]
+    ref_id = int(t["referencia_id"])
+    tipo = str(t["tipo"])
+
+    if tipo == "Orçamento":
+        orc = consultar("SELECT * FROM orcamentos WHERE id=?", (ref_id,))
+    else:
+        op = consultar("SELECT * FROM ordens_producao WHERE id=?", (ref_id,))
+        if op.empty:
+            orc = pd.DataFrame()
+        else:
+            orc_id = op.iloc[0].get("orcamento_id", None)
+            orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orc_id),)) if pd.notna(orc_id) else pd.DataFrame()
+
+    if orc.empty:
+        st.warning("Pedido não encontrado.")
+        st.stop()
+
+    o = orc.iloc[0]
+
+    st.subheader(f"Olá, {o.get('cliente_nome', 'cliente')} 🤍")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        card("Status", str(o.get("status", "")))
+    with c2:
+        card("Total", real(o.get("total", 0)))
+    with c3:
+        card("Orçamento", codigo_visual("ORC", o.get("id", 0), ano=datetime.now().year))
+
+    itens = consultar("""
+    SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+    FROM orcamento_itens
+    WHERE orcamento_id=?
+    """, (int(o["id"]),))
+
+    st.subheader("Itens do pedido")
+    if itens.empty:
+        st.info("Nenhum item encontrado.")
+    else:
+        st.dataframe(formatar_valores_tabela(itens), use_container_width=True, hide_index=True)
+
+    st.subheader("Produção")
+    try:
+        op = consultar("""
+        SELECT * FROM ordens_producao
+        WHERE orcamento_id=? AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(o["id"]),))
+    except Exception:
+        op = pd.DataFrame()
+
+    if op.empty:
+        st.info("Produção ainda não iniciada.")
+    else:
+        opr = op.iloc[0]
+        st.write(f"**OP:** {codigo_op_seguro(opr['id'])}")
+        st.write(f"**Status:** {opr.get('status', '-')}")
+        st.write(f"**Previsão:** {opr.get('data_entrega', '-')}")
+        try:
+            checklist = json.loads(opr.get("checklist_json", "{}") or "{}")
+            for nome, feito in checklist.items():
+                st.write(("✅ " if feito else "⬜ ") + nome)
+        except Exception:
+            pass
+
+    st.subheader("Entrega")
+    try:
+        entrega = consultar("""
+        SELECT * FROM entregas
+        WHERE referencia_tipo='OP'
+          AND referencia_id IN (SELECT id FROM ordens_producao WHERE orcamento_id=?)
+          AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(o["id"]),))
+    except Exception:
+        entrega = pd.DataFrame()
+
+    if entrega.empty:
+        st.info("Entrega ainda não cadastrada.")
+    else:
+        e = entrega.iloc[0]
+        st.write(f"**Código:** {e.get('codigo', '-')}")
+        st.write(f"**Status:** {e.get('status', '-')}")
+        st.write(f"**Data:** {e.get('data_entrega', '-')}")
+        st.write(f"**Tipo:** {e.get('tipo_entrega', '-')}")
+
+    st.subheader("Falar com a Sophi")
+    whatsapp = obter_config("whatsapp", "")
+    if whatsapp:
+        import urllib.parse
+        numero = "".join([c for c in whatsapp if c.isdigit()])
+        msg = f"Olá, estou acompanhando meu pedido pelo portal."
+        link = f"https://wa.me/55{numero}?text={urllib.parse.quote(msg)}" if numero and not numero.startswith("55") else f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
+        st.link_button("Chamar no WhatsApp", link)
+
+
+def tela_portal_cliente_admin():
+    garantir_portal_cliente()
+
+    st.title("Portal do Cliente")
+    st.write("Gere links para o cliente acompanhar orçamento, produção e entrega.")
+
+    abas = st.tabs(["Gerar link", "Links gerados"])
+
+    with abas[0]:
+        orcs = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, total
+        FROM orcamentos
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if orcs.empty:
+            st.info("Nenhum orçamento encontrado.")
+        else:
+            mapa = {
+                f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
+                for _, r in orcs.iterrows()
+            }
+
+            esc = st.selectbox("Escolha o orçamento", list(mapa.keys()))
+
+            if st.button("Gerar link do portal"):
+                token = gerar_token_portal("Orçamento", mapa[esc])
+                link = f"?portal=cliente&token={token}"
+                st.success("Link gerado.")
+                st.code(link)
+                st.info("Copie o endereço do seu app e adicione esse final. Exemplo: https://seuapp.streamlit.app/?portal=cliente&token=XXXX")
+
+    with abas[1]:
+        toks = consultar("""
+        SELECT id, tipo, referencia_id, token, ativo, data_criacao, validade, acessos, ultimo_acesso
+        FROM portal_tokens
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if toks.empty:
+            st.info("Nenhum link gerado.")
+        else:
+            st.dataframe(toks, use_container_width=True, hide_index=True)
+
+            id_desativar = st.number_input("ID do link para desativar", min_value=0, step=1)
+            if st.button("Desativar link"):
+                if id_desativar > 0:
+                    executar("UPDATE portal_tokens SET ativo='Não' WHERE id=?", (int(id_desativar),))
+                    st.success("Link desativado.")
+                    st.rerun()
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -8638,6 +8879,16 @@ logo = obter_config("logo_path", "")
 if logo and Path(logo).exists():
     st.sidebar.image(logo, width=120)
 
+
+# Acesso público do Portal do Cliente sem login.
+try:
+    if st.query_params.get("portal", "") == "cliente":
+        tela_portal_cliente_publico()
+        st.stop()
+except Exception:
+    pass
+
+
 exigir_login()
 
 st.sidebar.markdown("""
@@ -8677,6 +8928,7 @@ menu = st.sidebar.radio(
         "Relatórios Inteligentes",
         "Categorias",
         "Catálogo público",
+        "Portal do Cliente",
         "Configurações",
     ],
 )
@@ -8728,6 +8980,8 @@ elif menu == "Relatórios Inteligentes":
     tela_relatorios_inteligentes()
 elif menu == "Categorias":
     tela_categorias()
+elif menu == "Portal do Cliente":
+    tela_portal_cliente_admin()
 elif menu == "Catálogo público":
     tela_catalogo()
 elif menu == "Configurações":
