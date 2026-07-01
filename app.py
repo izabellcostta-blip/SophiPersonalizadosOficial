@@ -379,6 +379,24 @@ def criar_banco():
     )
     """)
 
+
+    # Campos extras para prazo/entrega do orçamento
+    campos_entrega_orcamento = {
+        "data_prevista_entrega": "TEXT",
+        "hora_prevista_entrega": "TEXT",
+        "tipo_entrega": "TEXT",
+        "endereco_entrega": "TEXT",
+        "responsavel_entrega": "TEXT",
+        "prioridade_entrega": "TEXT DEFAULT 'Normal'",
+        "observacoes_entrega": "TEXT",
+    }
+
+    for coluna, tipo_coluna in campos_entrega_orcamento.items():
+        try:
+            executar(f"ALTER TABLE orcamentos ADD COLUMN {coluna} {tipo_coluna}")
+        except Exception:
+            pass
+
     executar("""
     CREATE TABLE IF NOT EXISTS financeiro (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3070,8 +3088,51 @@ def tela_orcamentos():
     c3.metric("Subtotal", real(subtotal))
     c4.metric("Total geral", real(total_geral))
 
+
+    st.divider()
+    st.subheader("Entrega / prazo do pedido")
+    st.caption("Essa data vai alimentar Produção, Agenda, Entregas e Portal do Cliente.")
+
+    e1, e2, e3 = st.columns(3)
+    data_prevista_entrega = e1.text_input(
+        "Data prevista de entrega",
+        value=(datetime.now().date() + timedelta(days=7)).isoformat(),
+        key="novo_orc_data_entrega",
+    )
+    hora_prevista_entrega = e2.text_input(
+        "Horário previsto",
+        placeholder="Ex: 14:00",
+        key="novo_orc_hora_entrega",
+    )
+    tipo_entrega_orc = e3.selectbox(
+        "Tipo de entrega",
+        ["Retirada", "Entrega própria", "Motoboy", "Correios", "Uber/99", "Outro"],
+        key="novo_orc_tipo_entrega",
+    )
+
+    e4, e5 = st.columns(2)
+    prioridade_entrega = e4.selectbox(
+        "Prioridade",
+        ["Normal", "Urgente", "Expressa", "Baixa"],
+        key="novo_orc_prioridade_entrega",
+    )
+    responsavel_entrega = e5.text_input(
+        "Responsável pela entrega",
+        placeholder="Ex: Maiara / Motoboy / Cliente retira",
+        key="novo_orc_responsavel_entrega",
+    )
+
+    endereco_entrega = st.text_area(
+        "Endereço de entrega",
+        key="novo_orc_endereco_entrega",
+    )
+    observacoes_entrega = st.text_area(
+        "Observações da entrega",
+        key="novo_orc_obs_entrega",
+    )
+
     forma_pagamento = st.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Mercado Pago", "Outro"])
-    status = st.selectbox("Status", ["Em orçamento", "Aprovado", "Aguardando pagamento", "Pago", "Produção", "Finalizado", "Entregue", "Cancelado"])
+    status = st.selectbox("Status", ["Em orçamento", "Aprovado", "Aguardando pagamento", "Pago", "Produção", "Embalagem", "Pronto", "Saiu para entrega", "Entregue", "Cancelado"])
     observacoes = st.text_area("Observações do orçamento")
 
     if st.button("Salvar orçamento"):
@@ -3082,12 +3143,16 @@ def tela_orcamentos():
             ultimo = executar("""
             INSERT INTO orcamentos(
                 cliente_id, cliente_nome, whatsapp, status, forma_pagamento,
-                subtotal, desconto, frete, total, observacoes
+                subtotal, desconto, frete, total, observacoes,
+                data_prevista_entrega, hora_prevista_entrega, tipo_entrega,
+                endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 int(cliente_id), str(cliente["nome"]), str(cliente["whatsapp"]), status,
                 forma_pagamento, subtotal, desconto_geral, frete, total_geral, observacoes,
+                data_prevista_entrega, hora_prevista_entrega, tipo_entrega_orc,
+                endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega,
             ))
 
             for item in itens_validos:
@@ -3176,48 +3241,108 @@ def tela_orcamentos():
             },
         )
 
-        orc_status_df = consultar("SELECT status, total, cliente_nome, forma_pagamento, observacoes FROM orcamentos WHERE id=?", (int(id_ver),))
+        orc_status_df = consultar("""
+        SELECT status, total, cliente_nome, forma_pagamento, observacoes,
+               data_prevista_entrega, hora_prevista_entrega, tipo_entrega,
+               endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega
+        FROM orcamentos
+        WHERE id=?
+        """, (int(id_ver),))
+
         if not orc_status_df.empty:
-            st.markdown("### Alterar status do orçamento")
+            st.markdown("### Alterar status e entrega do orçamento")
             status_atual = str(orc_status_df.iloc[0]["status"])
-            opcoes_status = ["Em orçamento", "Aprovado", "Aguardando pagamento", "Pago", "Produção", "Finalizado", "Entregue", "Cancelado"]
+            opcoes_status = status_fluxo_pedido()
             try:
                 idx_status = opcoes_status.index(status_atual)
             except Exception:
                 idx_status = 0
 
-            novo_status_orc = st.selectbox("Status do pedido", opcoes_status, index=idx_status, key=f"status_orc_existente_{int(id_ver)}")
+            novo_status_orc = st.selectbox(
+                "Status do pedido",
+                opcoes_status,
+                index=idx_status,
+                key=f"status_orc_existente_{int(id_ver)}",
+            )
 
-            if st.button("Atualizar status do orçamento", key=f"btn_atualizar_status_orc_{int(id_ver)}"):
-                executar("UPDATE orcamentos SET status=? WHERE id=?", (novo_status_orc, int(id_ver)))
+            st.markdown(linha_tempo_pedido_html(novo_status_orc), unsafe_allow_html=True)
 
-                if novo_status_orc in ["Pago", "Produção", "Finalizado", "Entregue"]:
-                    # Cria lançamento financeiro apenas se ainda não existir.
-                    fin_existe = consultar("SELECT id FROM financeiro WHERE origem='Orçamento' AND referencia_id=? LIMIT 1", (int(id_ver),))
-                    if fin_existe.empty:
-                        executar("""
-                        INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            hoje_iso(),
-                            "Entrada",
-                            f"Orçamento #{int(id_ver)} - {orc_status_df.iloc[0]['cliente_nome']}",
-                            "Venda",
-                            str(orc_status_df.iloc[0]["forma_pagamento"]),
-                            n(orc_status_df.iloc[0]["total"]),
-                            "Orçamento",
-                            int(id_ver),
-                            str(orc_status_df.iloc[0].get("observacoes", "")),
-                        ))
+            st.markdown("#### Entrega / prazo")
+            d1, d2, d3 = st.columns(3)
+            data_prevista_edit = d1.text_input(
+                "Data prevista",
+                value=str(orc_status_df.iloc[0].get("data_prevista_entrega", "") or ""),
+                key=f"edit_data_entrega_{int(id_ver)}",
+            )
+            hora_prevista_edit = d2.text_input(
+                "Horário",
+                value=str(orc_status_df.iloc[0].get("hora_prevista_entrega", "") or ""),
+                key=f"edit_hora_entrega_{int(id_ver)}",
+            )
 
-                if novo_status_orc in ["Produção", "Finalizado", "Entregue"]:
-                    try:
-                        garantir_ordem_producao(int(id_ver))
-                        criar_op_de_orcamento(int(id_ver), prioridade="Normal", observacoes_extra="Criada/atualizada ao mudar status do orçamento.")
-                    except Exception:
-                        pass
+            tipos_entrega = ["Retirada", "Entrega própria", "Motoboy", "Correios", "Uber/99", "Outro"]
+            tipo_atual = str(orc_status_df.iloc[0].get("tipo_entrega", "") or "Retirada")
+            tipo_idx = tipos_entrega.index(tipo_atual) if tipo_atual in tipos_entrega else 0
+            tipo_entrega_edit = d3.selectbox(
+                "Tipo",
+                tipos_entrega,
+                index=tipo_idx,
+                key=f"edit_tipo_entrega_{int(id_ver)}",
+            )
 
-                st.success("Status atualizado com sucesso.")
+            d4, d5 = st.columns(2)
+            prioridades = ["Normal", "Urgente", "Expressa", "Baixa"]
+            prioridade_atual = str(orc_status_df.iloc[0].get("prioridade_entrega", "") or "Normal")
+            prioridade_idx = prioridades.index(prioridade_atual) if prioridade_atual in prioridades else 0
+            prioridade_edit = d4.selectbox(
+                "Prioridade",
+                prioridades,
+                index=prioridade_idx,
+                key=f"edit_prioridade_entrega_{int(id_ver)}",
+            )
+            responsavel_edit = d5.text_input(
+                "Responsável",
+                value=str(orc_status_df.iloc[0].get("responsavel_entrega", "") or ""),
+                key=f"edit_responsavel_entrega_{int(id_ver)}",
+            )
+
+            endereco_edit = st.text_area(
+                "Endereço de entrega",
+                value=str(orc_status_df.iloc[0].get("endereco_entrega", "") or ""),
+                key=f"edit_endereco_entrega_{int(id_ver)}",
+            )
+            obs_entrega_edit = st.text_area(
+                "Observações de entrega",
+                value=str(orc_status_df.iloc[0].get("observacoes_entrega", "") or ""),
+                key=f"edit_obs_entrega_{int(id_ver)}",
+            )
+
+            if st.button("Atualizar status e entrega do orçamento", key=f"btn_atualizar_status_orc_{int(id_ver)}"):
+                executar("""
+                UPDATE orcamentos
+                SET status=?,
+                    data_prevista_entrega=?,
+                    hora_prevista_entrega=?,
+                    tipo_entrega=?,
+                    endereco_entrega=?,
+                    responsavel_entrega=?,
+                    prioridade_entrega=?,
+                    observacoes_entrega=?
+                WHERE id=?
+                """, (
+                    novo_status_orc,
+                    data_prevista_edit,
+                    hora_prevista_edit,
+                    tipo_entrega_edit,
+                    endereco_edit,
+                    responsavel_edit,
+                    prioridade_edit,
+                    obs_entrega_edit,
+                    int(id_ver),
+                ))
+
+                aplicar_fluxo_status_orcamento(int(id_ver), novo_status_orc)
+                st.success("Status e entrega atualizados com sucesso.")
                 st.rerun()
 
 
@@ -9999,6 +10124,319 @@ def tela_catalogo_portal():
         tela_catalogo_publico()
     with abas[1]:
         tela_portal_cliente_admin()
+
+
+
+
+# ============================================================
+# FLUXO DE ENTREGA NO ORÇAMENTO
+# ============================================================
+
+def garantir_campos_entrega_orcamento():
+    campos = {
+        "data_prevista_entrega": "TEXT",
+        "hora_prevista_entrega": "TEXT",
+        "tipo_entrega": "TEXT",
+        "endereco_entrega": "TEXT",
+        "responsavel_entrega": "TEXT",
+        "prioridade_entrega": "TEXT DEFAULT 'Normal'",
+        "observacoes_entrega": "TEXT",
+    }
+
+    for coluna, tipo_coluna in campos.items():
+        try:
+            executar(f"ALTER TABLE orcamentos ADD COLUMN {coluna} {tipo_coluna}")
+        except Exception:
+            pass
+
+
+def status_fluxo_pedido():
+    return [
+        "Em orçamento",
+        "Aprovado",
+        "Aguardando pagamento",
+        "Pago",
+        "Produção",
+        "Embalagem",
+        "Pronto",
+        "Saiu para entrega",
+        "Entregue",
+        "Cancelado",
+    ]
+
+
+def linha_tempo_pedido_html(status_atual):
+    etapas = status_fluxo_pedido()
+    if status_atual not in etapas:
+        status_atual = "Em orçamento"
+
+    atual = etapas.index(status_atual)
+
+    html = """
+    <style>
+    .timeline-pedido {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px;}
+    .timeline-step {border:1px solid #ddd;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:800;background:#fff;color:#777;}
+    .timeline-step.done {background:#000;color:#fff;border-color:#000;}
+    .timeline-step.cancel {background:#7a0d0d;color:#fff;border-color:#7a0d0d;}
+    </style>
+    <div class="timeline-pedido">
+    """
+
+    for i, etapa in enumerate(etapas):
+        cls = "done" if i <= atual else ""
+        if status_atual == "Cancelado" and etapa == "Cancelado":
+            cls = "cancel"
+        html += f'<div class="timeline-step {cls}">{etapa}</div>'
+
+    html += "</div>"
+    return html
+
+
+def criar_ou_atualizar_entrega_do_orcamento(orcamento_id):
+    garantir_campos_entrega_orcamento()
+    try:
+        garantir_agenda_entregas()
+    except Exception:
+        pass
+
+    orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+    if orc.empty:
+        return None
+
+    o = orc.iloc[0]
+    data_entrega = str(o.get("data_prevista_entrega", "") or "").strip()
+
+    if not data_entrega:
+        return None
+
+    hora_entrega = str(o.get("hora_prevista_entrega", "") or "")
+    tipo_entrega = str(o.get("tipo_entrega", "") or "Retirada")
+    endereco = str(o.get("endereco_entrega", "") or "")
+    responsavel = str(o.get("responsavel_entrega", "") or "")
+    obs_entrega = str(o.get("observacoes_entrega", "") or "")
+    status_orc = str(o.get("status", "") or "")
+
+    status_entrega = "Pendente"
+    if status_orc == "Saiu para entrega":
+        status_entrega = "Saiu para entrega"
+    elif status_orc == "Entregue":
+        status_entrega = "Entregue"
+    elif status_orc == "Cancelado":
+        status_entrega = "Cancelado"
+
+    op_id = None
+    try:
+        op = consultar("""
+        SELECT id FROM ordens_producao
+        WHERE orcamento_id=? AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(orcamento_id),))
+        if not op.empty:
+            op_id = int(op.iloc[0]["id"])
+    except Exception:
+        pass
+
+    if op_id:
+        existe = consultar("""
+        SELECT id FROM entregas
+        WHERE referencia_tipo='OP' AND referencia_id=? AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (op_id,))
+    else:
+        existe = consultar("""
+        SELECT id FROM entregas
+        WHERE referencia_tipo='Orçamento' AND referencia_id=? AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(orcamento_id),))
+
+    referencia_tipo = "OP" if op_id else "Orçamento"
+    referencia_id = op_id if op_id else int(orcamento_id)
+
+    if existe.empty:
+        try:
+            proximo = consultar("SELECT COALESCE(MAX(id),0)+1 AS prox FROM entregas").iloc[0]["prox"]
+            codigo = codigo_entrega(int(proximo))
+        except Exception:
+            proximo = 0
+            codigo = f"ENT-{int(orcamento_id):04d}"
+
+        entrega_id = executar("""
+        INSERT INTO entregas(
+            cliente_id, cliente_nome, whatsapp, referencia_tipo, referencia_id,
+            codigo, data_entrega, hora_entrega, tipo_entrega, endereco,
+            taxa_entrega, status, responsavel, observacoes, ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            int(o["cliente_id"]) if "cliente_id" in o.index and pd.notna(o["cliente_id"]) else None,
+            str(o.get("cliente_nome", "")),
+            str(o.get("whatsapp", "")),
+            referencia_tipo,
+            referencia_id,
+            codigo,
+            data_entrega,
+            hora_entrega,
+            tipo_entrega,
+            endereco,
+            n(o.get("frete", 0)),
+            status_entrega,
+            responsavel,
+            f"Entrega criada pelo orçamento #{int(orcamento_id)}. {obs_entrega}",
+            "Sim",
+        ))
+        return entrega_id
+
+    entrega_id = int(existe.iloc[0]["id"])
+    executar("""
+    UPDATE entregas
+    SET data_entrega=?, hora_entrega=?, tipo_entrega=?, endereco=?,
+        taxa_entrega=?, status=?, responsavel=?, observacoes=?
+    WHERE id=?
+    """, (
+        data_entrega,
+        hora_entrega,
+        tipo_entrega,
+        endereco,
+        n(o.get("frete", 0)),
+        status_entrega,
+        responsavel,
+        f"Entrega atualizada pelo orçamento #{int(orcamento_id)}. {obs_entrega}",
+        entrega_id,
+    ))
+    return entrega_id
+
+
+def criar_ou_atualizar_tarefa_entrega_do_orcamento(orcamento_id):
+    garantir_campos_entrega_orcamento()
+    try:
+        garantir_agenda_entregas()
+    except Exception:
+        pass
+
+    orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+    if orc.empty:
+        return None
+
+    o = orc.iloc[0]
+    data_entrega = str(o.get("data_prevista_entrega", "") or "").strip()
+
+    if not data_entrega:
+        return None
+
+    existe = consultar("""
+    SELECT id FROM agenda_tarefas
+    WHERE referencia_tipo='Orçamento' AND referencia_id=? AND tipo='Entrega' AND ativo='Sim'
+    ORDER BY id DESC LIMIT 1
+    """, (int(orcamento_id),))
+
+    status_orc = str(o.get("status", "") or "")
+    status_tarefa = "Pendente"
+    if status_orc in ["Pronto", "Saiu para entrega"]:
+        status_tarefa = "Em andamento"
+    elif status_orc == "Entregue":
+        status_tarefa = "Concluída"
+    elif status_orc == "Cancelado":
+        status_tarefa = "Cancelado"
+
+    titulo = f"Entrega {codigo_visual('ORC', int(orcamento_id), ano=datetime.now().year)} - {o.get('cliente_nome','')}"
+
+    if existe.empty:
+        tarefa_id = executar("""
+        INSERT INTO agenda_tarefas(
+            titulo, tipo, cliente_id, cliente_nome, referencia_tipo, referencia_id,
+            data, hora, prioridade, status, descricao, observacoes, ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            titulo,
+            "Entrega",
+            int(o["cliente_id"]) if "cliente_id" in o.index and pd.notna(o["cliente_id"]) else None,
+            str(o.get("cliente_nome", "")),
+            "Orçamento",
+            int(orcamento_id),
+            data_entrega,
+            str(o.get("hora_prevista_entrega", "") or ""),
+            str(o.get("prioridade_entrega", "") or "Normal"),
+            status_tarefa,
+            f"Entrega prevista do orçamento #{int(orcamento_id)}",
+            str(o.get("observacoes_entrega", "") or ""),
+            "Sim",
+        ))
+        return tarefa_id
+
+    tarefa_id = int(existe.iloc[0]["id"])
+    executar("""
+    UPDATE agenda_tarefas
+    SET titulo=?, data=?, hora=?, prioridade=?, status=?, observacoes=?
+    WHERE id=?
+    """, (
+        titulo,
+        data_entrega,
+        str(o.get("hora_prevista_entrega", "") or ""),
+        str(o.get("prioridade_entrega", "") or "Normal"),
+        status_tarefa,
+        str(o.get("observacoes_entrega", "") or ""),
+        tarefa_id,
+    ))
+    return tarefa_id
+
+
+def aplicar_fluxo_status_orcamento(orcamento_id, novo_status):
+    garantir_campos_entrega_orcamento()
+    orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
+
+    if orc.empty:
+        return
+
+    o = orc.iloc[0]
+
+    if novo_status in ["Pago", "Produção", "Embalagem", "Pronto", "Saiu para entrega", "Finalizado", "Entregue"]:
+        try:
+            fin_existe = consultar("SELECT id FROM financeiro WHERE origem='Orçamento' AND referencia_id=? LIMIT 1", (int(orcamento_id),))
+            if fin_existe.empty:
+                executar("""
+                INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    hoje_iso(),
+                    "Entrada",
+                    f"Orçamento #{int(orcamento_id)} - {o.get('cliente_nome','')}",
+                    "Venda",
+                    str(o.get("forma_pagamento", "")),
+                    n(o.get("total", 0)),
+                    "Orçamento",
+                    int(orcamento_id),
+                    str(o.get("observacoes", "") or ""),
+                ))
+        except Exception:
+            pass
+
+    if novo_status in ["Produção", "Embalagem", "Pronto", "Saiu para entrega", "Finalizado", "Entregue"]:
+        try:
+            criar_op_de_orcamento(
+                int(orcamento_id),
+                prioridade=str(o.get("prioridade_entrega", "") or "Normal"),
+                data_entrega=str(o.get("data_prevista_entrega", "") or ""),
+                observacoes_extra="Criada/atualizada pelo fluxo do orçamento.",
+            )
+        except Exception:
+            pass
+
+    try:
+        if novo_status == "Produção":
+            executar("UPDATE ordens_producao SET status='Produzindo' WHERE orcamento_id=? AND ativo='Sim'", (int(orcamento_id),))
+        elif novo_status in ["Pronto", "Finalizado"]:
+            executar("UPDATE ordens_producao SET status='Finalizado' WHERE orcamento_id=? AND ativo='Sim'", (int(orcamento_id),))
+        elif novo_status == "Entregue":
+            executar("UPDATE ordens_producao SET status='Entregue' WHERE orcamento_id=? AND ativo='Sim'", (int(orcamento_id),))
+    except Exception:
+        pass
+
+    try:
+        criar_ou_atualizar_entrega_do_orcamento(int(orcamento_id))
+        criar_ou_atualizar_tarefa_entrega_do_orcamento(int(orcamento_id))
+    except Exception:
+        pass
 
 
 # ============================================================
