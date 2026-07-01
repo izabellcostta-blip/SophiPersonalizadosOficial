@@ -491,6 +491,38 @@ def criar_banco():
     )
     """)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS kits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        categoria TEXT,
+        descricao TEXT,
+        status TEXT DEFAULT 'Disponível',
+        favorito TEXT DEFAULT 'Não',
+        destaque_catalogo TEXT DEFAULT 'Sim',
+        foto TEXT,
+        itens_json TEXT,
+        custo_total REAL DEFAULT 0,
+        preco_sugerido REAL DEFAULT 0,
+        preco_promocional REAL DEFAULT 0,
+        lucro REAL DEFAULT 0,
+        margem REAL DEFAULT 0,
+        ativo TEXT DEFAULT 'Sim',
+        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS historico_kits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kit_id INTEGER,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        acao TEXT,
+        observacoes TEXT
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -3369,6 +3401,171 @@ def mostrar_linha_tempo_cliente(cliente_id):
 
 
 
+
+
+def tela_kits():
+    st.title("Kits")
+    st.write("Monte kits completos com produtos, embalagens, brindes e materiais. O ERP calcula custo, preço, lucro e margem automaticamente.")
+    abas = st.tabs(["Cadastrar / montar kit", "Kits cadastrados", "Ficha do kit"])
+    with abas[0]:
+        st.subheader("Dados do kit")
+        c1, c2, c3 = st.columns([2.2, 1.5, 1])
+        nome = c1.text_input("Nome do kit", placeholder="Ex: Kit Café da Manhã")
+        categoria = c2.text_input("Categoria", placeholder="Ex: Cestas / Presentes")
+        status = c3.selectbox("Status", ["Disponível", "Sob encomenda", "Esgotado"])
+        descricao = st.text_area("Descrição do kit para catálogo e orçamento", placeholder="Descreva o que acompanha o kit.")
+        c4, c5, c6 = st.columns(3)
+        favorito = c4.selectbox("Favorito?", ["Não", "Sim"])
+        destaque_catalogo = c5.selectbox("Aparecer no catálogo?", ["Sim", "Não"])
+        ativo = c6.selectbox("Kit ativo?", ["Sim", "Não"])
+        foto_upload = st.file_uploader("Foto do kit", type=["png", "jpg", "jpeg", "webp"], key="foto_kit_upload")
+        st.divider()
+        st.subheader("Montador de kit")
+        if "qtd_itens_kit" not in st.session_state:
+            st.session_state.qtd_itens_kit = 3
+        b1, b2, b3 = st.columns([1.4, 1.4, 3])
+        with b1:
+            if st.button(f"+ Adicionar item {st.session_state.qtd_itens_kit + 1}"):
+                if st.session_state.qtd_itens_kit < 30:
+                    st.session_state.qtd_itens_kit += 1
+                    st.rerun()
+        with b2:
+            if st.button("− Remover último item"):
+                if st.session_state.qtd_itens_kit > 1:
+                    st.session_state.qtd_itens_kit -= 1
+                    st.rerun()
+        with b3:
+            st.info(f"Itens no kit: {st.session_state.qtd_itens_kit}")
+        itens = []
+        custo_total = 0.0
+        for linha in range(1, int(st.session_state.qtd_itens_kit) + 1):
+            with st.container(border=True):
+                st.markdown(f"**Item {linha}**")
+                item = seletor_item_kit(linha)
+                if item:
+                    itens.append(item)
+                    custo_total += n(item["total"])
+        st.divider()
+        st.subheader("Precificação do kit")
+        c7, c8, c9, c10 = st.columns(4)
+        margem = c7.number_input("Margem desejada (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f")
+        preco_sugerido = calcular_preco_kit(custo_total, margem)
+        preco_promocional = c8.number_input("Preço promocional / escolhido", min_value=0.0, value=0.0, step=0.10, format="%.2f")
+        preco_final = preco_promocional if preco_promocional > 0 else preco_sugerido
+        lucro = preco_final - custo_total
+        margem_real = lucro / preco_final * 100 if preco_final > 0 else 0
+        with c9: st.metric("Custo total", real(custo_total))
+        with c10: st.metric("Preço sugerido", real(preco_sugerido))
+        r1, r2, r3 = st.columns(3)
+        with r1: card("Preço final", real(preco_final))
+        with r2: card("Lucro", real(lucro))
+        with r3: card("Margem", f"{margem_real:.2f}%")
+        if itens:
+            st.subheader("Resumo dos itens do kit")
+            st.dataframe(formatar_valores_tabela(pd.DataFrame(itens)), use_container_width=True, hide_index=True)
+        if st.button("Salvar kit"):
+            if not nome.strip():
+                st.error("Digite o nome do kit.")
+            elif not itens:
+                st.error("Adicione pelo menos um item ao kit.")
+            else:
+                foto_path = salvar_upload(foto_upload, f"kit_{nome.replace(' ', '_')}") if foto_upload else ""
+                kit_id = executar("""
+                INSERT INTO kits(nome, categoria, descricao, status, favorito, destaque_catalogo,
+                    foto, itens_json, custo_total, preco_sugerido, preco_promocional, lucro, margem, ativo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (nome, categoria, descricao, status, favorito, destaque_catalogo, foto_path, json.dumps(itens, ensure_ascii=False), custo_total, preco_sugerido, preco_promocional, lucro, margem_real, ativo))
+                registrar_historico_kit(kit_id, "Kit criado", f"Custo {real(custo_total)} | Preço {real(preco_final)}")
+                st.success(f"Kit {codigo_kit(kit_id)} salvo com sucesso.")
+                st.rerun()
+    with abas[1]:
+        st.subheader("Kits cadastrados")
+        df = consultar("""
+        SELECT id, nome, categoria, status, favorito, destaque_catalogo,
+               custo_total, preco_sugerido, preco_promocional, lucro, margem, ativo, data_cadastro
+        FROM kits ORDER BY id DESC
+        """)
+        if df.empty:
+            st.info("Nenhum kit cadastrado ainda.")
+        else:
+            df = adicionar_codigo_visual(df, "KIT")
+            edited = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic", key="editor_kits", column_config={
+                "custo_total": st.column_config.NumberColumn("Custo total", format="R$ %.2f"),
+                "preco_sugerido": st.column_config.NumberColumn("Preço sugerido", format="R$ %.2f"),
+                "preco_promocional": st.column_config.NumberColumn("Preço promocional", format="R$ %.2f"),
+                "lucro": st.column_config.NumberColumn("Lucro", format="R$ %.2f"),
+                "margem": st.column_config.NumberColumn("Margem", format="%.2f%%"),
+                "status": st.column_config.SelectboxColumn("Status", options=["Disponível", "Sob encomenda", "Esgotado"]),
+                "favorito": st.column_config.SelectboxColumn("Favorito", options=["Sim", "Não"]),
+                "destaque_catalogo": st.column_config.SelectboxColumn("Catálogo", options=["Sim", "Não"]),
+                "ativo": st.column_config.SelectboxColumn("Ativo", options=["Sim", "Não"]),
+            })
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("Salvar alterações dos kits"):
+                    for _, r in edited.iterrows():
+                        if str(r.get("nome", "")).strip():
+                            executar("""
+                            UPDATE kits SET nome=?, categoria=?, status=?, favorito=?, destaque_catalogo=?, custo_total=?, preco_sugerido=?, preco_promocional=?, lucro=?, margem=?, ativo=? WHERE id=?
+                            """, (str(r.get("nome", "")), str(r.get("categoria", "")), str(r.get("status", "Disponível")), str(r.get("favorito", "Não")), str(r.get("destaque_catalogo", "Sim")), n(r.get("custo_total", 0)), n(r.get("preco_sugerido", 0)), n(r.get("preco_promocional", 0)), n(r.get("lucro", 0)), n(r.get("margem", 0)), str(r.get("ativo", "Sim")), int(r["id"])))
+                            registrar_historico_kit(int(r["id"]), "Kit atualizado", "Alteração manual na tabela de kits.")
+                    st.success("Kits atualizados.")
+                    st.rerun()
+            with c2:
+                id_excluir = st.number_input("ID para excluir kit", min_value=0, step=1, key="del_kit")
+                if st.button("Excluir kit"):
+                    if id_excluir > 0:
+                        executar("DELETE FROM historico_kits WHERE kit_id=?", (int(id_excluir),))
+                        executar("DELETE FROM kits WHERE id=?", (int(id_excluir),))
+                        st.success("Kit excluído.")
+                        st.rerun()
+                    else:
+                        st.warning("Digite um ID válido.")
+    with abas[2]:
+        st.subheader("Ficha completa do kit")
+        kits = consultar("SELECT id, nome FROM kits ORDER BY nome")
+        if kits.empty:
+            st.info("Nenhum kit cadastrado.")
+        else:
+            mapa = {f"{codigo_kit(row['id'])} - {row['nome']}": int(row["id"]) for _, row in kits.iterrows()}
+            escolhido = st.selectbox("Escolha um kit", list(mapa.keys()), key="ficha_kit_select")
+            kit_id = mapa[escolhido]
+            kit = consultar("SELECT * FROM kits WHERE id=?", (int(kit_id),))
+            if not kit.empty:
+                k = kit.iloc[0]
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: card("Código", codigo_kit(k["id"]))
+                with c2: card("Custo", real(k["custo_total"]))
+                preco = n(k["preco_promocional"]) if n(k["preco_promocional"]) > 0 else n(k["preco_sugerido"])
+                with c3: card("Preço", real(preco))
+                with c4: card("Lucro", real(k["lucro"]), f"{n(k['margem']):.2f}%")
+                foto = str(k.get("foto", "") or "")
+                if foto and Path(foto).exists(): st.image(foto, width=260)
+                st.write(f"**Nome:** {k['nome']}")
+                st.write(f"**Categoria:** {k['categoria'] or '-'}")
+                st.write(f"**Status:** {k['status']}")
+                st.write(f"**Descrição:** {k['descricao'] or '-'}")
+                st.markdown("### Itens do kit")
+                try:
+                    itens = json.loads(k["itens_json"] or "[]")
+                    if itens: st.dataframe(formatar_valores_tabela(pd.DataFrame(itens)), use_container_width=True, hide_index=True)
+                    else: st.info("Nenhum item salvo.")
+                except Exception:
+                    st.warning("Não foi possível ler os itens do kit.")
+                st.markdown("### Simulador de preço do kit")
+                sim = st.number_input("E se eu vender este kit por...", min_value=0.0, value=float(preco), step=0.10, format="%.2f", key=f"sim_kit_{kit_id}")
+                custo = n(k["custo_total"])
+                lucro_sim = sim - custo
+                margem_sim = lucro_sim / sim * 100 if sim > 0 else 0
+                s1, s2, s3 = st.columns(3)
+                with s1: card("Custo", real(custo))
+                with s2: card("Lucro simulado", real(lucro_sim))
+                with s3: card("Margem simulada", f"{margem_sim:.2f}%")
+                st.markdown("### Histórico do kit")
+                hist = consultar("SELECT data, acao, observacoes FROM historico_kits WHERE kit_id=? ORDER BY id DESC", (int(kit_id),))
+                if hist.empty: st.caption("Sem histórico ainda.")
+                else: st.dataframe(hist, use_container_width=True, hide_index=True)
+
 def tela_catalogo():
     st.title("Personalização do catálogo")
     st.write("Configure todas as informações que aparecem para seus clientes no link público.")
@@ -3902,6 +4099,133 @@ def tela_catalogo_publico_cliente():
     )
 
 
+
+
+# ============================================================
+# MÓDULO 1 — KITS
+# ============================================================
+
+def codigo_kit(kit_id):
+    return codigo_visual("KIT", kit_id)
+
+
+def registrar_historico_kit(kit_id, acao, observacoes=""):
+    try:
+        executar("""
+        INSERT INTO historico_kits(kit_id, acao, observacoes)
+        VALUES (?, ?, ?)
+        """, (int(kit_id), str(acao), str(observacoes)))
+    except Exception:
+        pass
+
+
+def calcular_preco_kit(custo_total, margem):
+    return n(custo_total) * (1 + n(margem) / 100)
+
+
+def buscar_itens_para_kit(tipo):
+    try:
+        if tipo in ["Insumo", "Embalagem", "Papel", "Brinde"]:
+            if tipo == "Embalagem":
+                return consultar("""
+                SELECT id, nome, categoria, valor_pacote, quantidade_pacote
+                FROM insumos
+                WHERE ativo='Sim' AND (
+                    LOWER(categoria) LIKE '%embalagem%'
+                    OR LOWER(categoria) LIKE '%sacola%'
+                    OR LOWER(categoria) LIKE '%caixa%'
+                    OR LOWER(categoria) LIKE '%envelope%'
+                )
+                ORDER BY categoria, nome
+                """)
+            if tipo == "Papel":
+                return consultar("""
+                SELECT id, nome, categoria, valor_pacote, quantidade_pacote
+                FROM insumos
+                WHERE ativo='Sim' AND LOWER(categoria) LIKE '%papel%'
+                ORDER BY categoria, nome
+                """)
+            if tipo == "Brinde":
+                return consultar("""
+                SELECT id, nome, categoria, valor_pacote, quantidade_pacote
+                FROM insumos
+                WHERE ativo='Sim' AND LOWER(categoria) LIKE '%brinde%'
+                ORDER BY categoria, nome
+                """)
+            return consultar("""
+            SELECT id, nome, categoria, valor_pacote, quantidade_pacote
+            FROM insumos
+            WHERE ativo='Sim'
+            ORDER BY categoria, nome
+            """)
+        if tipo == "Produto":
+            return consultar("""
+            SELECT id, nome, categoria, custo_unitario AS valor_pacote, 1 AS quantidade_pacote
+            FROM produtos
+            WHERE ativo='Sim'
+            ORDER BY categoria, nome
+            """)
+        if tipo == "Laminação":
+            return consultar("""
+            SELECT id, nome, tipo AS categoria, custo_a4 AS valor_pacote, 1 AS quantidade_pacote
+            FROM laminacoes
+            WHERE ativo='Sim'
+            ORDER BY tipo, nome
+            """)
+        if tipo == "Manta / Ímã":
+            return consultar("""
+            SELECT id, nome, tipo AS categoria, custo_unitario AS valor_pacote, 1 AS quantidade_pacote
+            FROM mantas_imas
+            WHERE ativo='Sim'
+            ORDER BY tipo, nome
+            """)
+        if tipo == "Tinta":
+            return consultar("""
+            SELECT id, nome, 'Tinta' AS categoria, valor_kit, rendimento_impressoes
+            FROM tintas
+            WHERE ativo='Sim'
+            ORDER BY nome
+            """)
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+def seletor_item_kit(linha):
+    tipos = ["Insumo", "Produto", "Embalagem", "Papel", "Laminação", "Manta / Ímã", "Tinta", "Brinde", "Manual"]
+    c1, c2, c3, c4 = st.columns([1.7, 4, 1.2, 1.3])
+    tipo = c1.selectbox("Tipo", tipos, key=f"kit_tipo_{linha}")
+    if tipo == "Manual":
+        nome = c2.text_input("Item manual", key=f"kit_manual_nome_{linha}", placeholder="Ex: Bombom Nestlé")
+        qtd = c3.number_input("Qtd", min_value=0.0, value=1.0, step=1.0, key=f"kit_manual_qtd_{linha}")
+        custo_unit = c4.number_input("Custo un.", min_value=0.0, value=0.0, step=0.01, format="%.2f", key=f"kit_manual_custo_{linha}")
+        if not nome.strip() or qtd <= 0:
+            return None
+        return {"tipo": tipo, "id": None, "nome": nome, "categoria": "Manual", "qtd": qtd, "custo_unitario": custo_unit, "total": qtd * custo_unit}
+    df = buscar_itens_para_kit(tipo)
+    if df.empty:
+        c2.selectbox("Item", ["Nenhum cadastrado"], key=f"kit_item_{linha}")
+        c3.number_input("Qtd", min_value=0.0, value=0.0, key=f"kit_qtd_{linha}")
+        c4.text_input("Total", value=real(0), disabled=True, key=f"kit_custo_{linha}")
+        return None
+    opcoes = ["Nenhum"]
+    mapa = {}
+    for _, r in df.iterrows():
+        custo = custo_tinta(r["valor_kit"], r["rendimento_impressoes"]) if tipo == "Tinta" else custo_insumo(r["valor_pacote"], r["quantidade_pacote"])
+        label = f"{r['nome']} — {r['categoria']} — {real(custo)}"
+        opcoes.append(label)
+        mapa[label] = {"tipo": tipo, "id": int(r["id"]), "nome": r["nome"], "categoria": r["categoria"], "custo_unitario": custo}
+    escolhido = c2.selectbox("Item", opcoes, key=f"kit_item_{linha}")
+    qtd = c3.number_input("Qtd", min_value=0.0, value=1.0 if escolhido != "Nenhum" else 0.0, step=1.0, key=f"kit_qtd_{linha}")
+    if escolhido == "Nenhum" or qtd <= 0:
+        c4.text_input("Total", value=real(0), disabled=True, key=f"kit_custo_{linha}")
+        return None
+    item = mapa[escolhido]
+    item["qtd"] = qtd
+    item["total"] = item["custo_unitario"] * qtd
+    c4.text_input("Total", value=real(item["total"]), disabled=True, key=f"kit_custo_{linha}")
+    return item
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -4128,6 +4452,8 @@ elif menu == "Ordem de Produção":
     tela_ordens_producao()
 elif menu == "Produtos / Precificação":
     tela_produtos()
+elif menu == "Kits":
+    tela_kits()
 elif menu == "Papéis":
     tela_cadastro_por_categoria("Papéis", "Papel")
 elif menu == "Embalagens":
