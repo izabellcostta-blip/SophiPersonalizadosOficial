@@ -9833,6 +9833,10 @@ def tela_biblioteca_artes():
 
 
 
+
+def tela_catalogo_publico():
+    tela_catalogo()
+
 # ============================================================
 # MENU ORGANIZADO — TELAS AGRUPADAS
 # ============================================================
