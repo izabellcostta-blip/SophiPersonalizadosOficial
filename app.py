@@ -1410,7 +1410,7 @@ button {{
             <div class="label">Cliente</div>
             <div class="value">{o['cliente_nome']}</div>
             <p><b>WhatsApp:</b> {o['whatsapp'] or '-'}</p>
-            <p><b>Data:</b> {o['data_orcamento']}</p><p><b>Prazo de entrega:</b> {prazo_entrega}</p>
+            <p><b>Data:</b> {data_hora_br(data_hora_br(o['data_orcamento']))}</p><p><b>Prazo de entrega:</b> {prazo_entrega}</p>
         </div>
         <div class="box">
             <div class="label">Pagamento</div>
