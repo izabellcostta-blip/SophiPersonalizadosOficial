@@ -3027,15 +3027,30 @@ def tela_orcamentos():
                 opcoes = produtos["nome"].tolist()
                 produto = c1.selectbox(f"Produto {i + 1}", opcoes, key=f"orc_produto_{i}")
                 dados_produto = produtos[produtos["nome"] == produto].iloc[0]
+                produto_id_preco = int(dados_produto["id"])
                 categoria = str(dados_produto["categoria"] or "")
                 preco_escolhido = n(dados_produto["preco_escolhido"])
                 preco_sugerido = n(dados_produto["preco_sugerido"])
                 valor_padrao = preco_escolhido if preco_escolhido > 0 else preco_sugerido
-                c2.text_input(f"Categoria {i + 1}", value=categoria, disabled=True, key=f"orc_categoria_{i}")
+                c2.text_input(f"Categoria {i + 1}", value=categoria, disabled=True, key=f"orc_categoria_{i}_{produto_id_preco}")
 
             c3, c4, c5, c6 = st.columns(4)
             quantidade = c3.number_input(f"Quantidade {i + 1}", min_value=0.0, value=1.0, step=1.0, key=f"orc_qtd_{i}")
-            valor_unitario = c4.number_input(f"Valor unitário {i + 1}", min_value=0.0, value=float(valor_padrao), step=0.50, format="%.2f", key=f"orc_unit_{i}")
+            chave_valor_unitario = f"orc_unit_{i}"
+            if not modo_manual:
+                try:
+                    chave_valor_unitario = f"orc_unit_{i}_{produto_id_preco}"
+                except Exception:
+                    chave_valor_unitario = f"orc_unit_{i}"
+
+            valor_unitario = c4.number_input(
+                f"Valor unitário {i + 1}",
+                min_value=0.0,
+                value=float(valor_padrao),
+                step=0.50,
+                format="%.2f",
+                key=chave_valor_unitario,
+            )
             desconto_item = c5.number_input(f"Desconto R$ {i + 1}", min_value=0.0, value=0.0, step=0.50, format="%.2f", key=f"orc_desc_{i}")
             total_item = max((quantidade * valor_unitario) - desconto_item, 0)
             c6.metric("Total", real(total_item))
@@ -3056,7 +3071,7 @@ def tela_orcamentos():
     c4.metric("Total geral", real(total_geral))
 
     forma_pagamento = st.selectbox("Forma de pagamento", ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Mercado Pago", "Outro"])
-    status = st.selectbox("Status", ["Em orçamento", "Aguardando pagamento", "Produção", "Finalizado", "Entregue", "Cancelado"])
+    status = st.selectbox("Status", ["Em orçamento", "Aprovado", "Aguardando pagamento", "Pago", "Produção", "Finalizado", "Entregue", "Cancelado"])
     observacoes = st.text_area("Observações do orçamento")
 
     if st.button("Salvar orçamento"):
@@ -3097,7 +3112,7 @@ def tela_orcamentos():
                         f"Baixa automática orçamento #{ultimo}",
                     ))
 
-            if status in ["Aguardando pagamento", "Produção", "Finalizado", "Entregue"]:
+            if status in ["Pago", "Produção", "Finalizado", "Entregue"]:
                 executar("""
                 INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -3161,6 +3176,51 @@ def tela_orcamentos():
             },
         )
 
+        orc_status_df = consultar("SELECT status, total, cliente_nome, forma_pagamento, observacoes FROM orcamentos WHERE id=?", (int(id_ver),))
+        if not orc_status_df.empty:
+            st.markdown("### Alterar status do orçamento")
+            status_atual = str(orc_status_df.iloc[0]["status"])
+            opcoes_status = ["Em orçamento", "Aprovado", "Aguardando pagamento", "Pago", "Produção", "Finalizado", "Entregue", "Cancelado"]
+            try:
+                idx_status = opcoes_status.index(status_atual)
+            except Exception:
+                idx_status = 0
+
+            novo_status_orc = st.selectbox("Status do pedido", opcoes_status, index=idx_status, key=f"status_orc_existente_{int(id_ver)}")
+
+            if st.button("Atualizar status do orçamento", key=f"btn_atualizar_status_orc_{int(id_ver)}"):
+                executar("UPDATE orcamentos SET status=? WHERE id=?", (novo_status_orc, int(id_ver)))
+
+                if novo_status_orc in ["Pago", "Produção", "Finalizado", "Entregue"]:
+                    # Cria lançamento financeiro apenas se ainda não existir.
+                    fin_existe = consultar("SELECT id FROM financeiro WHERE origem='Orçamento' AND referencia_id=? LIMIT 1", (int(id_ver),))
+                    if fin_existe.empty:
+                        executar("""
+                        INSERT INTO financeiro(data, tipo, descricao, categoria, forma_pagamento, valor, origem, referencia_id, observacoes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            hoje_iso(),
+                            "Entrada",
+                            f"Orçamento #{int(id_ver)} - {orc_status_df.iloc[0]['cliente_nome']}",
+                            "Venda",
+                            str(orc_status_df.iloc[0]["forma_pagamento"]),
+                            n(orc_status_df.iloc[0]["total"]),
+                            "Orçamento",
+                            int(id_ver),
+                            str(orc_status_df.iloc[0].get("observacoes", "")),
+                        ))
+
+                if novo_status_orc in ["Produção", "Finalizado", "Entregue"]:
+                    try:
+                        garantir_ordem_producao(int(id_ver))
+                        criar_op_de_orcamento(int(id_ver), prioridade="Normal", observacoes_extra="Criada/atualizada ao mudar status do orçamento.")
+                    except Exception:
+                        pass
+
+                st.success("Status atualizado com sucesso.")
+                st.rerun()
+
+
         html = gerar_html_orcamento(int(id_ver))
         if html:
             st.download_button(
@@ -3173,7 +3233,7 @@ def tela_orcamentos():
             etiqueta_html = criar_html_etiqueta(int(id_ver))
             if etiqueta_html:
                 st.download_button(
-                    "Baixar etiqueta do pedido",
+                    "Baixar etiqueta da encomenda com QR do portal",
                     data=etiqueta_html.encode("utf-8"),
                     file_name=f"etiqueta_{int(id_ver)}.html",
                     mime="text/html",
@@ -3456,10 +3516,26 @@ def criar_html_etiqueta(orcamento_id):
     codigo = codigo_visual("ORC", int(orcamento_id), ano=datetime.now().year)
     empresa = obter_config("nome_empresa", EMPRESA)
 
-    qr_texto = f"{codigo} - {o['cliente_nome']} - {o['whatsapp']}"
+    # O QR Code agora abre o Portal do Cliente/status do pedido.
+    try:
+        token = gerar_token_portal("Orçamento", int(orcamento_id))
+    except Exception:
+        token = ""
+
+    try:
+        base_url = obter_config("catalogo_link_base", "").strip()
+    except Exception:
+        base_url = ""
+
+    if not base_url:
+        base_url = "https://sophipersonalizadosoficial.streamlit.app"
+
+    base_url = base_url.split("?")[0].rstrip("/")
+    portal_url = f"{base_url}/?portal=cliente&token={token}" if token else f"{base_url}/?portal=cliente"
+
     try:
         import urllib.parse
-        qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=" + urllib.parse.quote(qr_texto)
+        qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=" + urllib.parse.quote(portal_url)
     except Exception:
         qr_url = ""
 
@@ -3502,6 +3578,13 @@ p {{
     width: 95px;
     height: 95px;
 }}
+.link {{
+    font-size: 8px;
+    max-width: 48mm;
+    word-break: break-all;
+    color: #555;
+    margin-top: 5px;
+}}
 @media print {{
     @page {{ size: auto; margin: 8mm; }}
     button {{ display: none; }}
@@ -3526,6 +3609,7 @@ button {{
         <p><b>WhatsApp:</b> {o['whatsapp'] or '-'}</p>
         <p><b>Status:</b> {o['status']}</p>
         <p class="codigo">{codigo}</p>
+        <p class="link">QR: Portal do Cliente / Status do Pedido</p>
     </div>
     <div class="qr">
         <img src="{qr_url}">
@@ -3534,6 +3618,7 @@ button {{
 </body>
 </html>"""
     return html
+
 
 
 def gerar_html_catalogo_publico():
