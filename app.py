@@ -833,6 +833,43 @@ def criar_banco():
         VALUES (?, ?, ?, ?, ?, ?)
         """, auto)
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS biblioteca_arquivos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Arte',
+        categoria TEXT,
+        produto_relacionado TEXT,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        caminho_arquivo TEXT,
+        formato TEXT,
+        tags TEXT,
+        favorito TEXT DEFAULT 'Não',
+        status TEXT DEFAULT 'Ativo',
+        observacoes TEXT,
+        data_upload TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS biblioteca_modelos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        tipo TEXT DEFAULT 'Template',
+        categoria TEXT,
+        tamanho TEXT,
+        descricao TEXT,
+        caminho_arquivo TEXT,
+        tags TEXT,
+        favorito TEXT DEFAULT 'Não',
+        status TEXT DEFAULT 'Ativo',
+        observacoes TEXT,
+        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -9321,6 +9358,479 @@ def tela_central_automacao():
                 st.text_area("Mensagem pronta", value=msg.replace("%0A", "\n"), height=160)
 
 
+
+
+# ============================================================
+# MÓDULO 10 — BIBLIOTECA DE ARTES / TEMPLATES
+# ============================================================
+
+def garantir_biblioteca_artes():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS biblioteca_arquivos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            tipo TEXT DEFAULT 'Arte',
+            categoria TEXT,
+            produto_relacionado TEXT,
+            cliente_id INTEGER,
+            cliente_nome TEXT,
+            caminho_arquivo TEXT,
+            formato TEXT,
+            tags TEXT,
+            favorito TEXT DEFAULT 'Não',
+            status TEXT DEFAULT 'Ativo',
+            observacoes TEXT,
+            data_upload TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS biblioteca_modelos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            tipo TEXT DEFAULT 'Template',
+            categoria TEXT,
+            tamanho TEXT,
+            descricao TEXT,
+            caminho_arquivo TEXT,
+            tags TEXT,
+            favorito TEXT DEFAULT 'Não',
+            status TEXT DEFAULT 'Ativo',
+            observacoes TEXT,
+            data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    except Exception:
+        pass
+
+
+def salvar_upload_biblioteca(upload, prefixo):
+    if upload is None:
+        return ""
+
+    try:
+        BIB_DIR = Path("uploads") / "biblioteca"
+        BIB_DIR.mkdir(parents=True, exist_ok=True)
+        ext = Path(upload.name).suffix.lower()
+        nome_limpo = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(upload.name).stem)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        caminho = BIB_DIR / f"{prefixo}_{timestamp}_{nome_limpo}{ext}"
+        caminho.write_bytes(upload.getbuffer())
+        return str(caminho)
+    except Exception:
+        return salvar_upload(upload, prefixo)
+
+
+def codigo_biblioteca(id_valor):
+    try:
+        return codigo_visual("ART", int(id_valor))
+    except Exception:
+        return f"ART-{int(id_valor):04d}"
+
+
+def codigo_modelo(id_valor):
+    try:
+        return codigo_visual("MOD", int(id_valor))
+    except Exception:
+        return f"MOD-{int(id_valor):04d}"
+
+
+def preview_arquivo_biblioteca(caminho):
+    try:
+        if not caminho or not Path(caminho).exists():
+            st.caption("Arquivo não encontrado no servidor.")
+            return
+
+        ext = Path(caminho).suffix.lower()
+
+        if ext in [".png", ".jpg", ".jpeg", ".webp"]:
+            st.image(caminho, use_container_width=True)
+        else:
+            st.caption(f"Arquivo salvo: {Path(caminho).name}")
+            with open(caminho, "rb") as f:
+                st.download_button(
+                    "Baixar arquivo",
+                    data=f.read(),
+                    file_name=Path(caminho).name,
+                    mime="application/octet-stream",
+                    key=f"download_{caminho}",
+                )
+    except Exception:
+        st.caption("Não foi possível exibir o arquivo.")
+
+
+def buscar_biblioteca(termo="", categoria="", tipo="", favoritos=False):
+    sql = """
+    SELECT *
+    FROM biblioteca_arquivos
+    WHERE status != 'Excluído'
+    """
+    params = []
+
+    if termo.strip():
+        like = f"%{termo.strip()}%"
+        sql += " AND (nome LIKE ? OR tags LIKE ? OR cliente_nome LIKE ? OR produto_relacionado LIKE ? OR observacoes LIKE ?)"
+        params.extend([like, like, like, like, like])
+
+    if categoria and categoria != "Todas":
+        sql += " AND categoria=?"
+        params.append(categoria)
+
+    if tipo and tipo != "Todos":
+        sql += " AND tipo=?"
+        params.append(tipo)
+
+    if favoritos:
+        sql += " AND favorito='Sim'"
+
+    sql += " ORDER BY favorito DESC, id DESC"
+
+    try:
+        return consultar(sql, tuple(params))
+    except Exception:
+        return pd.DataFrame()
+
+
+def tela_biblioteca_artes():
+    garantir_biblioteca_artes()
+
+    st.title("Biblioteca de Artes")
+    st.write("Organize artes, templates, mockups, arquivos de cliente, modelos de produção e referências da Sophi.")
+
+    abas = st.tabs([
+        "Adicionar arquivo",
+        "Buscar biblioteca",
+        "Modelos / Templates",
+        "Favoritos",
+        "Organização",
+    ])
+
+    with abas[0]:
+        st.subheader("Adicionar arte ou arquivo")
+
+        clientes = consultar("SELECT id, nome FROM clientes WHERE ativo='Sim' ORDER BY nome")
+        cliente_opcoes = ["Sem cliente"]
+        mapa_clientes = {"Sem cliente": (None, "")}
+
+        if not clientes.empty:
+            for _, c in clientes.iterrows():
+                label = f"{codigo_visual('CLI', c['id'])} - {c['nome']}"
+                cliente_opcoes.append(label)
+                mapa_clientes[label] = (int(c["id"]), str(c["nome"]))
+
+        produtos = consultar("SELECT nome FROM produtos WHERE ativo='Sim' ORDER BY nome")
+        lista_produtos = ["Sem produto"]
+        if not produtos.empty:
+            lista_produtos += produtos["nome"].astype(str).tolist()
+
+        upload = st.file_uploader(
+            "Enviar arquivo",
+            type=["png", "jpg", "jpeg", "webp", "pdf", "svg", "studio3", "zip", "psd", "ai"],
+            key="upload_biblioteca_arte",
+        )
+
+        with st.form("form_biblioteca_arquivo"):
+            c1, c2, c3 = st.columns(3)
+            nome = c1.text_input("Nome da arte/arquivo", placeholder="Ex: Arte Spotify casal")
+            tipo = c2.selectbox("Tipo", ["Arte", "Mockup", "Template", "Foto cliente", "Arquivo de corte", "PDF", "Referência", "Outro"])
+            categoria = c3.selectbox("Categoria", categorias_ativas() or ["Outro"])
+
+            c4, c5 = st.columns(2)
+            produto_rel = c4.selectbox("Produto relacionado", lista_produtos)
+            cliente_sel = c5.selectbox("Cliente", cliente_opcoes)
+
+            tags = st.text_input("Tags", placeholder="Ex: spotify, polaroid, casal, preto")
+            favorito = st.selectbox("Favorito?", ["Não", "Sim"])
+            observacoes = st.text_area("Observações")
+
+            if st.form_submit_button("Salvar na biblioteca"):
+                if not nome.strip():
+                    st.error("Digite o nome do arquivo.")
+                elif upload is None:
+                    st.error("Envie um arquivo.")
+                else:
+                    cliente_id, cliente_nome = mapa_clientes[cliente_sel]
+                    caminho = salvar_upload_biblioteca(upload, "arte")
+                    formato = Path(caminho).suffix.lower().replace(".", "") if caminho else ""
+
+                    executar("""
+                    INSERT INTO biblioteca_arquivos(
+                        nome, tipo, categoria, produto_relacionado, cliente_id, cliente_nome,
+                        caminho_arquivo, formato, tags, favorito, status, observacoes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        nome,
+                        tipo,
+                        categoria,
+                        "" if produto_rel == "Sem produto" else produto_rel,
+                        cliente_id,
+                        cliente_nome,
+                        caminho,
+                        formato,
+                        tags,
+                        favorito,
+                        "Ativo",
+                        observacoes,
+                    ))
+
+                    st.success("Arquivo salvo na biblioteca.")
+                    st.rerun()
+
+    with abas[1]:
+        st.subheader("Buscar na biblioteca")
+
+        c1, c2, c3, c4 = st.columns([2, 1.2, 1.2, 1])
+        termo = c1.text_input("Buscar por nome, tag, cliente ou produto")
+        categoria = c2.selectbox("Categoria", ["Todas"] + (categorias_ativas() or []), key="busca_cat_bib")
+        tipo = c3.selectbox("Tipo", ["Todos", "Arte", "Mockup", "Template", "Foto cliente", "Arquivo de corte", "PDF", "Referência", "Outro"], key="busca_tipo_bib")
+        fav = c4.checkbox("Só favoritos")
+
+        df = buscar_biblioteca(termo, categoria, tipo, fav)
+
+        if df.empty:
+            st.info("Nenhum arquivo encontrado.")
+        else:
+            df_view = df.copy()
+            df_view["codigo"] = df_view["id"].apply(codigo_biblioteca)
+
+            st.dataframe(
+                df_view[[
+                    "codigo", "id", "nome", "tipo", "categoria", "produto_relacionado",
+                    "cliente_nome", "formato", "tags", "favorito", "status", "data_upload"
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.divider()
+            st.subheader("Pré-visualizar arquivo")
+
+            mapa = {
+                f"{codigo_biblioteca(r['id'])} - {r['nome']}": int(r["id"])
+                for _, r in df.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha um arquivo", list(mapa.keys()))
+            item_id = mapa[escolhido]
+            item = df[df["id"] == item_id].iloc[0]
+
+            st.write(f"**Nome:** {item['nome']}")
+            st.write(f"**Tipo:** {item['tipo']}")
+            st.write(f"**Categoria:** {item['categoria']}")
+            st.write(f"**Produto:** {item['produto_relacionado'] or '-'}")
+            st.write(f"**Cliente:** {item['cliente_nome'] or '-'}")
+            st.write(f"**Tags:** {item['tags'] or '-'}")
+            st.write(f"**Observações:** {item['observacoes'] or '-'}")
+
+            preview_arquivo_biblioteca(str(item["caminho_arquivo"]))
+
+    with abas[2]:
+        st.subheader("Modelos e templates")
+
+        upload_modelo = st.file_uploader(
+            "Enviar template/modelo",
+            type=["png", "jpg", "jpeg", "webp", "pdf", "svg", "studio3", "zip", "psd", "ai"],
+            key="upload_modelo_biblioteca",
+        )
+
+        with st.form("form_modelo_biblioteca"):
+            c1, c2, c3 = st.columns(3)
+            nome = c1.text_input("Nome do modelo", placeholder="Ex: Template Polaroid 6x8")
+            tipo = c2.selectbox("Tipo do modelo", ["Template", "Mockup", "Arquivo de corte", "PDF", "SVG", "Outro"])
+            categoria = c3.selectbox("Categoria do modelo", categorias_ativas() or ["Outro"])
+
+            tamanho = st.text_input("Tamanho", placeholder="Ex: 6x8 cm / A4 / 5x15 cm")
+            descricao = st.text_area("Descrição do modelo")
+            tags = st.text_input("Tags do modelo", placeholder="Ex: polaroid, a4, corte")
+            favorito = st.selectbox("Favorito?", ["Não", "Sim"], key="fav_modelo_bib")
+            obs = st.text_area("Observações do modelo")
+
+            if st.form_submit_button("Salvar modelo"):
+                if not nome.strip():
+                    st.error("Digite o nome do modelo.")
+                elif upload_modelo is None:
+                    st.error("Envie o arquivo do modelo.")
+                else:
+                    caminho = salvar_upload_biblioteca(upload_modelo, "modelo")
+                    executar("""
+                    INSERT INTO biblioteca_modelos(
+                        nome, tipo, categoria, tamanho, descricao,
+                        caminho_arquivo, tags, favorito, status, observacoes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        nome, tipo, categoria, tamanho, descricao,
+                        caminho, tags, favorito, "Ativo", obs,
+                    ))
+                    st.success("Modelo salvo.")
+                    st.rerun()
+
+        st.divider()
+        modelos = consultar("""
+        SELECT *
+        FROM biblioteca_modelos
+        WHERE status != 'Excluído'
+        ORDER BY favorito DESC, id DESC
+        """)
+
+        if modelos.empty:
+            st.info("Nenhum modelo cadastrado.")
+        else:
+            modelos["codigo"] = modelos["id"].apply(codigo_modelo)
+            st.dataframe(modelos, use_container_width=True, hide_index=True)
+
+            mapa_mod = {
+                f"{codigo_modelo(r['id'])} - {r['nome']}": int(r["id"])
+                for _, r in modelos.iterrows()
+            }
+
+            esc = st.selectbox("Pré-visualizar modelo", list(mapa_mod.keys()))
+            mid = mapa_mod[esc]
+            m = modelos[modelos["id"] == mid].iloc[0]
+            preview_arquivo_biblioteca(str(m["caminho_arquivo"]))
+
+    with abas[3]:
+        st.subheader("Favoritos")
+
+        artes_fav = consultar("""
+        SELECT *
+        FROM biblioteca_arquivos
+        WHERE favorito='Sim' AND status != 'Excluído'
+        ORDER BY id DESC
+        """)
+
+        modelos_fav = consultar("""
+        SELECT *
+        FROM biblioteca_modelos
+        WHERE favorito='Sim' AND status != 'Excluído'
+        ORDER BY id DESC
+        """)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Artes favoritas")
+            if artes_fav.empty:
+                st.info("Nenhuma arte favorita.")
+            else:
+                artes_fav["codigo"] = artes_fav["id"].apply(codigo_biblioteca)
+                st.dataframe(artes_fav, use_container_width=True, hide_index=True)
+
+        with col2:
+            st.markdown("### Modelos favoritos")
+            if modelos_fav.empty:
+                st.info("Nenhum modelo favorito.")
+            else:
+                modelos_fav["codigo"] = modelos_fav["id"].apply(codigo_modelo)
+                st.dataframe(modelos_fav, use_container_width=True, hide_index=True)
+
+    with abas[4]:
+        st.subheader("Organização e edição rápida")
+
+        st.markdown("### Artes / arquivos")
+
+        arquivos = consultar("""
+        SELECT id, nome, tipo, categoria, produto_relacionado, cliente_nome,
+               tags, favorito, status, observacoes, data_upload
+        FROM biblioteca_arquivos
+        ORDER BY id DESC
+        """)
+
+        if arquivos.empty:
+            st.info("Nenhum arquivo para organizar.")
+        else:
+            edited = st.data_editor(
+                arquivos,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_biblioteca_arquivos",
+                column_config={
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Arte", "Mockup", "Template", "Foto cliente", "Arquivo de corte", "PDF", "Referência", "Outro"]),
+                    "favorito": st.column_config.SelectboxColumn("Favorito", options=["Sim", "Não"]),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Ativo", "Arquivado", "Excluído"]),
+                },
+            )
+
+            if st.button("Salvar organização das artes"):
+                for _, r in edited.iterrows():
+                    if str(r.get("nome", "")).strip():
+                        executar("""
+                        UPDATE biblioteca_arquivos
+                        SET nome=?, tipo=?, categoria=?, produto_relacionado=?,
+                            cliente_nome=?, tags=?, favorito=?, status=?, observacoes=?
+                        WHERE id=?
+                        """, (
+                            str(r.get("nome", "")),
+                            str(r.get("tipo", "")),
+                            str(r.get("categoria", "")),
+                            str(r.get("produto_relacionado", "")),
+                            str(r.get("cliente_nome", "")),
+                            str(r.get("tags", "")),
+                            str(r.get("favorito", "Não")),
+                            str(r.get("status", "Ativo")),
+                            str(r.get("observacoes", "")),
+                            int(r["id"]),
+                        ))
+                st.success("Biblioteca atualizada.")
+                st.rerun()
+
+        st.divider()
+
+        st.markdown("### Modelos / templates")
+
+        modelos = consultar("""
+        SELECT id, nome, tipo, categoria, tamanho, descricao,
+               tags, favorito, status, observacoes, data_cadastro
+        FROM biblioteca_modelos
+        ORDER BY id DESC
+        """)
+
+        if modelos.empty:
+            st.info("Nenhum modelo para organizar.")
+        else:
+            edited_m = st.data_editor(
+                modelos,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="editor_biblioteca_modelos",
+                column_config={
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Template", "Mockup", "Arquivo de corte", "PDF", "SVG", "Outro"]),
+                    "favorito": st.column_config.SelectboxColumn("Favorito", options=["Sim", "Não"]),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Ativo", "Arquivado", "Excluído"]),
+                },
+            )
+
+            if st.button("Salvar organização dos modelos"):
+                for _, r in edited_m.iterrows():
+                    if str(r.get("nome", "")).strip():
+                        executar("""
+                        UPDATE biblioteca_modelos
+                        SET nome=?, tipo=?, categoria=?, tamanho=?, descricao=?,
+                            tags=?, favorito=?, status=?, observacoes=?
+                        WHERE id=?
+                        """, (
+                            str(r.get("nome", "")),
+                            str(r.get("tipo", "")),
+                            str(r.get("categoria", "")),
+                            str(r.get("tamanho", "")),
+                            str(r.get("descricao", "")),
+                            str(r.get("tags", "")),
+                            str(r.get("favorito", "Não")),
+                            str(r.get("status", "Ativo")),
+                            str(r.get("observacoes", "")),
+                            int(r["id"]),
+                        ))
+                st.success("Modelos atualizados.")
+                st.rerun()
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -9534,6 +10044,7 @@ menu = st.sidebar.radio(
         "Produção",
         "Agenda e Entregas",
         "Produtos / Precificação",
+        "Biblioteca de Artes",
         "Kits",
         "Papéis",
         "Embalagens",
@@ -9573,6 +10084,8 @@ elif menu == "Ordem de Produção":
     tela_ordens_producao()
 elif menu == "Produtos / Precificação":
     tela_produtos()
+elif menu == "Biblioteca de Artes":
+    tela_biblioteca_artes()
 elif menu == "Kits":
     tela_kits()
 elif menu == "Papéis":
