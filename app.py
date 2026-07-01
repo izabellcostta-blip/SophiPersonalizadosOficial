@@ -11243,6 +11243,7 @@ menu = st.sidebar.radio(
     [
         "🏠 Dashboard",
         "👥 Clientes / CRM",
+        "💬 Mensagens WhatsApp",
         "📝 Orçamentos",
         "🏭 Produção / Agenda",
         "🏷 Produtos / Precificação",
