@@ -9831,6 +9831,92 @@ def tela_biblioteca_artes():
                 st.rerun()
 
 
+
+
+# ============================================================
+# MENU ORGANIZADO — TELAS AGRUPADAS
+# ============================================================
+
+def tela_clientes_crm():
+    st.title("Clientes / CRM")
+    abas = st.tabs(["Clientes", "CRM Inteligente"])
+    with abas[0]:
+        tela_clientes()
+    with abas[1]:
+        tela_crm_inteligente()
+
+
+def tela_producao_agenda():
+    st.title("Produção / Agenda")
+    abas = st.tabs(["Produção", "Agenda e Entregas"])
+    with abas[0]:
+        tela_producao()
+    with abas[1]:
+        tela_agenda_entregas()
+
+
+def tela_materiais():
+    st.title("Materiais")
+    st.write("Cadastre e organize todos os materiais usados na produção.")
+
+    abas = st.tabs([
+        "Papéis",
+        "Embalagens",
+        "Laminação",
+        "Mantas / Ímã / Velcro",
+        "Insumos",
+        "Tintas",
+        "Equipamentos",
+        "Categorias",
+    ])
+
+    with abas[0]:
+        tela_cadastro_por_categoria("Papéis", "Papel")
+    with abas[1]:
+        tela_embalagens()
+    with abas[2]:
+        tela_laminacao()
+    with abas[3]:
+        tela_mantas_imas()
+    with abas[4]:
+        tela_insumos()
+    with abas[5]:
+        tela_tintas()
+    with abas[6]:
+        tela_equipamentos()
+    with abas[7]:
+        tela_categorias()
+
+
+def tela_estoque_unificado():
+    st.title("Estoque")
+    abas = st.tabs(["Movimentos", "Estoque Inteligente"])
+    with abas[0]:
+        tela_estoque()
+    with abas[1]:
+        tela_estoque_inteligente()
+
+
+def tela_financeiro_unificado():
+    st.title("Financeiro")
+    abas = st.tabs(["Financeiro Profissional", "Dashboard Financeiro", "Fluxo de Caixa"])
+    with abas[0]:
+        tela_financeiro_profissional()
+    with abas[1]:
+        tela_dashboard_financeiro()
+    with abas[2]:
+        tela_financeiro()
+
+
+def tela_catalogo_portal():
+    st.title("Catálogo / Portal")
+    abas = st.tabs(["Catálogo público", "Portal do Cliente"])
+    with abas[0]:
+        tela_catalogo_publico()
+    with abas[1]:
+        tela_portal_cliente_admin()
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -10038,31 +10124,18 @@ menu = st.sidebar.radio(
     "Menu",
     [
         "Dashboard",
-        "Clientes",
-        "CRM Inteligente",
+        "Clientes / CRM",
         "Orçamentos",
-        "Produção",
-        "Agenda e Entregas",
+        "Produção / Agenda",
         "Produtos / Precificação",
-        "Biblioteca de Artes",
+        "Materiais",
         "Kits",
-        "Papéis",
-        "Embalagens",
-        "Laminação",
-        "Mantas / Ímã / Velcro",
-        "Insumos",
-        "Tintas",
-        "Equipamentos",
         "Estoque",
-        "Estoque Inteligente",
-        "Fluxo de Caixa",
-        "Financeiro Profissional",
-        "Dashboard Financeiro",
-        "Relatórios Inteligentes",
+        "Financeiro",
+        "Relatórios",
         "Central de Automação",
-        "Categorias",
-        "Catálogo público",
-        "Portal do Cliente",
+        "Catálogo / Portal",
+        "Biblioteca de Artes",
         "Configurações",
     ],
 )
@@ -10070,57 +10143,30 @@ menu = st.sidebar.radio(
 
 if menu == "Dashboard":
     tela_inicio()
-elif menu == "Clientes":
-    tela_clientes()
-elif menu == "CRM Inteligente":
-    tela_crm_inteligente()
+elif menu == "Clientes / CRM":
+    tela_clientes_crm()
 elif menu == "Orçamentos":
     tela_orcamentos()
-elif menu == "Produção":
-    tela_producao()
-elif menu == "Agenda e Entregas":
-    tela_agenda_entregas()
-elif menu == "Ordem de Produção":
-    tela_ordens_producao()
+elif menu == "Produção / Agenda":
+    tela_producao_agenda()
 elif menu == "Produtos / Precificação":
     tela_produtos()
-elif menu == "Biblioteca de Artes":
-    tela_biblioteca_artes()
+elif menu == "Materiais":
+    tela_materiais()
 elif menu == "Kits":
     tela_kits()
-elif menu == "Papéis":
-    tela_cadastro_por_categoria("Papéis", "Papel")
-elif menu == "Embalagens":
-    tela_embalagens()
-elif menu == "Laminação":
-    tela_laminacao()
-elif menu == "Mantas / Ímã / Velcro":
-    tela_mantas_imas()
-elif menu == "Insumos":
-    tela_insumos()
-elif menu == "Tintas":
-    tela_tintas()
-elif menu == "Equipamentos":
-    tela_equipamentos()
 elif menu == "Estoque":
-    tela_estoque()
-elif menu == "Estoque Inteligente":
-    tela_estoque_inteligente()
-elif menu == "Fluxo de Caixa":
-    tela_financeiro()
-elif menu == "Financeiro Profissional":
-    tela_financeiro_profissional()
-elif menu == "Dashboard Financeiro":
-    tela_dashboard_financeiro()
-elif menu == "Relatórios Inteligentes":
+    tela_estoque_unificado()
+elif menu == "Financeiro":
+    tela_financeiro_unificado()
+elif menu == "Relatórios":
     tela_relatorios_inteligentes()
 elif menu == "Central de Automação":
     tela_central_automacao()
-elif menu == "Categorias":
-    tela_categorias()
-elif menu == "Portal do Cliente":
-    tela_portal_cliente_admin()
-elif menu == "Catálogo público":
-    tela_catalogo()
+elif menu == "Catálogo / Portal":
+    tela_catalogo_portal()
+elif menu == "Biblioteca de Artes":
+    tela_biblioteca_artes()
 elif menu == "Configurações":
     tela_configuracoes()
+
