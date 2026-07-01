@@ -6418,6 +6418,376 @@ def tela_financeiro_profissional():
             st.rerun()
 
 
+
+
+# ============================================================
+# MÓDULO 4B — DASHBOARD FINANCEIRO / DRE / RELATÓRIOS
+# ============================================================
+
+def periodo_datas_financeiro(ano, mes=None):
+    if mes and mes != "Ano inteiro":
+        meses = {
+            "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
+            "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
+            "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12,
+        }
+        m = meses.get(mes, datetime.now().month)
+        inicio = date(int(ano), m, 1)
+        if m == 12:
+            fim = date(int(ano) + 1, 1, 1) - timedelta(days=1)
+        else:
+            fim = date(int(ano), m + 1, 1) - timedelta(days=1)
+        return inicio.isoformat(), fim.isoformat()
+
+    return date(int(ano), 1, 1).isoformat(), date(int(ano), 12, 31).isoformat()
+
+
+def dados_financeiros_periodo(inicio, fim):
+    receber = consultar("""
+    SELECT *
+    FROM contas_receber
+    WHERE ativo='Sim'
+      AND COALESCE(data_vencimento, data_emissao) BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    pagar = consultar("""
+    SELECT *
+    FROM contas_pagar
+    WHERE ativo='Sim'
+      AND COALESCE(data_vencimento, data_emissao) BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    fluxo = consultar("""
+    SELECT *
+    FROM financeiro
+    WHERE data BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    orcs = consultar("""
+    SELECT *
+    FROM orcamentos
+    WHERE date(data_orcamento) BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    return receber, pagar, fluxo, orcs
+
+
+def calcular_dre_simples(inicio, fim):
+    receber, pagar, fluxo, orcs = dados_financeiros_periodo(inicio, fim)
+
+    receita_bruta = 0.0
+    recebido = 0.0
+    custos_produtos = 0.0
+    despesas = 0.0
+
+    if not receber.empty:
+        receita_bruta = float(receber["valor"].fillna(0).sum())
+        recebido = float(receber["valor_recebido"].fillna(0).sum())
+
+    if not fluxo.empty:
+        entradas_fluxo = float(fluxo[fluxo["tipo"] == "Entrada"]["valor"].fillna(0).sum())
+        saidas_fluxo = float(fluxo[fluxo["tipo"].isin(["Saída", "SaÃ­da"])]["valor"].fillna(0).sum())
+        receita_bruta = max(receita_bruta, entradas_fluxo)
+        despesas += saidas_fluxo
+
+    if not pagar.empty:
+        despesas += float(pagar[pagar["status"].isin(["Pago", "Pendente", "Parcial", "Atrasado"])]["valor"].fillna(0).sum())
+
+    if not orcs.empty:
+        # Estimativa de custo dos pedidos usando produtos salvos quando possível.
+        try:
+            itens = consultar("""
+            SELECT oi.produto, oi.quantidade, p.custo_unitario
+            FROM orcamento_itens oi
+            LEFT JOIN produtos p ON p.nome = oi.produto
+            LEFT JOIN orcamentos o ON o.id = oi.orcamento_id
+            WHERE date(o.data_orcamento) BETWEEN ? AND ?
+            """, (inicio, fim))
+            if not itens.empty:
+                custos_produtos = float((itens["quantidade"].fillna(0) * itens["custo_unitario"].fillna(0)).sum())
+        except Exception:
+            custos_produtos = 0.0
+
+    lucro_bruto = receita_bruta - custos_produtos
+    lucro_liquido = lucro_bruto - despesas
+    margem_bruta = (lucro_bruto / receita_bruta * 100) if receita_bruta > 0 else 0
+    margem_liquida = (lucro_liquido / receita_bruta * 100) if receita_bruta > 0 else 0
+
+    return {
+        "receita_bruta": receita_bruta,
+        "recebido": recebido,
+        "custos_produtos": custos_produtos,
+        "despesas": despesas,
+        "lucro_bruto": lucro_bruto,
+        "lucro_liquido": lucro_liquido,
+        "margem_bruta": margem_bruta,
+        "margem_liquida": margem_liquida,
+    }
+
+
+def tabela_fluxo_previsto(inicio, fim):
+    receber = consultar("""
+    SELECT data_vencimento AS data, 'Entrada prevista' AS tipo, descricao, valor AS valor, status
+    FROM contas_receber
+    WHERE ativo='Sim' AND data_vencimento BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    pagar = consultar("""
+    SELECT data_vencimento AS data, 'Saída prevista' AS tipo, descricao, valor * -1 AS valor, status
+    FROM contas_pagar
+    WHERE ativo='Sim' AND data_vencimento BETWEEN ? AND ?
+    """, (inicio, fim))
+
+    partes = []
+    if not receber.empty:
+        partes.append(receber)
+    if not pagar.empty:
+        partes.append(pagar)
+
+    if not partes:
+        return pd.DataFrame(columns=["data", "tipo", "descricao", "valor", "status", "saldo_acumulado"])
+
+    df = pd.concat(partes, ignore_index=True)
+    df["data"] = pd.to_datetime(df["data"], errors="coerce")
+    df = df.sort_values("data")
+    df["saldo_acumulado"] = df["valor"].fillna(0).cumsum()
+    return df
+
+
+def exportar_relatorio_financeiro_html(inicio, fim, dre, fluxo_previsto):
+    empresa = obter_config("nome_empresa", EMPRESA)
+
+    linhas_fluxo = ""
+    if fluxo_previsto is not None and not fluxo_previsto.empty:
+        for _, r in fluxo_previsto.iterrows():
+            try:
+                data_txt = pd.to_datetime(r["data"]).strftime("%d/%m/%Y")
+            except Exception:
+                data_txt = str(r["data"])
+            linhas_fluxo += f"""
+            <tr>
+                <td>{data_txt}</td>
+                <td>{r.get('tipo','')}</td>
+                <td>{r.get('descricao','')}</td>
+                <td class="right">{real(r.get('valor',0))}</td>
+                <td>{r.get('status','')}</td>
+                <td class="right">{real(r.get('saldo_acumulado',0))}</td>
+            </tr>
+            """
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Relatório Financeiro - {empresa}</title>
+<style>
+body {{ font-family: Arial, sans-serif; color:#111; padding:24px; }}
+h1 {{ margin:0; }}
+.header {{ border-bottom:3px solid #111; padding-bottom:14px; margin-bottom:18px; }}
+.grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
+.card {{ border:1px solid #ddd; border-radius:12px; padding:12px; }}
+.label {{ font-size:11px; text-transform:uppercase; color:#777; }}
+.value {{ font-size:22px; font-weight:900; margin-top:6px; }}
+table {{ width:100%; border-collapse:collapse; margin-top:18px; }}
+th {{ background:#000; color:#fff; padding:8px; text-align:left; }}
+td {{ border-bottom:1px solid #eee; padding:7px; }}
+.right {{ text-align:right; }}
+button {{ position:fixed; right:18px; top:18px; background:#111; color:#fff; border:0; border-radius:8px; padding:10px 16px; font-weight:800; }}
+@media print {{ button {{ display:none; }} }}
+</style>
+</head>
+<body>
+<button onclick="window.print()">Imprimir / salvar PDF</button>
+<div class="header">
+    <h1>{empresa}</h1>
+    <p>Relatório financeiro de {inicio} até {fim}</p>
+</div>
+
+<div class="grid">
+    <div class="card"><div class="label">Receita Bruta</div><div class="value">{real(dre['receita_bruta'])}</div></div>
+    <div class="card"><div class="label">Custos</div><div class="value">{real(dre['custos_produtos'])}</div></div>
+    <div class="card"><div class="label">Despesas</div><div class="value">{real(dre['despesas'])}</div></div>
+    <div class="card"><div class="label">Lucro Líquido</div><div class="value">{real(dre['lucro_liquido'])}</div></div>
+</div>
+
+<h2>DRE Simplificada</h2>
+<table>
+<tr><th>Indicador</th><th class="right">Valor</th></tr>
+<tr><td>Receita bruta</td><td class="right">{real(dre['receita_bruta'])}</td></tr>
+<tr><td>Recebido</td><td class="right">{real(dre['recebido'])}</td></tr>
+<tr><td>Custos dos produtos</td><td class="right">{real(dre['custos_produtos'])}</td></tr>
+<tr><td>Lucro bruto</td><td class="right">{real(dre['lucro_bruto'])}</td></tr>
+<tr><td>Despesas operacionais</td><td class="right">{real(dre['despesas'])}</td></tr>
+<tr><td>Lucro líquido</td><td class="right">{real(dre['lucro_liquido'])}</td></tr>
+<tr><td>Margem líquida</td><td class="right">{dre['margem_liquida']:.2f}%</td></tr>
+</table>
+
+<h2>Fluxo previsto</h2>
+<table>
+<tr><th>Data</th><th>Tipo</th><th>Descrição</th><th class="right">Valor</th><th>Status</th><th class="right">Saldo acumulado</th></tr>
+{linhas_fluxo}
+</table>
+
+</body>
+</html>"""
+    return html
+
+
+def tela_dashboard_financeiro():
+    garantir_financeiro_profissional()
+
+    st.title("Dashboard Financeiro")
+    st.write("DRE, fluxo previsto, gráficos, alertas e relatório financeiro.")
+
+    anos = list(range(2026, 2031))
+    meses = [
+        "Ano inteiro", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ]
+
+    c1, c2 = st.columns(2)
+    ano = c1.selectbox("Ano", anos, index=0, key="dash_fin_ano")
+    mes = c2.selectbox("Período", meses, key="dash_fin_mes")
+
+    inicio, fim = periodo_datas_financeiro(ano, mes)
+    dre = calcular_dre_simples(inicio, fim)
+    receber, pagar, fluxo, orcs = dados_financeiros_periodo(inicio, fim)
+
+    st.divider()
+
+    st.subheader("Indicadores principais")
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        card("Receita bruta", real(dre["receita_bruta"]))
+    with k2:
+        card("Recebido", real(dre["recebido"]))
+    with k3:
+        card("Despesas", real(dre["despesas"]))
+    with k4:
+        card("Lucro líquido", real(dre["lucro_liquido"]))
+    with k5:
+        card("Margem líquida", f"{dre['margem_liquida']:.2f}%")
+
+    st.subheader("Alertas financeiros")
+
+    hoje = datetime.now().date()
+    alertas = []
+
+    if not receber.empty:
+        temp = receber.copy()
+        temp["venc"] = pd.to_datetime(temp["data_vencimento"], errors="coerce")
+        atrasados = temp[(temp["venc"].dt.date < hoje) & (~temp["status"].isin(["Recebido", "Cancelado"]))]
+        if not atrasados.empty:
+            alertas.append(f"🔴 {len(atrasados)} recebimento(s) atrasado(s).")
+
+        proximos = temp[(temp["venc"].dt.date >= hoje) & (temp["venc"].dt.date <= hoje + timedelta(days=7)) & (~temp["status"].isin(["Recebido", "Cancelado"]))]
+        if not proximos.empty:
+            alertas.append(f"🟡 {len(proximos)} recebimento(s) vencendo em até 7 dias.")
+
+    if not pagar.empty:
+        temp = pagar.copy()
+        temp["venc"] = pd.to_datetime(temp["data_vencimento"], errors="coerce")
+        atrasados = temp[(temp["venc"].dt.date < hoje) & (~temp["status"].isin(["Pago", "Cancelado"]))]
+        if not atrasados.empty:
+            alertas.append(f"🔴 {len(atrasados)} conta(s) a pagar atrasada(s).")
+
+        proximos = temp[(temp["venc"].dt.date >= hoje) & (temp["venc"].dt.date <= hoje + timedelta(days=7)) & (~temp["status"].isin(["Pago", "Cancelado"]))]
+        if not proximos.empty:
+            alertas.append(f"🟠 {len(proximos)} conta(s) a pagar vencendo em até 7 dias.")
+
+    if dre["lucro_liquido"] < 0:
+        alertas.append("🔴 Lucro líquido negativo neste período.")
+
+    if not alertas:
+        st.success("Nenhum alerta financeiro crítico no período.")
+    else:
+        for alerta in alertas:
+            st.warning(alerta)
+
+    st.divider()
+
+    st.subheader("DRE simplificada")
+
+    dre_df = pd.DataFrame([
+        {"Indicador": "Receita bruta", "Valor": dre["receita_bruta"]},
+        {"Indicador": "Recebido", "Valor": dre["recebido"]},
+        {"Indicador": "Custos dos produtos", "Valor": dre["custos_produtos"]},
+        {"Indicador": "Lucro bruto", "Valor": dre["lucro_bruto"]},
+        {"Indicador": "Despesas operacionais", "Valor": dre["despesas"]},
+        {"Indicador": "Lucro líquido", "Valor": dre["lucro_liquido"]},
+        {"Indicador": "Margem bruta (%)", "Valor": dre["margem_bruta"]},
+        {"Indicador": "Margem líquida (%)", "Valor": dre["margem_liquida"]},
+    ])
+
+    st.dataframe(formatar_valores_tabela(dre_df), use_container_width=True, hide_index=True)
+
+    chart_df = dre_df[dre_df["Indicador"].isin(["Receita bruta", "Custos dos produtos", "Despesas operacionais", "Lucro líquido"])].copy()
+    st.bar_chart(chart_df.set_index("Indicador"))
+
+    st.divider()
+
+    st.subheader("Fluxo de caixa previsto")
+
+    fluxo_previsto = tabela_fluxo_previsto(inicio, fim)
+
+    if fluxo_previsto.empty:
+        st.info("Sem contas previstas para o período.")
+    else:
+        st.dataframe(formatar_valores_tabela(fluxo_previsto), use_container_width=True, hide_index=True)
+
+        graf = fluxo_previsto.copy()
+        graf["data"] = pd.to_datetime(graf["data"], errors="coerce")
+        graf = graf.dropna(subset=["data"])
+        if not graf.empty:
+            serie = graf.groupby("data")["saldo_acumulado"].last()
+            st.line_chart(serie)
+
+    st.divider()
+
+    st.subheader("Despesas por centro de custo")
+
+    if pagar.empty:
+        st.info("Sem despesas cadastradas no período.")
+    else:
+        centro = pagar.groupby("centro_custo")["valor"].sum().reset_index().sort_values("valor", ascending=False)
+        st.dataframe(formatar_valores_tabela(centro), use_container_width=True, hide_index=True)
+        st.bar_chart(centro.set_index("centro_custo"))
+
+    st.divider()
+
+    st.subheader("Receitas por categoria")
+
+    if receber.empty:
+        st.info("Sem receitas cadastradas no período.")
+    else:
+        receita_cat = receber.groupby("categoria")["valor"].sum().reset_index().sort_values("valor", ascending=False)
+        st.dataframe(formatar_valores_tabela(receita_cat), use_container_width=True, hide_index=True)
+        st.bar_chart(receita_cat.set_index("categoria"))
+
+    st.divider()
+
+    st.subheader("Exportar relatório")
+
+    html = exportar_relatorio_financeiro_html(inicio, fim, dre, fluxo_previsto)
+
+    st.download_button(
+        "Baixar relatório financeiro em HTML/PDF",
+        data=html.encode("utf-8"),
+        file_name=f"relatorio_financeiro_{inicio}_a_{fim}.html",
+        mime="text/html",
+    )
+
+    if not fluxo_previsto.empty:
+        csv = fluxo_previsto.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Baixar fluxo previsto em CSV",
+            data=csv,
+            file_name=f"fluxo_previsto_{inicio}_a_{fim}.csv",
+            mime="text/csv",
+        )
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -6631,6 +7001,7 @@ menu = st.sidebar.radio(
         "Estoque Inteligente",
         "Fluxo de Caixa",
         "Financeiro Profissional",
+        "Dashboard Financeiro",
         "Categorias",
         "Catálogo público",
         "Configurações",
@@ -6674,6 +7045,8 @@ elif menu == "Fluxo de Caixa":
     tela_financeiro()
 elif menu == "Financeiro Profissional":
     tela_financeiro_profissional()
+elif menu == "Dashboard Financeiro":
+    tela_dashboard_financeiro()
 elif menu == "Categorias":
     tela_categorias()
 elif menu == "Catálogo público":
