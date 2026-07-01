@@ -558,6 +558,43 @@ def criar_banco():
         pass
 
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS estoque_reservas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id INTEGER,
+        item_nome TEXT,
+        categoria TEXT,
+        quantidade REAL DEFAULT 0,
+        status TEXT DEFAULT 'Reservado',
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS estoque_consumo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id INTEGER,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        item_nome TEXT,
+        categoria TEXT,
+        quantidade REAL DEFAULT 0,
+        tipo TEXT DEFAULT 'Baixa automática',
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS estoque_minimo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_nome TEXT UNIQUE,
+        categoria TEXT,
+        estoque_minimo REAL DEFAULT 5,
+        observacoes TEXT
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -3902,6 +3939,13 @@ def tela_producao():
                         int(op_id),
                     ))
                     registrar_historico_producao(int(op_id), "Checklist atualizado", f"Novo status: {novo_status}")
+
+                    if novo_status == "Entregue":
+                        try:
+                            baixar_estoque_op(int(op_id))
+                        except Exception:
+                            pass
+
                     st.success("Checklist salvo.")
                     st.rerun()
 
@@ -5139,6 +5183,492 @@ button {{
     return html
 
 
+
+
+# ============================================================
+# MÓDULO 3 — ESTOQUE INTELIGENTE
+# ============================================================
+
+def garantir_tabelas_estoque_inteligente():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS estoque_reservas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            op_id INTEGER,
+            item_nome TEXT,
+            categoria TEXT,
+            quantidade REAL DEFAULT 0,
+            status TEXT DEFAULT 'Reservado',
+            data TEXT DEFAULT CURRENT_TIMESTAMP,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS estoque_consumo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            op_id INTEGER,
+            data TEXT DEFAULT CURRENT_TIMESTAMP,
+            item_nome TEXT,
+            categoria TEXT,
+            quantidade REAL DEFAULT 0,
+            tipo TEXT DEFAULT 'Baixa automática',
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS estoque_minimo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_nome TEXT UNIQUE,
+            categoria TEXT,
+            estoque_minimo REAL DEFAULT 5,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+
+def saldo_estoque_item(item_nome):
+    try:
+        df = consultar("""
+        SELECT tipo_movimento, quantidade
+        FROM estoque
+        WHERE item=?
+        """, (str(item_nome),))
+
+        if df.empty:
+            return 0.0
+
+        entrada = float(df[df["tipo_movimento"] == "Entrada"]["quantidade"].sum())
+        saida = float(df[df["tipo_movimento"] == "Saída"]["quantidade"].sum())
+        saida += float(df[df["tipo_movimento"] == "SaÃ­da"]["quantidade"].sum())
+        return entrada - saida
+    except Exception:
+        return 0.0
+
+
+def reservado_estoque_item(item_nome):
+    try:
+        df = consultar("""
+        SELECT COALESCE(SUM(quantidade),0) AS total
+        FROM estoque_reservas
+        WHERE item_nome=? AND status='Reservado'
+        """, (str(item_nome),))
+        return float(df.iloc[0]["total"]) if not df.empty else 0.0
+    except Exception:
+        return 0.0
+
+
+def disponivel_estoque_item(item_nome):
+    return saldo_estoque_item(item_nome) - reservado_estoque_item(item_nome)
+
+
+def materiais_op(op_id):
+    op = consultar("SELECT materiais_json FROM ordens_producao WHERE id=?", (int(op_id),))
+    if op.empty:
+        return []
+
+    try:
+        dados = json.loads(op.iloc[0]["materiais_json"] or "[]")
+    except Exception:
+        dados = []
+
+    materiais = []
+    for m in dados:
+        nome = str(m.get("nome", "")).strip()
+        if not nome:
+            continue
+        qtd = n(m.get("qtd", 1), 1)
+        if qtd <= 0:
+            qtd = 1
+        materiais.append({
+            "nome": nome,
+            "categoria": str(m.get("categoria", "") or m.get("tipo", "")),
+            "qtd": qtd,
+            "origem": str(m.get("origem", "")),
+        })
+    return materiais
+
+
+def reservar_estoque_op(op_id):
+    garantir_tabelas_estoque_inteligente()
+
+    ja = consultar("""
+    SELECT COUNT(*) AS total
+    FROM estoque_reservas
+    WHERE op_id=? AND status='Reservado'
+    """, (int(op_id),))
+
+    if not ja.empty and int(ja.iloc[0]["total"]) > 0:
+        return False, "Esta OP já possui materiais reservados."
+
+    mats = materiais_op(op_id)
+    if not mats:
+        return False, "Nenhum material encontrado automaticamente nesta OP."
+
+    faltas = []
+    for m in mats:
+        disponivel = disponivel_estoque_item(m["nome"])
+        if disponivel < n(m["qtd"]):
+            faltas.append({
+                "item": m["nome"],
+                "necessario": n(m["qtd"]),
+                "disponivel": disponivel,
+                "falta": n(m["qtd"]) - disponivel,
+            })
+
+    if faltas:
+        return False, faltas
+
+    for m in mats:
+        executar("""
+        INSERT INTO estoque_reservas(op_id, item_nome, categoria, quantidade, status, observacoes)
+        VALUES (?, ?, ?, ?, 'Reservado', ?)
+        """, (
+            int(op_id),
+            m["nome"],
+            m["categoria"],
+            n(m["qtd"]),
+            f"Reserva automática OP {codigo_op_seguro(op_id)}",
+        ))
+
+    try:
+        registrar_historico_producao(int(op_id), "Estoque reservado", "Materiais reservados automaticamente.")
+    except Exception:
+        pass
+
+    return True, "Materiais reservados com sucesso."
+
+
+def baixar_estoque_op(op_id):
+    garantir_tabelas_estoque_inteligente()
+
+    reservas = consultar("""
+    SELECT *
+    FROM estoque_reservas
+    WHERE op_id=? AND status='Reservado'
+    """, (int(op_id),))
+
+    if reservas.empty:
+        return False, "Não há materiais reservados para baixar nesta OP."
+
+    for _, r in reservas.iterrows():
+        executar("""
+        INSERT INTO estoque(data, item, categoria, tipo_movimento, quantidade, valor_unitario, fornecedor, observacoes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            hoje_iso(),
+            str(r["item_nome"]),
+            str(r["categoria"]),
+            "Saída",
+            n(r["quantidade"]),
+            0,
+            "",
+            f"Baixa automática {codigo_op_seguro(op_id)}",
+        ))
+
+        executar("""
+        INSERT INTO estoque_consumo(op_id, item_nome, categoria, quantidade, tipo, observacoes)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            int(op_id),
+            str(r["item_nome"]),
+            str(r["categoria"]),
+            n(r["quantidade"]),
+            "Baixa automática",
+            f"Consumo da {codigo_op_seguro(op_id)}",
+        ))
+
+    executar("""
+    UPDATE estoque_reservas
+    SET status='Baixado'
+    WHERE op_id=? AND status='Reservado'
+    """, (int(op_id),))
+
+    try:
+        registrar_historico_producao(int(op_id), "Estoque baixado", "Materiais baixados automaticamente.")
+    except Exception:
+        pass
+
+    return True, "Baixa automática realizada com sucesso."
+
+
+def resumo_estoque_inteligente():
+    try:
+        mov = consultar("""
+        SELECT item, categoria,
+               SUM(CASE WHEN tipo_movimento='Entrada' THEN quantidade ELSE 0 END) AS entradas,
+               SUM(CASE WHEN tipo_movimento='Saída' OR tipo_movimento='SaÃ­da' THEN quantidade ELSE 0 END) AS saidas
+        FROM estoque
+        GROUP BY item, categoria
+        ORDER BY item
+        """)
+
+        if mov.empty:
+            return pd.DataFrame()
+
+        reservas = consultar("""
+        SELECT item_nome, COALESCE(SUM(quantidade),0) AS reservado
+        FROM estoque_reservas
+        WHERE status='Reservado'
+        GROUP BY item_nome
+        """)
+
+        minimos = consultar("""
+        SELECT item_nome, estoque_minimo
+        FROM estoque_minimo
+        """)
+
+        mov["saldo"] = mov["entradas"].fillna(0) - mov["saidas"].fillna(0)
+
+        mapa_reserva = {}
+        if not reservas.empty:
+            mapa_reserva = dict(zip(reservas["item_nome"], reservas["reservado"]))
+
+        mapa_min = {}
+        if not minimos.empty:
+            mapa_min = dict(zip(minimos["item_nome"], minimos["estoque_minimo"]))
+
+        mov["reservado"] = mov["item"].map(mapa_reserva).fillna(0)
+        mov["disponivel"] = mov["saldo"] - mov["reservado"]
+        mov["estoque_minimo"] = mov["item"].map(mapa_min).fillna(5)
+
+        def status(row):
+            if n(row["disponivel"]) <= 0:
+                return "🔴 Crítico"
+            if n(row["disponivel"]) <= n(row["estoque_minimo"]):
+                return "🟠 Atenção"
+            return "🟢 Normal"
+
+        mov["status"] = mov.apply(status, axis=1)
+        return mov
+
+    except Exception:
+        return pd.DataFrame()
+
+
+def tela_estoque_inteligente():
+    garantir_tabelas_estoque_inteligente()
+
+    st.title("Estoque Inteligente")
+    st.write("Controle reservas, baixas automáticas, materiais faltando e lista de compras.")
+
+    abas = st.tabs(["Resumo", "Reservas por OP", "Baixa automática", "Estoque mínimo", "Consumo"])
+
+    with abas[0]:
+        st.subheader("Resumo inteligente do estoque")
+
+        resumo = resumo_estoque_inteligente()
+
+        if resumo.empty:
+            st.info("Ainda não há movimentações de estoque.")
+        else:
+            criticos = len(resumo[resumo["status"].astype(str).str.contains("Crítico", na=False)])
+            atencao = len(resumo[resumo["status"].astype(str).str.contains("Atenção", na=False)])
+            normal = len(resumo[resumo["status"].astype(str).str.contains("Normal", na=False)])
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                card("Crítico", str(criticos))
+            with c2:
+                card("Atenção", str(atencao))
+            with c3:
+                card("Normal", str(normal))
+
+            st.dataframe(
+                formatar_valores_tabela(resumo),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            compras = resumo[resumo["disponivel"] <= resumo["estoque_minimo"]].copy()
+            st.subheader("Lista de compras automática")
+            if compras.empty:
+                st.success("Nenhum item abaixo do mínimo.")
+            else:
+                compras["comprar_sugerido"] = (compras["estoque_minimo"] - compras["disponivel"]).clip(lower=0)
+                st.dataframe(
+                    compras[["item", "categoria", "disponivel", "estoque_minimo", "comprar_sugerido", "status"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+    with abas[1]:
+        st.subheader("Reservar materiais de uma OP")
+
+        ops = consultar("""
+        SELECT id, cliente_nome, status, prioridade, data_entrega
+        FROM ordens_producao
+        WHERE ativo='Sim'
+        ORDER BY id DESC
+        """)
+
+        if ops.empty:
+            st.info("Nenhuma OP cadastrada.")
+        else:
+            ops["codigo"] = ops["id"].apply(codigo_op_seguro)
+            mapa = {
+                f"{r['codigo']} | {r['cliente_nome']} | {r['status']}": int(r["id"])
+                for _, r in ops.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha a OP", list(mapa.keys()), key="reserva_op_select")
+            op_id = mapa[escolhido]
+
+            mats = materiais_op(op_id)
+            if mats:
+                st.markdown("### Materiais necessários")
+                df_mats = pd.DataFrame(mats)
+                df_mats["saldo"] = df_mats["nome"].apply(saldo_estoque_item)
+                df_mats["reservado"] = df_mats["nome"].apply(reservado_estoque_item)
+                df_mats["disponivel"] = df_mats["nome"].apply(disponivel_estoque_item)
+                df_mats["falta"] = df_mats.apply(lambda r: max(n(r["qtd"]) - n(r["disponivel"]), 0), axis=1)
+                st.dataframe(formatar_valores_tabela(df_mats), use_container_width=True, hide_index=True)
+
+                if st.button("Reservar materiais desta OP"):
+                    ok, msg = reservar_estoque_op(op_id)
+
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        if isinstance(msg, list):
+                            st.error("Não é possível reservar. Existem materiais faltando:")
+                            st.dataframe(pd.DataFrame(msg), use_container_width=True, hide_index=True)
+                        else:
+                            st.warning(msg)
+            else:
+                st.warning("Esta OP não possui materiais identificados automaticamente.")
+
+            st.markdown("### Reservas ativas")
+            reservas = consultar("""
+            SELECT id, op_id, item_nome, categoria, quantidade, status, data, observacoes
+            FROM estoque_reservas
+            WHERE status='Reservado'
+            ORDER BY id DESC
+            """)
+            if reservas.empty:
+                st.info("Nenhuma reserva ativa.")
+            else:
+                reservas["codigo_op"] = reservas["op_id"].apply(codigo_op_seguro)
+                st.dataframe(formatar_valores_tabela(reservas), use_container_width=True, hide_index=True)
+
+    with abas[2]:
+        st.subheader("Baixa automática por OP")
+
+        ops = consultar("""
+        SELECT id, cliente_nome, status, prioridade, data_entrega
+        FROM ordens_producao
+        WHERE ativo='Sim'
+        ORDER BY id DESC
+        """)
+
+        if ops.empty:
+            st.info("Nenhuma OP cadastrada.")
+        else:
+            ops["codigo"] = ops["id"].apply(codigo_op_seguro)
+            mapa = {
+                f"{r['codigo']} | {r['cliente_nome']} | {r['status']}": int(r["id"])
+                for _, r in ops.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha a OP para baixar estoque", list(mapa.keys()), key="baixa_op_select")
+            op_id = mapa[escolhido]
+
+            reservas = consultar("""
+            SELECT item_nome, categoria, quantidade, status
+            FROM estoque_reservas
+            WHERE op_id=?
+            ORDER BY id
+            """, (int(op_id),))
+
+            if reservas.empty:
+                st.warning("Esta OP ainda não tem reserva. Reserve primeiro na aba Reservas por OP.")
+            else:
+                st.dataframe(formatar_valores_tabela(reservas), use_container_width=True, hide_index=True)
+
+                if st.button("Dar baixa automática desta OP"):
+                    ok, msg = baixar_estoque_op(op_id)
+                    if ok:
+                        executar("UPDATE ordens_producao SET status='Entregue' WHERE id=?", (int(op_id),))
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.warning(msg)
+
+    with abas[3]:
+        st.subheader("Configurar estoque mínimo")
+
+        resumo = resumo_estoque_inteligente()
+        itens = []
+        if not resumo.empty:
+            itens = resumo["item"].astype(str).tolist()
+
+        with st.form("form_estoque_minimo"):
+            item = st.selectbox("Item", itens if itens else [""])
+            categoria = ""
+            if item and not resumo.empty:
+                linha = resumo[resumo["item"] == item]
+                if not linha.empty:
+                    categoria = str(linha.iloc[0]["categoria"])
+
+            minimo = st.number_input("Estoque mínimo", min_value=0.0, value=5.0, step=1.0)
+            obs = st.text_input("Observação")
+
+            if st.form_submit_button("Salvar estoque mínimo"):
+                if item:
+                    executar("""
+                    INSERT OR REPLACE INTO estoque_minimo(item_nome, categoria, estoque_minimo, observacoes)
+                    VALUES (?, ?, ?, ?)
+                    """, (item, categoria, minimo, obs))
+                    st.success("Estoque mínimo salvo.")
+                    st.rerun()
+
+        df_min = consultar("SELECT * FROM estoque_minimo ORDER BY item_nome")
+        if df_min.empty:
+            st.info("Nenhum mínimo configurado.")
+        else:
+            st.dataframe(df_min, use_container_width=True, hide_index=True)
+
+    with abas[4]:
+        st.subheader("Histórico de consumo de materiais")
+
+        consumo = consultar("""
+        SELECT data, op_id, item_nome, categoria, quantidade, tipo, observacoes
+        FROM estoque_consumo
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if consumo.empty:
+            st.info("Ainda não há consumo registrado.")
+        else:
+            consumo["codigo_op"] = consumo["op_id"].apply(codigo_op_seguro)
+            st.dataframe(formatar_valores_tabela(consumo), use_container_width=True, hide_index=True)
+
+        st.subheader("Materiais mais consumidos")
+        ranking = consultar("""
+        SELECT item_nome, categoria, COALESCE(SUM(quantidade),0) AS quantidade_total
+        FROM estoque_consumo
+        GROUP BY item_nome, categoria
+        ORDER BY quantidade_total DESC
+        LIMIT 30
+        """)
+
+        if ranking.empty:
+            st.info("Sem dados para ranking.")
+        else:
+            st.dataframe(formatar_valores_tabela(ranking), use_container_width=True, hide_index=True)
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -5349,6 +5879,7 @@ menu = st.sidebar.radio(
         "Tintas",
         "Equipamentos",
         "Estoque",
+        "Estoque Inteligente",
         "Fluxo de Caixa",
         "Categorias",
         "Catálogo público",
@@ -5387,6 +5918,8 @@ elif menu == "Equipamentos":
     tela_equipamentos()
 elif menu == "Estoque":
     tela_estoque()
+elif menu == "Estoque Inteligente":
+    tela_estoque_inteligente()
 elif menu == "Fluxo de Caixa":
     tela_financeiro()
 elif menu == "Categorias":
