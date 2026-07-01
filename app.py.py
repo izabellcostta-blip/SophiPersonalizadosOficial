@@ -5,6 +5,7 @@ import json
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -1139,6 +1140,73 @@ def dataframe_dia(df, data_col, valor_col, ano):
     return out
 
 
+
+
+# ============================================================
+# CORREÇÃO DE DATA/HORA BRASILEIRA
+# ============================================================
+
+def agora_brasil():
+    try:
+        return datetime.now(ZoneInfo("America/Sao_Paulo"))
+    except Exception:
+        return datetime.now()
+
+
+def agora_iso_brasil():
+    return agora_brasil().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def data_br_segura(valor):
+    try:
+        if valor is None:
+            return ""
+        texto = str(valor).strip()
+        if texto in ["", "None", "nan", "NaT"]:
+            return ""
+
+        # Se já estiver em DD/MM/AAAA, mantém correto.
+        if "/" in texto:
+            partes = texto.split(" ")[0].split("/")
+            if len(partes) == 3:
+                dia, mes, ano = partes
+                return f"{int(dia):02d}/{int(mes):02d}/{int(ano):04d}"
+
+        # Banco deve estar em AAAA-MM-DD.
+        dt = pd.to_datetime(texto, errors="coerce", dayfirst=False)
+        if pd.isna(dt):
+            return texto
+
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return str(valor)
+
+
+def data_hora_br_segura(valor):
+    try:
+        if valor is None:
+            return ""
+        texto = str(valor).strip()
+        if texto in ["", "None", "nan", "NaT"]:
+            return ""
+
+        # Se já vier BR com hora, usa dayfirst.
+        if "/" in texto:
+            dt = pd.to_datetime(texto, errors="coerce", dayfirst=True)
+            if pd.notna(dt):
+                return dt.strftime("%d/%m/%Y às %H:%M")
+            return texto
+
+        # Banco deve estar em AAAA-MM-DD HH:MM:SS.
+        dt = pd.to_datetime(texto, errors="coerce", dayfirst=False)
+        if pd.isna(dt):
+            return texto
+
+        return dt.strftime("%d/%m/%Y às %H:%M")
+    except Exception:
+        return str(valor)
+
+
 def gerar_html_orcamento(orc_id):
     orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orc_id),))
     if orc.empty:
@@ -1410,7 +1478,7 @@ button {{
             <div class="label">Cliente</div>
             <div class="value">{o['cliente_nome']}</div>
             <p><b>WhatsApp:</b> {o['whatsapp'] or '-'}</p>
-            <p><b>Data:</b> {data_hora_br(data_hora_br(o['data_orcamento']))}</p><p><b>Prazo de entrega:</b> {prazo_entrega}</p>
+            <p><b>Data:</b> {data_hora_br_segura(o['data_orcamento'])}</p><p><b>Prazo de entrega:</b> {prazo_entrega}</p>
         </div>
         <div class="box">
             <div class="label">Pagamento</div>
@@ -3248,14 +3316,14 @@ def tela_orcamentos():
         else:
             ultimo = executar("""
             INSERT INTO orcamentos(
-                cliente_id, cliente_nome, whatsapp, status, forma_pagamento,
+                cliente_id, cliente_nome, whatsapp, data_orcamento, status, forma_pagamento,
                 subtotal, desconto, frete, total, observacoes,
                 data_prevista_entrega, hora_prevista_entrega, tipo_entrega,
                 endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                int(cliente_id), str(cliente["nome"]), str(cliente["whatsapp"]), status,
+                int(cliente_id), str(cliente["nome"]), str(cliente["whatsapp"]), agora_iso_brasil(), status,
                 forma_pagamento, subtotal, desconto_geral, frete, total_geral, observacoes,
                 data_iso(data_prevista_entrega), hora_prevista_entrega, tipo_entrega_orc,
                 endereco_entrega, responsavel_entrega, prioridade_entrega, observacoes_entrega,
