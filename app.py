@@ -700,6 +700,50 @@ def criar_banco():
         VALUES (?, ?, 'Sim')
         """, (nome_cat, tipo_cat))
 
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS crm_interacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        tipo TEXT,
+        canal TEXT,
+        descricao TEXT,
+        status TEXT DEFAULT 'Registrado',
+        proximo_contato TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS crm_fidelidade (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER UNIQUE,
+        cliente_nome TEXT,
+        pontos REAL DEFAULT 0,
+        nivel TEXT DEFAULT 'Novo',
+        total_gasto REAL DEFAULT 0,
+        total_pedidos INTEGER DEFAULT 0,
+        ultima_compra TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS crm_cupons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT UNIQUE NOT NULL,
+        descricao TEXT,
+        tipo TEXT DEFAULT 'Percentual',
+        valor REAL DEFAULT 0,
+        minimo_compra REAL DEFAULT 0,
+        validade TEXT,
+        ativo TEXT DEFAULT 'Sim',
+        observacoes TEXT
+    )
+    """)
+
     configuracoes_padrao = {
         "nome_empresa": "Sophi Personalizados Oficial",
         "whatsapp": "",
@@ -6788,6 +6832,502 @@ def tela_dashboard_financeiro():
         )
 
 
+
+
+# ============================================================
+# MÓDULO 5 — CRM INTELIGENTE / CLIENTES VIP
+# ============================================================
+
+def garantir_crm():
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS crm_interacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            cliente_nome TEXT,
+            data TEXT DEFAULT CURRENT_TIMESTAMP,
+            tipo TEXT,
+            canal TEXT,
+            descricao TEXT,
+            status TEXT DEFAULT 'Registrado',
+            proximo_contato TEXT,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS crm_fidelidade (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER UNIQUE,
+            cliente_nome TEXT,
+            pontos REAL DEFAULT 0,
+            nivel TEXT DEFAULT 'Novo',
+            total_gasto REAL DEFAULT 0,
+            total_pedidos INTEGER DEFAULT 0,
+            ultima_compra TEXT,
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS crm_cupons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
+            descricao TEXT,
+            tipo TEXT DEFAULT 'Percentual',
+            valor REAL DEFAULT 0,
+            minimo_compra REAL DEFAULT 0,
+            validade TEXT,
+            ativo TEXT DEFAULT 'Sim',
+            observacoes TEXT
+        )
+        """)
+    except Exception:
+        pass
+
+
+def nivel_cliente(total_gasto, total_pedidos):
+    total_gasto = n(total_gasto)
+    total_pedidos = int(n(total_pedidos))
+
+    if total_gasto >= 2000 or total_pedidos >= 15:
+        return "Diamante"
+    if total_gasto >= 1000 or total_pedidos >= 8:
+        return "Ouro"
+    if total_gasto >= 500 or total_pedidos >= 4:
+        return "Prata"
+    if total_pedidos >= 1:
+        return "Bronze"
+    return "Novo"
+
+
+def sincronizar_fidelidade_clientes():
+    garantir_crm()
+
+    clientes = consultar("""
+    SELECT id, nome
+    FROM clientes
+    WHERE ativo='Sim'
+    ORDER BY nome
+    """)
+
+    if clientes.empty:
+        return 0
+
+    atualizados = 0
+
+    for _, c in clientes.iterrows():
+        orcs = consultar("""
+        SELECT total, data_orcamento, status
+        FROM orcamentos
+        WHERE cliente_id=?
+          AND status NOT IN ('Cancelado')
+        ORDER BY data_orcamento DESC
+        """, (int(c["id"]),))
+
+        total_gasto = float(orcs["total"].fillna(0).sum()) if not orcs.empty else 0.0
+        total_pedidos = len(orcs) if not orcs.empty else 0
+        ultima_compra = ""
+        if not orcs.empty:
+            try:
+                ultima_compra = str(orcs.iloc[0]["data_orcamento"])
+            except Exception:
+                ultima_compra = ""
+
+        pontos = total_gasto // 10
+        nivel = nivel_cliente(total_gasto, total_pedidos)
+
+        executar("""
+        INSERT OR REPLACE INTO crm_fidelidade(
+            cliente_id, cliente_nome, pontos, nivel,
+            total_gasto, total_pedidos, ultima_compra, observacoes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT observacoes FROM crm_fidelidade WHERE cliente_id=?), ''))
+        """, (
+            int(c["id"]),
+            str(c["nome"]),
+            pontos,
+            nivel,
+            total_gasto,
+            total_pedidos,
+            ultima_compra,
+            int(c["id"]),
+        ))
+
+        atualizados += 1
+
+    return atualizados
+
+
+def aniversariantes_periodo():
+    clientes = consultar("""
+    SELECT id, nome, whatsapp, aniversario
+    FROM clientes
+    WHERE ativo='Sim' AND aniversario IS NOT NULL AND aniversario != ''
+    ORDER BY nome
+    """)
+
+    if clientes.empty:
+        return clientes
+
+    mes_atual = datetime.now().month
+
+    def mes_aniv(valor):
+        try:
+            texto = str(valor).replace("-", "/").strip()
+            partes = texto.split("/")
+            if len(partes) >= 2:
+                return int(partes[1]) == mes_atual
+        except Exception:
+            pass
+        return False
+
+    return clientes[clientes["aniversario"].apply(mes_aniv)]
+
+
+def dias_desde(data_txt):
+    try:
+        d = pd.to_datetime(data_txt, errors="coerce")
+        if pd.isna(d):
+            return ""
+        return (datetime.now() - d.to_pydatetime()).days
+    except Exception:
+        return ""
+
+
+def gerar_mensagem_cliente(cliente_nome, tipo, extra=""):
+    if tipo == "Pós-venda":
+        return f"Olá {cliente_nome}, tudo bem? Passando para saber se deu tudo certo com o seu pedido da Sophi Personalizados. 🤍"
+    if tipo == "Aniversário":
+        return f"Olá {cliente_nome}! A Sophi Personalizados deseja um feliz aniversário cheio de momentos especiais. 🎂✨"
+    if tipo == "Reativação":
+        return f"Olá {cliente_nome}, tudo bem? Passando para te mostrar as novidades da Sophi Personalizados. Temos novas opções de presentes personalizados. 🤍"
+    if tipo == "VIP":
+        return f"Olá {cliente_nome}! Você é uma cliente especial para a Sophi Personalizados. Preparamos condições especiais para o seu próximo pedido. ✨"
+    return f"Olá {cliente_nome}, tudo bem? {extra}"
+
+
+def tela_crm_inteligente():
+    garantir_crm()
+
+    st.title("CRM Inteligente")
+    st.write("Acompanhe clientes, histórico, fidelidade, aniversários, pós-venda e ranking de melhores clientes.")
+
+    abas = st.tabs([
+        "Painel CRM",
+        "Ficha do cliente",
+        "Interações",
+        "Fidelidade / VIP",
+        "Cupons",
+        "Pós-venda",
+    ])
+
+    with abas[0]:
+        st.subheader("Resumo de relacionamento")
+
+        if st.button("Atualizar fidelidade dos clientes"):
+            qtd = sincronizar_fidelidade_clientes()
+            st.success(f"{qtd} cliente(s) atualizado(s) no CRM.")
+            st.rerun()
+
+        fidelidade = consultar("SELECT * FROM crm_fidelidade ORDER BY total_gasto DESC")
+        clientes = consultar("SELECT * FROM clientes WHERE ativo='Sim'")
+        anivers = aniversariantes_periodo()
+
+        total_clientes = len(clientes)
+        clientes_vip = len(fidelidade[fidelidade["nivel"].isin(["Ouro", "Diamante"])]) if not fidelidade.empty else 0
+        total_gasto = float(fidelidade["total_gasto"].fillna(0).sum()) if not fidelidade.empty else 0
+        ticket_medio = total_gasto / total_clientes if total_clientes else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            card("Clientes ativos", str(total_clientes))
+        with c2:
+            card("Clientes VIP", str(clientes_vip))
+        with c3:
+            card("Total vendido", real(total_gasto))
+        with c4:
+            card("Ticket médio", real(ticket_medio))
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("Ranking de clientes")
+            if fidelidade.empty:
+                st.info("Atualize a fidelidade para gerar ranking.")
+            else:
+                rank = fidelidade.head(15).copy()
+                rank = adicionar_codigo_visual(rank, "CLI", coluna_id="cliente_id", nome_coluna="Código")
+                st.dataframe(formatar_valores_tabela(rank), use_container_width=True, hide_index=True)
+
+        with col2:
+            st.subheader("Aniversariantes do mês")
+            if anivers.empty:
+                st.info("Nenhum aniversariante neste mês.")
+            else:
+                anivers = adicionar_codigo_visual(anivers, "CLI")
+                st.dataframe(anivers, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Clientes sem compra recente")
+
+        if fidelidade.empty:
+            st.info("Sem dados ainda.")
+        else:
+            temp = fidelidade.copy()
+            temp["dias_sem_compra"] = temp["ultima_compra"].apply(dias_desde)
+            temp = temp[temp["dias_sem_compra"].apply(lambda x: isinstance(x, int) and x >= 30)]
+            if temp.empty:
+                st.success("Nenhum cliente parado há mais de 30 dias.")
+            else:
+                st.dataframe(formatar_valores_tabela(temp.sort_values("dias_sem_compra", ascending=False)), use_container_width=True, hide_index=True)
+
+    with abas[1]:
+        st.subheader("Ficha completa do cliente")
+
+        clientes = consultar("SELECT id, nome, whatsapp FROM clientes WHERE ativo='Sim' ORDER BY nome")
+
+        if clientes.empty:
+            st.info("Nenhum cliente cadastrado.")
+        else:
+            mapa = {
+                f"{codigo_visual('CLI', row['id'])} - {row['nome']}": int(row["id"])
+                for _, row in clientes.iterrows()
+            }
+
+            escolhido = st.selectbox("Escolha um cliente", list(mapa.keys()), key="crm_ficha_cliente")
+            cliente_id = mapa[escolhido]
+
+            cli = consultar("SELECT * FROM clientes WHERE id=?", (int(cliente_id),))
+            fid = consultar("SELECT * FROM crm_fidelidade WHERE cliente_id=?", (int(cliente_id),))
+            orcs = consultar("""
+            SELECT id, status, forma_pagamento, total, data_orcamento
+            FROM orcamentos
+            WHERE cliente_id=?
+            ORDER BY id DESC
+            """, (int(cliente_id),))
+            inter = consultar("""
+            SELECT data, tipo, canal, descricao, status, proximo_contato, observacoes
+            FROM crm_interacoes
+            WHERE cliente_id=?
+            ORDER BY id DESC
+            """, (int(cliente_id),))
+
+            if cli.empty:
+                st.warning("Cliente não encontrado.")
+            else:
+                c = cli.iloc[0]
+
+                total_gasto = float(orcs["total"].fillna(0).sum()) if not orcs.empty else 0
+                qtd_pedidos = len(orcs)
+                ticket = total_gasto / qtd_pedidos if qtd_pedidos else 0
+
+                nivel = "Novo"
+                pontos = 0
+                if not fid.empty:
+                    nivel = fid.iloc[0]["nivel"]
+                    pontos = fid.iloc[0]["pontos"]
+
+                k1, k2, k3, k4, k5 = st.columns(5)
+                with k1:
+                    card("Cliente", codigo_visual("CLI", c["id"]))
+                with k2:
+                    card("Nível", str(nivel), f"{pontos:.0f} ponto(s)")
+                with k3:
+                    card("Pedidos", str(qtd_pedidos))
+                with k4:
+                    card("Total gasto", real(total_gasto))
+                with k5:
+                    card("Ticket médio", real(ticket))
+
+                st.write(f"**Nome:** {c['nome']}")
+                st.write(f"**WhatsApp:** {c['whatsapp'] or '-'}")
+                st.write(f"**Instagram:** {c['instagram'] or '-'}")
+                st.write(f"**Cidade:** {c['cidade'] or '-'}")
+                st.write(f"**Aniversário:** {c['aniversario'] or '-'}")
+                st.write(f"**Observações:** {c['observacoes'] or '-'}")
+
+                st.markdown("### Linha do tempo de pedidos")
+                if orcs.empty:
+                    st.info("Nenhum pedido/orçamento ainda.")
+                else:
+                    for _, r in orcs.iterrows():
+                        st.write(f"✔ **{codigo_visual('ORC', r['id'], ano=datetime.now().year)}** — {r['status']} — {real(r['total'])} — {r['data_orcamento']}")
+
+                st.markdown("### Interações registradas")
+                if inter.empty:
+                    st.info("Nenhuma interação registrada.")
+                else:
+                    st.dataframe(inter, use_container_width=True, hide_index=True)
+
+    with abas[2]:
+        st.subheader("Registrar interação com cliente")
+
+        clientes = consultar("SELECT id, nome FROM clientes WHERE ativo='Sim' ORDER BY nome")
+
+        if clientes.empty:
+            st.info("Cadastre clientes primeiro.")
+        else:
+            mapa = {
+                f"{codigo_visual('CLI', row['id'])} - {row['nome']}": (int(row["id"]), str(row["nome"]))
+                for _, row in clientes.iterrows()
+            }
+
+            with st.form("form_crm_interacao"):
+                escolhido = st.selectbox("Cliente", list(mapa.keys()))
+                tipo = st.selectbox("Tipo", ["Atendimento", "Pós-venda", "Orçamento", "Reclamação", "Elogio", "Aniversário", "Reativação", "Outro"])
+                canal = st.selectbox("Canal", ["WhatsApp", "Instagram", "E-mail", "Telefone", "Presencial", "Outro"])
+                descricao = st.text_area("Descrição")
+                status = st.selectbox("Status", ["Registrado", "Aguardando resposta", "Resolvido", "Pendente"])
+                proximo = st.text_input("Próximo contato", placeholder="AAAA-MM-DD")
+                obs = st.text_area("Observações internas")
+
+                if st.form_submit_button("Salvar interação"):
+                    cliente_id, cliente_nome = mapa[escolhido]
+                    executar("""
+                    INSERT INTO crm_interacoes(
+                        cliente_id, cliente_nome, tipo, canal, descricao,
+                        status, proximo_contato, observacoes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        cliente_id, cliente_nome, tipo, canal, descricao,
+                        status, proximo, obs,
+                    ))
+                    st.success("Interação registrada.")
+                    st.rerun()
+
+        st.subheader("Histórico de interações")
+        inter = consultar("""
+        SELECT id, cliente_nome, data, tipo, canal, descricao, status, proximo_contato, observacoes
+        FROM crm_interacoes
+        ORDER BY id DESC
+        LIMIT 300
+        """)
+        if inter.empty:
+            st.info("Nenhuma interação ainda.")
+        else:
+            st.dataframe(inter, use_container_width=True, hide_index=True)
+
+    with abas[3]:
+        st.subheader("Fidelidade e clientes VIP")
+
+        if st.button("Recalcular fidelidade agora"):
+            qtd = sincronizar_fidelidade_clientes()
+            st.success(f"{qtd} cliente(s) recalculado(s).")
+            st.rerun()
+
+        fid = consultar("SELECT * FROM crm_fidelidade ORDER BY total_gasto DESC")
+
+        if fid.empty:
+            st.info("Ainda não há dados de fidelidade.")
+        else:
+            fid = adicionar_codigo_visual(fid, "CLI", coluna_id="cliente_id", nome_coluna="Código")
+            st.dataframe(formatar_valores_tabela(fid), use_container_width=True, hide_index=True)
+
+            st.markdown("### Clientes por nível")
+            agrupado = fid.groupby("nivel")["cliente_id"].count().reset_index()
+            agrupado.columns = ["Nível", "Clientes"]
+            st.bar_chart(agrupado.set_index("Nível"))
+
+            st.info("Regra atual: Bronze = 1 pedido, Prata = R$500 ou 4 pedidos, Ouro = R$1000 ou 8 pedidos, Diamante = R$2000 ou 15 pedidos.")
+
+    with abas[4]:
+        st.subheader("Cupons")
+
+        with st.form("form_cupom_crm"):
+            c1, c2, c3 = st.columns(3)
+            codigo = c1.text_input("Código do cupom", placeholder="PROMO10")
+            tipo = c2.selectbox("Tipo", ["Percentual", "Valor fixo"])
+            valor = c3.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+
+            c4, c5 = st.columns(2)
+            minimo = c4.number_input("Mínimo de compra", min_value=0.0, step=0.01, format="%.2f")
+            validade = c5.text_input("Validade", placeholder="AAAA-MM-DD")
+
+            descricao = st.text_input("Descrição")
+            ativo = st.selectbox("Ativo?", ["Sim", "Não"], key="cupom_ativo")
+            obs = st.text_area("Observações do cupom")
+
+            if st.form_submit_button("Salvar cupom"):
+                if not codigo.strip():
+                    st.error("Digite o código do cupom.")
+                else:
+                    executar("""
+                    INSERT OR REPLACE INTO crm_cupons(
+                        codigo, descricao, tipo, valor, minimo_compra,
+                        validade, ativo, observacoes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        codigo.upper().strip(), descricao, tipo, valor,
+                        minimo, validade, ativo, obs,
+                    ))
+                    st.success("Cupom salvo.")
+                    st.rerun()
+
+        cupons = consultar("SELECT * FROM crm_cupons ORDER BY id DESC")
+        if cupons.empty:
+            st.info("Nenhum cupom cadastrado.")
+        else:
+            st.dataframe(formatar_valores_tabela(cupons), use_container_width=True, hide_index=True)
+
+    with abas[5]:
+        st.subheader("Mensagens rápidas e pós-venda")
+
+        clientes = consultar("SELECT id, nome, whatsapp FROM clientes WHERE ativo='Sim' ORDER BY nome")
+
+        if clientes.empty:
+            st.info("Nenhum cliente cadastrado.")
+        else:
+            mapa = {
+                f"{codigo_visual('CLI', row['id'])} - {row['nome']}": (int(row["id"]), str(row["nome"]), str(row["whatsapp"] or ""))
+                for _, row in clientes.iterrows()
+            }
+
+            escolhido = st.selectbox("Cliente", list(mapa.keys()), key="msg_cliente_crm")
+            tipo_msg = st.selectbox("Tipo de mensagem", ["Pós-venda", "Aniversário", "Reativação", "VIP", "Personalizada"])
+            extra = st.text_area("Texto extra / personalizado")
+
+            cliente_id, cliente_nome, whatsapp = mapa[escolhido]
+            msg = gerar_mensagem_cliente(cliente_nome, tipo_msg, extra)
+
+            if tipo_msg == "Personalizada" and extra.strip():
+                msg = gerar_mensagem_cliente(cliente_nome, "Personalizada", extra)
+
+            st.text_area("Mensagem pronta", value=msg, height=150)
+
+            numero = "".join([c for c in whatsapp if c.isdigit()])
+            if numero:
+                import urllib.parse
+                link = f"https://wa.me/55{numero}?text={urllib.parse.quote(msg)}" if not numero.startswith("55") else f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
+                st.link_button("Abrir WhatsApp com mensagem", link)
+            else:
+                st.warning("Cliente sem WhatsApp cadastrado.")
+
+            if st.button("Registrar mensagem como interação"):
+                executar("""
+                INSERT INTO crm_interacoes(
+                    cliente_id, cliente_nome, tipo, canal, descricao,
+                    status, proximo_contato, observacoes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    cliente_id, cliente_nome, tipo_msg, "WhatsApp", msg,
+                    "Registrado", "", "Mensagem gerada pelo CRM.",
+                ))
+                st.success("Mensagem registrada no histórico do cliente.")
+                st.rerun()
+
+
 # ============================================================
 # LOGIN / SEGURANÇA
 # ============================================================
@@ -6986,6 +7526,7 @@ menu = st.sidebar.radio(
     [
         "Dashboard",
         "Clientes",
+        "CRM Inteligente",
         "Orçamentos",
         "Produção",
         "Produtos / Precificação",
@@ -7013,6 +7554,8 @@ if menu == "Dashboard":
     tela_inicio()
 elif menu == "Clientes":
     tela_clientes()
+elif menu == "CRM Inteligente":
+    tela_crm_inteligente()
 elif menu == "Orçamentos":
     tela_orcamentos()
 elif menu == "Produção":
