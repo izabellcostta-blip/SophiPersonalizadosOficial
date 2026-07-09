@@ -617,6 +617,7 @@ def criar_banco():
         nome TEXT NOT NULL,
         categoria TEXT,
         qtd_por_lote REAL DEFAULT 1,
+        qtd_por_folha REAL DEFAULT 1,
         receita_json TEXT,
         tintas_json TEXT,
         equipamentos_json TEXT,
@@ -1326,6 +1327,32 @@ def custo_equipamento(row, minutos=1, custo_kwh=None):
     energia_por_minuto = (potencia / 1000) * custo_kwh / 60 if usa == "Sim" else 0
 
     return (desgaste_por_uso + energia_por_minuto) * minutos
+
+
+def custo_equipamento_lote(row, quantidade_lote=1, minutos=0, custo_kwh=None):
+    """
+    Calcula equipamento do jeito correto para gráfica:
+    - depreciação = valor do equipamento / (vida útil em meses * produção mensal) * quantidade do lote
+    - energia = potência em kW * custo kWh * horas usadas no lote
+    Assim um equipamento não entra inteiro em um pedido pequeno.
+    """
+    if custo_kwh is None:
+        custo_kwh = n(obter_config("custo_kwh", "0.90"), 0.90)
+
+    valor_pago = n(row["valor_pago"])
+    vida = max(n(row["vida_util_meses"], 1), 1)
+    producao = max(n(row["producao_mensal"], 1), 1)
+    potencia = n(row["potencia_w"])
+    usa = str(row["usa_energia"])
+
+    quantidade_lote = max(n(quantidade_lote, 1), 1)
+    minutos = max(n(minutos, 0), 0)
+
+    desgaste_por_unidade = valor_pago / (vida * producao)
+    desgaste_lote = desgaste_por_unidade * quantidade_lote
+    energia_lote = (potencia / 1000) * custo_kwh * (minutos / 60) if usa == "Sim" else 0
+
+    return desgaste_lote + energia_lote
 
 
 def categorias_ativas():
@@ -3456,6 +3483,7 @@ def tela_produtos():
         "favorito": "TEXT DEFAULT 'Não'",
         "descricao_catalogo": "TEXT",
         "status_catalogo": "TEXT DEFAULT 'Disponível'",
+        "qtd_por_folha": "REAL DEFAULT 1",
     }.items():
         try:
             executar(f"ALTER TABLE produtos ADD COLUMN {coluna} {tipo_coluna}")
@@ -3477,7 +3505,13 @@ def tela_produtos():
         foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
         descricao_catalogo = st.text_area("Descrição para catálogo público", placeholder="Texto curto que o cliente verá no catálogo.")
 
-        qtd_por_lote = st.number_input("Quantidade produzida por folha/lote", min_value=1.0, value=1.0, step=1.0)
+        st.subheader("Quantidade do lote")
+        q1, q2, q3 = st.columns(3)
+        qtd_total_lote = q1.number_input("Quantidade total do lote", min_value=1.0, value=1000.0, step=1.0)
+        qtd_por_folha = q2.number_input("Quantidade produzida por folha A4", min_value=1.0, value=10.0, step=1.0)
+        folhas_necessarias = int(__import__('math').ceil(qtd_total_lote / max(qtd_por_folha, 1)))
+        q3.metric("Folhas necessárias", folhas_necessarias)
+        qtd_por_lote = qtd_total_lote  # mantém compatibilidade com o banco antigo
 
         st.subheader("Itens utilizados no produto")
         receita = []
@@ -3535,7 +3569,7 @@ def tela_produtos():
                 with cols[idx % 3]:
                     usar = st.checkbox(row["nome"], key=f"eq_{row['id']}")
                     if usar:
-                        custo = custo_equipamento(row, minutos=tempo_min)
+                        custo = custo_equipamento_lote(row, quantidade_lote=qtd_total_lote, minutos=tempo_min)
                         equipamentos.append({"nome": row["nome"], "custo": custo})
                         custo_equip_total += custo
                         st.caption(real(custo))
@@ -3549,13 +3583,16 @@ def tela_produtos():
         custo_mao_obra = tempo_min / 60 * valor_hora
         custo_lote_sem_reserva = custo_insumos_total + custo_embalagens_total + custo_tintas_total + custo_equip_total + custo_mao_obra
         custo_total_lote = custo_lote_sem_reserva * (1 + reserva / 100)
-        custo_unitario = custo_total_lote / qtd_por_lote if qtd_por_lote else 0
-        preco_sugerido = custo_unitario * (1 + margem / 100)
+        custo_unitario = custo_total_lote / qtd_total_lote if qtd_total_lote else 0
+        preco_sugerido_lote = custo_total_lote * (1 + margem / 100)
+        preco_sugerido = preco_sugerido_lote / qtd_total_lote if qtd_total_lote else 0
 
-        preco_escolhido = st.number_input("Preço escolhido por mim", min_value=0.0, value=0.0, step=0.01, format="%.2f")
-        preco_final = preco_escolhido if preco_escolhido > 0 else preco_sugerido
+        preco_escolhido_lote = st.number_input("Preço escolhido do lote inteiro", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+        preco_final_lote = preco_escolhido_lote if preco_escolhido_lote > 0 else preco_sugerido_lote
+        preco_final = preco_final_lote / qtd_total_lote if qtd_total_lote else 0
+        lucro_lote = preco_final_lote - custo_total_lote
         lucro = preco_final - custo_unitario
-        margem_real = lucro / preco_final * 100 if preco_final else 0
+        margem_real = lucro_lote / preco_final_lote * 100 if preco_final_lote else 0
 
         st.subheader("Resumo automático")
         r1, r2, r3, r4 = st.columns(4)
@@ -3570,13 +3607,37 @@ def tela_produtos():
 
         r5, r6, r7, r8 = st.columns(4)
         with r5:
-            card("Custo unitário", real(custo_unitario))
+            card("Custo por unidade", real(custo_unitario))
         with r6:
-            card("Preço sugerido", real(preco_sugerido))
+            card("Preço sugerido unidade", real(preco_sugerido))
         with r7:
-            card("Preço escolhido", real(preco_final))
+            card("Preço escolhido unidade", real(preco_final))
         with r8:
-            card("Lucro / Margem", real(lucro), f"{margem_real:.2f}%")
+            card("Lucro unidade / Margem", real(lucro), f"{margem_real:.2f}%")
+
+        r9, r10, r11, r12 = st.columns(4)
+        with r9:
+            card("Custo total do lote", real(custo_total_lote))
+        with r10:
+            card("Preço sugerido lote", real(preco_sugerido_lote))
+        with r11:
+            card("Preço escolhido lote", real(preco_final_lote))
+        with r12:
+            card("Lucro total", real(lucro_lote), f"{margem_real:.2f}%")
+
+        with st.expander("Ver cálculo por componente"):
+            componentes = pd.DataFrame([
+                {"Componente": "Insumos", "Valor unidade": custo_insumos_total / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_insumos_total},
+                {"Componente": "Tintas", "Valor unidade": custo_tintas_total / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_tintas_total},
+                {"Componente": "Embalagens", "Valor unidade": custo_embalagens_total / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_embalagens_total},
+                {"Componente": "Equipamentos", "Valor unidade": custo_equip_total / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_equip_total},
+                {"Componente": "Mão de obra", "Valor unidade": custo_mao_obra / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_mao_obra},
+                {"Componente": "Reserva de erro", "Valor unidade": (custo_total_lote - custo_lote_sem_reserva) / qtd_total_lote if qtd_total_lote else 0, "Valor lote": custo_total_lote - custo_lote_sem_reserva},
+            ])
+            st.dataframe(componentes, use_container_width=True, hide_index=True, column_config={
+                "Valor unidade": st.column_config.NumberColumn("Valor unidade", format="R$ %.4f"),
+                "Valor lote": st.column_config.NumberColumn("Valor lote", format="R$ %.2f"),
+            })
 
         receita_para_salvar = receita + embalagens_usadas
 
@@ -3605,6 +3666,7 @@ def tela_produtos():
                     "nome": nome,
                     "categoria": categoria_produto,
                     "qtd_por_lote": qtd_por_lote,
+                    "qtd_por_folha": qtd_por_folha,
                     "receita_json": json.dumps(receita_para_salvar, ensure_ascii=False),
                     "tintas_json": json.dumps(tintas, ensure_ascii=False),
                     "equipamentos_json": json.dumps(equipamentos, ensure_ascii=False),
@@ -3675,7 +3737,7 @@ def tela_produtos():
                 ativo_edit = c3.selectbox("Ativo?", ["Sim", "Não"], index=0 if str(p.get("ativo", "Sim")) == "Sim" else 1)
 
                 c4, c5, c6 = st.columns(3)
-                qtd_edit = c4.number_input("Quantidade por folha/lote", min_value=0.0, value=float(n(p.get("qtd_por_lote", 1), 1)), step=1.0)
+                qtd_edit = c4.number_input("Quantidade total do lote", min_value=0.0, value=float(n(p.get("qtd_por_lote", 1), 1)), step=1.0)
                 tempo_edit = c5.number_input("Tempo de produção do lote (min)", min_value=0.0, value=float(n(p.get("tempo_min", 0))), step=1.0)
                 valor_hora_edit = c6.number_input("Valor hora mão de obra", min_value=0.0, value=float(n(p.get("valor_hora", 0))), step=0.01, format="%.2f")
 
@@ -3707,13 +3769,14 @@ def tela_produtos():
                 if recalcular:
                     custo_total_lote_edit = (custo_insumos_edit + custo_tintas_edit + custo_equip_edit + custo_mao_obra_edit) * (1 + reserva_edit / 100)
                     custo_unitario_edit = custo_total_lote_edit / qtd_edit if qtd_edit else 0
-                    preco_sugerido_edit = custo_unitario_edit * (1 + margem_lucro_edit / 100)
+                    preco_sugerido_lote_edit = custo_total_lote_edit * (1 + margem_lucro_edit / 100)
+                    preco_sugerido_edit = preco_sugerido_lote_edit / qtd_edit if qtd_edit else 0
                     preco_escolhido_base = float(n(p.get("preco_escolhido", 0)))
                     preco_escolhido_edit = st.number_input("Preço escolhido/final", min_value=0.0, value=preco_escolhido_base, step=0.01, format="%.2f")
                     preco_final_edit = preco_escolhido_edit if preco_escolhido_edit > 0 else preco_sugerido_edit
                     lucro_edit = preco_final_edit - custo_unitario_edit
                     margem_real_edit = lucro_edit / preco_final_edit * 100 if preco_final_edit else 0
-                    st.caption(f"Custo unitário recalculado: {real(custo_unitario_edit)} | Preço sugerido: {real(preco_sugerido_edit)} | Lucro: {real(lucro_edit)} | Margem: {margem_real_edit:.2f}%")
+                    st.caption(f"Custo por unidade: {real(custo_unitario_edit)} | Preço sugerido por unidade: {real(preco_sugerido_edit)} | Preço sugerido lote: {real(preco_sugerido_lote_edit)} | Lucro unidade: {real(lucro_edit)} | Margem: {margem_real_edit:.2f}%")
                 else:
                     c14, c15, c16, c17 = st.columns(4)
                     custo_total_lote_edit = c14.number_input("Custo total lote", min_value=0.0, value=float(n(p.get("custo_total_lote", 0))), step=0.01, format="%.2f")
