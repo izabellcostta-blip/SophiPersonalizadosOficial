@@ -1446,7 +1446,8 @@ def custo_equipamento(row, quantidade_lote=1, minutos=0, incluir_energia=False, 
     Regra principal:
     - Depreciação/desgaste é por unidade produzida:
       valor_pago / vida_util_meses / producao_mensal.
-    - Depois multiplica pela quantidade total do lote.
+    - Depois multiplica pela quantidade de bases/ciclos de produção realmente usados
+      (por exemplo, número de folhas A4), e não pela quantidade final de peças.
 
     Energia NÃO entra automaticamente no desgaste, para não inflar a precificação.
     Se quiser usar energia, ative incluir_energia=True e mantenha custo_kwh em R$/kWh.
@@ -3796,7 +3797,7 @@ def tela_produtos():
                 with cols[idx % 3]:
                     usar = st.checkbox(row["nome"], key=f"eq_{row['id']}")
                     if usar:
-                        custo = custo_equipamento(row, quantidade_lote=qtd_total_lote, minutos=tempo_min, incluir_energia=False)
+                        custo = custo_equipamento(row, quantidade_lote=folhas_estimadas, minutos=tempo_min, incluir_energia=False)
                         equipamentos.append({"nome": row["nome"], "custo": custo, "quantidade_lote": qtd_total_lote})
                         custo_equip_total += custo
                         st.caption(real(custo))
@@ -15892,12 +15893,23 @@ def tela_precificacao_profissional():
                 with cols[idx_eq % 3]:
                     usar = st.checkbox(str(row["nome"]), key=f"prof_eq_{row['id']}")
                     if usar:
-                        # A depreciação acompanha a quantidade final produzida, conforme cadastro do equipamento.
-                        custo = custo_equipamento(row, quantidade_lote=qtd_total_lote, minutos=tempo_min, incluir_energia=False)
-                        por_unidade = custo / qtd_total_lote if qtd_total_lote else 0
+                        # A depreciação acompanha as folhas/bases realmente utilizadas, e não
+                        # a quantidade final de peças. Ex.: 1.000 cartões ÷ 25 por folha = 40 bases.
+                        # Isso evita cobrar o desgaste do equipamento 25 vezes acima do correto.
+                        custo = custo_equipamento(
+                            row,
+                            quantidade_lote=folhas_estimadas,
+                            minutos=tempo_min,
+                            incluir_energia=False,
+                        )
+                        por_base = custo / folhas_estimadas if folhas_estimadas else 0
+                        por_unidade_final = custo / qtd_total_lote if qtd_total_lote else 0
                         equipamentos.append({"nome": str(row["nome"]), "custo": custo})
                         custo_equip_total += custo
-                        st.caption(f"Lote: {real(custo)} · unidade: {_real_preciso(por_unidade)}")
+                        st.caption(
+                            f"Lote: {real(custo)} · base: {_real_preciso(por_base)} "
+                            f"· unidade final: {_real_preciso(por_unidade_final)}"
+                        )
 
         st.subheader("5. Custos fixos, mão de obra, erro e lucro")
         a, b, c, d = st.columns(4)
