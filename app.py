@@ -15831,8 +15831,16 @@ def _status_preco(margem_real, lucro):
 
 def tela_precificacao_profissional():
     _garantir_tabelas_gestao_ia()
-    st.title("Precificação Profissional")
-    st.write("Simule o preço correto, confira cada custo e leve o valor final para o Offstore. Nada aqui é publicado no catálogo.")
+    st.markdown("""
+    <div class="pricing-hero">
+      <div>
+        <div class="pricing-kicker">CENTRO DE PRECIFICAÇÃO</div>
+        <h1>Preço certo, lucro protegido.</h1>
+        <p>Materiais, tinta, equipamentos, custos fixos, mão de obra, reserva de erro e margem reunidos em uma memória de cálculo transparente.</p>
+      </div>
+      <div class="pricing-seal">SOPHI<br><strong>PRICING</strong></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     abas = st.tabs(["Nova simulação", "Histórico", "Diagnóstico rápido"])
 
@@ -16513,6 +16521,68 @@ div[data-testid="stAlert"] {
     border: 1px solid rgba(0,0,0,0.06);
 }
 
+/* ===== SOPHI ERP — acabamento profissional ===== */
+#MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+.block-container { max-width: 1540px; padding-top: 1.35rem; padding-bottom: 3rem; }
+[data-testid="stAppViewContainer"] > .main { background: transparent; }
+
+section[data-testid="stSidebar"] { min-width: 286px !important; max-width: 286px !important; }
+section[data-testid="stSidebar"] > div { padding-top: 1rem; }
+section[data-testid="stSidebar"] [role="radiogroup"] { gap: 4px; }
+section[data-testid="stSidebar"] [role="radiogroup"] label {
+    min-height: 46px; display:flex; align-items:center; border:1px solid transparent;
+    background:transparent; padding:10px 13px; font-size:13px; font-weight:700;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+    background:linear-gradient(135deg,rgba(255,255,255,.16),rgba(255,255,255,.08));
+    border-color:rgba(255,255,255,.14); box-shadow:inset 3px 0 0 #d83f5f,0 10px 28px rgba(0,0,0,.16);
+}
+section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p { font-weight:900 !important; }
+
+.erp-topbar { display:flex;align-items:center;justify-content:space-between;gap:20px;background:rgba(255,255,255,.88);backdrop-filter:blur(16px);border:1px solid rgba(20,20,20,.07);border-radius:20px;padding:13px 18px;margin-bottom:18px;box-shadow:0 12px 32px rgba(0,0,0,.05); }
+.erp-topbar-left { display:flex;align-items:center;gap:12px; }
+.erp-topbar-icon { width:38px;height:38px;border-radius:12px;background:#080808;color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 8px 18px rgba(0,0,0,.18); }
+.erp-topbar-title { font-size:15px;font-weight:900;color:#111; }
+.erp-topbar-sub { font-size:11px;color:#888;margin-top:2px; }
+.erp-topbar-right { display:flex;align-items:center;gap:10px;color:#666;font-size:12px; }
+.erp-live { width:8px;height:8px;border-radius:50%;background:#21c55d;box-shadow:0 0 0 5px rgba(33,197,93,.12); }
+
+[data-testid="stForm"] { background:rgba(255,255,255,.82);border:1px solid rgba(20,20,20,.07);border-radius:22px;padding:18px 20px;box-shadow:0 12px 34px rgba(0,0,0,.045); }
+[data-testid="stExpander"] { border:1px solid rgba(20,20,20,.07)!important;border-radius:18px!important;background:rgba(255,255,255,.78)!important;box-shadow:0 8px 24px rgba(0,0,0,.035);overflow:hidden; }
+[data-testid="stExpander"] summary { font-weight:800; }
+
+[data-testid="stTextInput"] input,[data-testid="stNumberInput"] input,[data-testid="stTextArea"] textarea,
+[data-baseweb="select"] > div { background:#fff!important;border:1px solid #e5e2dd!important;min-height:44px;box-shadow:inset 0 1px 0 rgba(0,0,0,.015); }
+[data-testid="stTextInput"] input:focus,[data-testid="stNumberInput"] input:focus,[data-testid="stTextArea"] textarea:focus { border-color:#222!important;box-shadow:0 0 0 3px rgba(0,0,0,.06)!important; }
+label[data-testid="stWidgetLabel"] p { color:#3f3f3f!important;font-size:12px!important;font-weight:750!important; }
+
+.stButton button[kind="primary"] { background:linear-gradient(135deg,#d83f5f,#b92849)!important;box-shadow:0 12px 28px rgba(216,63,95,.24)!important; }
+.stButton button[kind="secondary"] { background:#fff!important;color:#111!important;border:1px solid #dedad4!important;box-shadow:none!important; }
+
+.stTabs [data-baseweb="tab-list"] { background:rgba(255,255,255,.65);padding:5px;border-radius:16px;border:1px solid rgba(20,20,20,.06);gap:5px; }
+.stTabs [data-baseweb="tab"] { border:0!important;border-radius:11px!important;background:transparent!important;padding:10px 16px; }
+.stTabs [aria-selected="true"] { background:#0b0b0b!important;color:#fff!important;box-shadow:0 8px 20px rgba(0,0,0,.16)!important; }
+.stTabs [aria-selected="true"] p { color:#fff!important; }
+
+[data-testid="stDataFrame"] { background:#fff; }
+[data-testid="stDataFrame"] iframe { border-radius:18px; }
+
+.pricing-hero { display:flex;justify-content:space-between;align-items:center;gap:28px;background:radial-gradient(circle at 88% 10%,rgba(216,63,95,.26),transparent 26%),linear-gradient(135deg,#060606,#171717 70%,#28181c);border-radius:28px;padding:30px 34px;margin:2px 0 22px;color:#fff;box-shadow:0 24px 60px rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.08); }
+.pricing-hero h1 { color:#fff!important;font-size:40px!important;margin:4px 0 8px!important; }
+.pricing-hero p { color:rgba(255,255,255,.72)!important;max-width:760px;margin:0;line-height:1.55; }
+.pricing-kicker { color:#f1a0b2;font-size:10px;font-weight:900;letter-spacing:2.5px; }
+.pricing-seal { width:112px;height:112px;border-radius:28px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;font-size:12px;letter-spacing:2px;transform:rotate(2deg); }
+.pricing-seal strong { font-size:16px;margin-top:3px; }
+
+/* melhora leitura em telas menores */
+@media (max-width: 900px) {
+  section[data-testid="stSidebar"] { min-width:245px!important;max-width:245px!important; }
+  .block-container { padding-left:1rem;padding-right:1rem; }
+  .pricing-hero { padding:22px; }
+  .pricing-seal { display:none; }
+  .erp-topbar-right { display:none; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -16576,6 +16646,28 @@ menu_limpo = str(menu)
 for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
+
+# Barra superior profissional, presente em todo o ERP.
+try:
+    _agora_ui = agora_brasil()
+    _operador_ui = st.session_state.get("usuario_logado", "Operador") or "Operador"
+    _icone_tela = {
+        "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
+        "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
+        "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
+        "Relatórios":"↗", "Sophi Gestora IA":"✦", "Configurações":"⚙"
+    }.get(menu_limpo, "•")
+    st.markdown(f"""
+    <div class="erp-topbar">
+      <div class="erp-topbar-left">
+        <div class="erp-topbar-icon">{_icone_tela}</div>
+        <div><div class="erp-topbar-title">{menu_limpo}</div><div class="erp-topbar-sub">Sophi Personalizados Oficial · gestão interna</div></div>
+      </div>
+      <div class="erp-topbar-right"><span class="erp-live"></span><span>Sistema online</span><span>·</span><span>{_agora_ui.strftime('%d/%m/%Y · %H:%M')}</span><span>·</span><strong>{_operador_ui}</strong></div>
+    </div>
+    """, unsafe_allow_html=True)
+except Exception:
+    pass
 
 if menu_limpo == "Dashboard":
     tela_inicio()
