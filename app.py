@@ -228,11 +228,11 @@ def real(valor):
 
 
 def real4(valor):
-    # Mantido para compatibilidade, mas agora também mostra só 2 casas.
+    """Formata custos unitários com 4 casas decimais para não esconder centavos fracionados."""
     try:
-        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {float(valor):,.4f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return "R$ 0,00"
+        return "R$ 0,0000"
 
 
 def hoje_iso():
@@ -3739,13 +3739,20 @@ def tela_produtos():
 
         r5, r6, r7, r8 = st.columns(4)
         with r5:
-            card("Custo por unidade", real(custo_unitario))
+            card("Custo por unidade", real4(custo_unitario), f"Lote: {qtd_total_lote:.0f} unidades")
         with r6:
-            card("Preço sugerido unidade", real(preco_sugerido))
+            card("Preço sugerido unidade", real4(preco_sugerido), f"Margem aplicada: {margem:.2f}%")
         with r7:
-            card("Preço escolhido unidade", real(preco_final))
+            card("Preço escolhido unidade", real4(preco_final), "Calculado pelo preço do lote")
         with r8:
-            card("Lucro unidade / Margem", real(lucro), f"{margem_real:.2f}%")
+            card("Lucro unidade / Margem", real4(lucro), f"Margem real: {margem_real:.2f}%")
+
+        st.caption(
+            f"Conferência: custos antes da reserva {real(custo_lote_sem_reserva)} + "
+            f"reserva de erro {real(reserva_valor_lote)} = custo final {real(custo_total_lote)}. "
+            f"Custos fixos: {real4(resumo_fixos['custo_fixo_unidade'])} por unidade × "
+            f"{qtd_total_lote:.0f} unidades = {real(custo_fixos_total)}."
+        )
 
         r9, r10, r11, r12 = st.columns(4)
         with r9:
