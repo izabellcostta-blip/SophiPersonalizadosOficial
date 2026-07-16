@@ -5,6 +5,8 @@ import json
 import sqlite3
 import shutil
 import html
+import urllib.request
+import urllib.error
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15760,6 +15762,435 @@ def botao_sair():
         st.session_state["usuario_logado"] = ""
         st.rerun()
 
+
+
+# ============================================================
+# PRECIFICAÇÃO PROFISSIONAL (SIMULAÇÃO, SEM CATÁLOGO)
+# ============================================================
+
+def _garantir_tabelas_gestao_ia():
+    executar("""
+    CREATE TABLE IF NOT EXISTS historico_precificacoes_simuladas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        nome TEXT,
+        quantidade_lote REAL DEFAULT 1,
+        rendimento_por_folha REAL DEFAULT 1,
+        folhas_estimadas REAL DEFAULT 1,
+        materiais REAL DEFAULT 0,
+        tintas REAL DEFAULT 0,
+        embalagens REAL DEFAULT 0,
+        equipamentos REAL DEFAULT 0,
+        custos_fixos REAL DEFAULT 0,
+        mao_obra REAL DEFAULT 0,
+        reserva_percentual REAL DEFAULT 0,
+        reserva_valor REAL DEFAULT 0,
+        custo_total REAL DEFAULT 0,
+        custo_unitario REAL DEFAULT 0,
+        margem_desejada REAL DEFAULT 0,
+        preco_sugerido REAL DEFAULT 0,
+        preco_escolhido REAL DEFAULT 0,
+        lucro REAL DEFAULT 0,
+        margem_real REAL DEFAULT 0,
+        concorrente REAL DEFAULT 0,
+        memoria_json TEXT,
+        observacoes TEXT
+    )
+    """)
+    executar("""
+    CREATE TABLE IF NOT EXISTS ia_conversas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        pergunta TEXT,
+        resposta TEXT,
+        usuario TEXT
+    )
+    """)
+
+
+def _real_preciso(valor):
+    try:
+        v = float(valor)
+        casas = 4 if abs(v) < 1 else 2
+        return f"R$ {v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,0000"
+
+
+def _status_preco(margem_real, lucro):
+    if lucro < 0:
+        return "🔴 Prejuízo", "O preço escolhido não cobre todos os custos."
+    if margem_real < 20:
+        return "🔴 Perigo", "A margem real está muito baixa para absorver imprevistos."
+    if margem_real < 35:
+        return "🟠 Atenção", "Há lucro, mas a margem pode ficar apertada."
+    if margem_real < 50:
+        return "🟡 Saudável", "O preço cobre os custos e mantém margem razoável."
+    return "🟢 Excelente", "O preço cobre os custos e mantém uma margem forte."
+
+
+def tela_precificacao_profissional():
+    _garantir_tabelas_gestao_ia()
+    st.title("Precificação Profissional")
+    st.write("Simule o preço correto, confira cada custo e leve o valor final para o Offstore. Nada aqui é publicado no catálogo.")
+
+    abas = st.tabs(["Nova simulação", "Histórico", "Diagnóstico rápido"])
+
+    with abas[0]:
+        c0, c1, c2 = st.columns([2.4, 1, 1])
+        nome_simulacao = c0.text_input("Nome da simulação", placeholder="Ex.: 1.000 cartões de visita laminados")
+        qtd_total_lote = c1.number_input("Quantidade final", min_value=1.0, value=1000.0, step=1.0, key="prof_qtd_lote")
+        qtd_por_folha = c2.number_input("Rendimento por folha/base", min_value=1.0, value=10.0, step=1.0, key="prof_rend_folha")
+        folhas_estimadas = int((qtd_total_lote + qtd_por_folha - 1) // qtd_por_folha)
+        st.info(f"Produção estimada: {folhas_estimadas} folhas/bases para {qtd_total_lote:.0f} unidades finais.")
+
+        st.subheader("1. Materiais utilizados")
+        receita = []
+        custo_insumos_total = 0.0
+        for linha in range(101, 111):
+            item = seletor_insumo(linha)
+            if item:
+                receita.append(item)
+                custo_insumos_total += n(item.get("total", 0))
+
+        st.subheader("2. Tinta")
+        tintas = []
+        custo_tintas_total = 0.0
+        item_tinta = seletor_tinta(101)
+        if item_tinta:
+            tintas.append(item_tinta)
+            custo_tintas_total += n(item_tinta.get("total", 0))
+
+        st.subheader("3. Embalagens")
+        custo_embalagens_total = 0.0
+        embalagens_usadas = []
+        usa_embalagem = st.checkbox("Incluir embalagem", value=False, key="prof_usa_emb")
+        if usa_embalagem:
+            qtd_emb = st.number_input("Tipos de embalagem", min_value=1, max_value=5, value=1, step=1, key="prof_qtd_emb")
+            for linha in range(101, 101 + int(qtd_emb)):
+                emb = seletor_embalagem_precificacao(linha)
+                if emb:
+                    embalagens_usadas.append(emb)
+                    custo_embalagens_total += n(emb.get("total", 0))
+
+        st.subheader("4. Equipamentos e tempo")
+        tempo_min = st.number_input("Tempo total de produção (minutos)", min_value=0.0, value=10.0, step=1.0, key="prof_tempo")
+        df_eq = consultar("SELECT * FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
+        equipamentos = []
+        custo_equip_total = 0.0
+        if not df_eq.empty:
+            cols = st.columns(3)
+            for idx_eq, (_, row) in enumerate(df_eq.iterrows()):
+                with cols[idx_eq % 3]:
+                    usar = st.checkbox(str(row["nome"]), key=f"prof_eq_{row['id']}")
+                    if usar:
+                        # A depreciação acompanha a quantidade final produzida, conforme cadastro do equipamento.
+                        custo = custo_equipamento(row, quantidade_lote=qtd_total_lote, minutos=tempo_min, incluir_energia=False)
+                        por_unidade = custo / qtd_total_lote if qtd_total_lote else 0
+                        equipamentos.append({"nome": str(row["nome"]), "custo": custo})
+                        custo_equip_total += custo
+                        st.caption(f"Lote: {real(custo)} · unidade: {_real_preciso(por_unidade)}")
+
+        st.subheader("5. Custos fixos, mão de obra, erro e lucro")
+        a, b, c, d = st.columns(4)
+        valor_hora = a.number_input("Valor da sua hora", min_value=0.0, value=n(obter_config("valor_hora", "5"), 5), step=0.01, format="%.2f", key="prof_hora")
+        reserva = b.number_input("Margem de erro (%)", min_value=0.0, value=n(obter_config("reserva_erro", "5"), 5), step=0.1, format="%.2f", key="prof_erro")
+        margem = c.number_input("Lucro desejado sobre o custo (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f", key="prof_margem")
+        concorrente = d.number_input("Preço do concorrente (opcional)", min_value=0.0, value=0.0, step=0.01, format="%.2f", key="prof_concorrente")
+        custo_mao_obra = (tempo_min / 60) * valor_hora
+
+        resumo_fixos = resumo_custos_fixos()
+        incluir_fixos = st.checkbox("Incluir custos fixos da empresa", value=True, key="prof_incluir_fixos")
+        base_fixos = st.selectbox(
+            "Base para ratear custos fixos",
+            ["Folhas/bases utilizadas", "Unidades finais", "Quantidade manual"],
+            index=0,
+            key="prof_base_fixos",
+        )
+        if base_fixos == "Folhas/bases utilizadas":
+            unidades_fixos = float(folhas_estimadas)
+        elif base_fixos == "Unidades finais":
+            unidades_fixos = float(qtd_total_lote)
+        else:
+            unidades_fixos = st.number_input("Unidades de produção para custos fixos", min_value=0.0, value=float(folhas_estimadas), step=1.0, key="prof_manual_fixos")
+        custo_fixos_total = resumo_fixos["custo_fixo_unidade"] * unidades_fixos if incluir_fixos else 0.0
+        st.caption(f"Custo fixo: {_real_preciso(resumo_fixos['custo_fixo_unidade'])} × {unidades_fixos:.0f} unidades de produção = {real(custo_fixos_total)}")
+
+        subtotal = custo_insumos_total + custo_tintas_total + custo_embalagens_total + custo_equip_total + custo_fixos_total + custo_mao_obra
+        reserva_valor = subtotal * reserva / 100
+        custo_total = subtotal + reserva_valor
+        custo_unitario = custo_total / qtd_total_lote if qtd_total_lote else 0
+        preco_sugerido = custo_total * (1 + margem / 100)
+        preco_sugerido_unit = preco_sugerido / qtd_total_lote if qtd_total_lote else 0
+
+        st.divider()
+        e1, e2 = st.columns([1, 1])
+        preco_escolhido = e1.number_input("Preço que você pretende cobrar pelo lote", min_value=0.0, value=float(preco_sugerido), step=0.01, format="%.2f", key="prof_preco_escolhido")
+        arredondar_99 = e2.checkbox("Sugerir final comercial em ,99", value=True, key="prof_99")
+        sugestao_99 = (int(preco_sugerido) + 0.99) if arredondar_99 else preco_sugerido
+        e2.metric("Sugestão comercial", real(sugestao_99))
+
+        lucro_lote = preco_escolhido - custo_total
+        margem_real = (lucro_lote / preco_escolhido * 100) if preco_escolhido else 0
+        preco_escolhido_unit = preco_escolhido / qtd_total_lote if qtd_total_lote else 0
+        status, explicacao = _status_preco(margem_real, lucro_lote)
+
+        st.subheader("Resultado")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Custo total do lote", real(custo_total))
+        r2.metric("Custo unitário", _real_preciso(custo_unitario))
+        r3.metric("Preço sugerido", real(preco_sugerido))
+        r4.metric("Preço sugerido/unidade", _real_preciso(preco_sugerido_unit))
+        r5, r6, r7, r8 = st.columns(4)
+        r5.metric("Preço escolhido", real(preco_escolhido))
+        r6.metric("Preço escolhido/unidade", _real_preciso(preco_escolhido_unit))
+        r7.metric("Lucro do lote", real(lucro_lote))
+        r8.metric("Margem real da venda", f"{margem_real:.2f}%")
+
+        if "🔴" in status:
+            st.error(f"{status} — {explicacao}")
+        elif "🟠" in status:
+            st.warning(f"{status} — {explicacao}")
+        else:
+            st.success(f"{status} — {explicacao}")
+
+        if concorrente > 0:
+            diferenca_pct = ((preco_escolhido - concorrente) / concorrente * 100) if concorrente else 0
+            if diferenca_pct > 0:
+                st.info(f"Seu preço está {abs(diferenca_pct):.1f}% acima do concorrente. Valorize qualidade, acabamento e personalização.")
+            else:
+                st.info(f"Seu preço está {abs(diferenca_pct):.1f}% abaixo do concorrente. Confira se não está abrindo mão de margem desnecessariamente.")
+
+        memoria = {
+            "nome": nome_simulacao,
+            "quantidade": qtd_total_lote,
+            "rendimento": qtd_por_folha,
+            "folhas": folhas_estimadas,
+            "materiais": custo_insumos_total,
+            "tintas": custo_tintas_total,
+            "embalagens": custo_embalagens_total,
+            "equipamentos": custo_equip_total,
+            "custos_fixos": custo_fixos_total,
+            "mao_obra": custo_mao_obra,
+            "subtotal": subtotal,
+            "reserva_percentual": reserva,
+            "reserva_valor": reserva_valor,
+            "custo_total": custo_total,
+            "custo_unitario": custo_unitario,
+            "lucro_desejado": margem,
+            "preco_sugerido": preco_sugerido,
+            "preco_escolhido": preco_escolhido,
+            "lucro": lucro_lote,
+            "margem_real": margem_real,
+            "materiais_detalhes": receita,
+            "tintas_detalhes": tintas,
+            "equipamentos_detalhes": equipamentos,
+        }
+
+        with st.expander("Ver memória de cálculo", expanded=True):
+            linhas = pd.DataFrame([
+                ["Materiais", custo_insumos_total], ["Tintas", custo_tintas_total],
+                ["Embalagens", custo_embalagens_total], ["Equipamentos", custo_equip_total],
+                ["Custos fixos", custo_fixos_total], ["Mão de obra", custo_mao_obra],
+                ["Subtotal", subtotal], [f"Reserva de erro ({reserva:.2f}%)", reserva_valor],
+                ["Custo final", custo_total], ["Lucro no preço escolhido", lucro_lote],
+            ], columns=["Componente", "Valor"])
+            linhas["Valor"] = linhas["Valor"].apply(real)
+            st.dataframe(linhas, use_container_width=True, hide_index=True)
+
+        if st.button("Salvar esta simulação no histórico", type="primary", key="prof_salvar"):
+            executar("""
+                INSERT INTO historico_precificacoes_simuladas(
+                    nome, quantidade_lote, rendimento_por_folha, folhas_estimadas,
+                    materiais, tintas, embalagens, equipamentos, custos_fixos, mao_obra,
+                    reserva_percentual, reserva_valor, custo_total, custo_unitario,
+                    margem_desejada, preco_sugerido, preco_escolhido, lucro, margem_real,
+                    concorrente, memoria_json, observacoes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                nome_simulacao.strip() or "Simulação sem nome", qtd_total_lote, qtd_por_folha, folhas_estimadas,
+                custo_insumos_total, custo_tintas_total, custo_embalagens_total, custo_equip_total,
+                custo_fixos_total, custo_mao_obra, reserva, reserva_valor, custo_total, custo_unitario,
+                margem, preco_sugerido, preco_escolhido, lucro_lote, margem_real, concorrente,
+                json.dumps(memoria, ensure_ascii=False), "Simulação interna para atualização no Offstore"
+            ))
+            st.success("Simulação salva. Agora você pode atualizar o preço no Offstore.")
+
+    with abas[1]:
+        hist = consultar("SELECT * FROM historico_precificacoes_simuladas ORDER BY id DESC LIMIT 300")
+        if hist.empty:
+            st.info("Nenhuma simulação salva.")
+        else:
+            filtro = st.text_input("Buscar simulação", key="prof_hist_busca")
+            if filtro.strip():
+                hist = hist[hist["nome"].astype(str).str.contains(filtro, case=False, na=False)]
+            ex = hist[["id", "data", "nome", "quantidade_lote", "custo_total", "preco_sugerido", "preco_escolhido", "lucro", "margem_real"]].copy()
+            st.dataframe(formatar_valores_tabela(formatar_datas_dataframe(ex)), use_container_width=True, hide_index=True)
+            if not hist.empty:
+                mapa = {f"#{int(r['id'])} — {r['nome']}": int(r["id"]) for _, r in hist.iterrows()}
+                sel = st.selectbox("Abrir memória", list(mapa.keys()), key="prof_hist_sel")
+                row = hist[hist["id"] == mapa[sel]].iloc[0]
+                try:
+                    mem = json.loads(row["memoria_json"] or "{}")
+                except Exception:
+                    mem = {}
+                st.json(mem, expanded=False)
+
+    with abas[2]:
+        st.subheader("Diagnóstico dos custos cadastrados")
+        fix = resumo_custos_fixos()
+        dfe = consultar("SELECT nome, valor_pago, vida_util_meses, producao_mensal FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
+        dfi = consultar("SELECT nome, categoria, valor_pacote, quantidade_pacote FROM insumos WHERE ativo='Sim' ORDER BY categoria, nome")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Custos fixos/mês", real(fix["total_mensal_empresa"]))
+        a2.metric("Custo fixo por unidade de produção", _real_preciso(fix["custo_fixo_unidade"]))
+        a3.metric("Produção média mensal", f"{fix['producao_mensal']:.0f}")
+        if not dfe.empty:
+            dfe["Custo por unidade"] = dfe.apply(lambda r: n(r["valor_pago"]) / max(n(r["vida_util_meses"], 1), 1) / max(n(r["producao_mensal"], 1), 1), axis=1)
+            st.markdown("**Depreciação dos equipamentos**")
+            st.dataframe(formatar_valores_tabela(dfe), use_container_width=True, hide_index=True)
+        if not dfi.empty:
+            dfi["Custo unitário"] = dfi.apply(lambda r: custo_insumo(r["valor_pacote"], r["quantidade_pacote"]), axis=1)
+            st.markdown("**Custos unitários dos insumos**")
+            st.dataframe(formatar_valores_tabela(dfi), use_container_width=True, hide_index=True)
+
+
+# ============================================================
+# SOPHI GESTORA IA — ASSISTENTE INTERNO, SOMENTE LEITURA
+# ============================================================
+
+def _resumo_erp_para_ia():
+    def _safe(sql):
+        try:
+            return consultar(sql)
+        except Exception:
+            return pd.DataFrame()
+
+    vendas = _safe("SELECT * FROM vendas ORDER BY id DESC LIMIT 100")
+    financeiro = _safe("SELECT * FROM financeiro ORDER BY id DESC LIMIT 100")
+    tarefas = _safe("SELECT * FROM agenda_tarefas WHERE ativo='Sim' ORDER BY data, hora LIMIT 100")
+    clientes = _safe("SELECT * FROM clientes WHERE ativo='Sim' ORDER BY id DESC LIMIT 100")
+    estoque = _safe("SELECT * FROM estoque ORDER BY id DESC LIMIT 150")
+    precos = _safe("SELECT * FROM historico_precificacoes_simuladas ORDER BY id DESC LIMIT 30")
+    fixos = resumo_custos_fixos()
+
+    def records(df, cols=None, limit=30):
+        if df.empty:
+            return []
+        if cols:
+            cols = [c for c in cols if c in df.columns]
+            df = df[cols]
+        return df.head(limit).fillna("").to_dict(orient="records")
+
+    return {
+        "empresa": obter_config("nome_empresa", EMPRESA),
+        "data_hora_brasil": agora_iso_brasil(),
+        "custos_fixos": fixos,
+        "vendas_recentes": records(vendas, ["id", "data", "cliente_nome", "total", "forma_pagamento", "status", "origem"], 30),
+        "financeiro_recente": records(financeiro, ["data", "tipo", "descricao", "categoria", "forma_pagamento", "valor", "origem"], 30),
+        "tarefas": records(tarefas, ["titulo", "tipo", "data", "hora", "prioridade", "status", "descricao"], 40),
+        "clientes_recentes": records(clientes, ["nome", "whatsapp", "cidade", "data_cadastro"], 20),
+        "estoque_recente": records(estoque, ["data", "item", "categoria", "tipo_movimento", "quantidade", "valor_unitario"], 40),
+        "precificacoes_recentes": records(precos, ["data", "nome", "quantidade_lote", "custo_total", "preco_escolhido", "lucro", "margem_real"], 20),
+    }
+
+
+def _chamar_openai_sophi(pergunta, contexto):
+    api_key = ""
+    modelo = "gpt-5-mini"
+    try:
+        api_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        modelo = str(st.secrets.get("OPENAI_MODEL", modelo)).strip() or modelo
+    except Exception:
+        pass
+    if not api_key:
+        raise RuntimeError("A chave OPENAI_API_KEY ainda não foi configurada nos Secrets do Streamlit.")
+
+    sistema = (
+        "Você é a Sophi Gestora IA, assistente interna da Sophi Personalizados Oficial. "
+        "Responda em português brasileiro, com clareza e objetividade. Use SOMENTE os dados do contexto do ERP. "
+        "Nunca invente valores. Quando faltarem dados, diga exatamente o que falta. "
+        "Você pode analisar precificação, vendas, tarefas, financeiro, clientes e estoque, mas não pode alterar dados. "
+        "Ao analisar preço, diferencie custo, lucro em reais, acréscimo sobre custo e margem real sobre o preço de venda."
+    )
+    payload = json.dumps({
+        "model": modelo,
+        "instructions": sistema,
+        "input": f"CONTEXTO DO ERP:\n{json.dumps(contexto, ensure_ascii=False)}\n\nPERGUNTA DA USUÁRIA:\n{pergunta}",
+    }, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detalhe = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Erro da API OpenAI ({exc.code}): {detalhe[:500]}")
+    resposta = str(data.get("output_text", "")).strip()
+    if resposta:
+        return resposta
+    # fallback para variações do formato de resposta
+    partes = []
+    for out in data.get("output", []):
+        for content in out.get("content", []):
+            if content.get("type") in ("output_text", "text"):
+                partes.append(str(content.get("text", "")))
+    return "\n".join(p for p in partes if p).strip() or "A IA não retornou texto nesta solicitação."
+
+
+def tela_sophi_gestora_ia():
+    _garantir_tabelas_gestao_ia()
+    st.title("Sophi Gestora IA")
+    st.write("Assistente interna para analisar a empresa, preços, tarefas, vendas, estoque e financeiro. Ela consulta o ERP, mas não altera dados.")
+
+    contexto = _resumo_erp_para_ia()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Custos fixos/mês", real(contexto["custos_fixos"]["total_mensal_empresa"]))
+    c2.metric("Tarefas carregadas", len(contexto["tarefas"]))
+    c3.metric("Vendas recentes", len(contexto["vendas_recentes"]))
+    c4.metric("Precificações recentes", len(contexto["precificacoes_recentes"]))
+
+    atalhos = [
+        "O que preciso fazer hoje?",
+        "Analise minhas últimas precificações e avise se alguma margem está baixa.",
+        "Quanto preciso vender para cobrir meus custos fixos?",
+        "Resuma as vendas e entradas recentes.",
+        "Quais materiais parecem precisar de atenção?",
+        "Crie uma mensagem profissional para cobrar saldo pendente de um cliente.",
+    ]
+    atalho = st.selectbox("Perguntas rápidas", ["Escolha uma sugestão"] + atalhos)
+    pergunta_padrao = "" if atalho == "Escolha uma sugestão" else atalho
+    pergunta = st.text_area("Pergunte à Sophi Gestora", value=pergunta_padrao, height=120, placeholder="Ex.: Posso vender por R$79,99 sem prejudicar minha margem?")
+
+    if st.button("Analisar com a Sophi Gestora", type="primary"):
+        if not pergunta.strip():
+            st.warning("Digite uma pergunta.")
+        else:
+            with st.spinner("Analisando os dados do ERP..."):
+                try:
+                    resposta = _chamar_openai_sophi(pergunta.strip(), contexto)
+                    executar("INSERT INTO ia_conversas(pergunta, resposta, usuario) VALUES (?, ?, ?)", (pergunta.strip(), resposta, st.session_state.get("usuario_logado", "")))
+                    st.success("Análise concluída.")
+                    st.markdown(resposta)
+                except Exception as exc:
+                    st.error(str(exc))
+                    st.info("Configure OPENAI_API_KEY nos Secrets do Streamlit. A assinatura do ChatGPT Plus não inclui o uso da API.")
+
+    with st.expander("Histórico da Sophi Gestora"):
+        hist = consultar("SELECT data, pergunta, resposta FROM ia_conversas ORDER BY id DESC LIMIT 50")
+        if hist.empty:
+            st.caption("Nenhuma conversa salva.")
+        else:
+            for _, r in hist.iterrows():
+                st.markdown(f"**{data_hora_br_segura(r['data'])} — Pergunta:** {r['pergunta']}")
+                st.write(r["resposta"])
+                st.divider()
+
+
 # =========================
 # APP
 # =========================
@@ -16123,18 +16554,15 @@ menu = st.sidebar.radio(
         "🛒 Vendas / PDV",
         "🏠 Dashboard",
         "✅ Tarefas do Dia",
-        "👥 Clientes / CRM",
-        "💬 Mensagens WhatsApp",
+        "🏷 Precificação",
         "📝 Orçamentos",
         "🏭 Produção / Agenda",
-        "🏷 Precificação",
-        "🏠 Custos Fixos",
-        "🧾 Materiais",
-        "📦 Estoque",
+        "👥 Clientes / CRM",
+        "🧾 Materiais e Estoque",
         "💰 Financeiro",
+        "💬 Mensagens WhatsApp",
         "📊 Relatórios",
-        "⚡ Central de Automação",
-        "🖼 Biblioteca de Artes",
+        "🤖 Sophi Gestora IA",
         "⚙ Configurações",
     ],
 )
@@ -16145,7 +16573,7 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -16162,15 +16590,17 @@ elif menu_limpo == "Orçamentos":
 elif menu_limpo == "Produção / Agenda":
     tela_producao_agenda()
 elif menu_limpo == "Precificação":
-    tela_produtos()
+    tela_precificacao_profissional()
 elif menu_limpo == "Custos Fixos":
     tela_custos_fixos()
-elif menu_limpo == "Materiais":
-    tela_materiais()
+elif menu_limpo == "Materiais e Estoque":
+    _abas_me = st.tabs(["Materiais", "Estoque"])
+    with _abas_me[0]:
+        tela_materiais()
+    with _abas_me[1]:
+        tela_estoque_unificado()
 elif menu_limpo == "Vendas / PDV":
     tela_vendas_pdv()
-elif menu_limpo == "Estoque":
-    tela_estoque_unificado()
 elif menu_limpo == "Financeiro":
     tela_financeiro_unificado()
 elif menu_limpo == "Relatórios":
@@ -16179,6 +16609,8 @@ elif menu_limpo == "Central de Automação":
     tela_central_automacao()
 elif menu_limpo == "Biblioteca de Artes":
     tela_biblioteca_artes()
+elif menu_limpo == "Sophi Gestora IA":
+    tela_sophi_gestora_ia()
 elif menu_limpo == "Configurações":
     tela_configuracoes()
 
