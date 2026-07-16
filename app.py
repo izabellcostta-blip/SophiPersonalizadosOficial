@@ -724,6 +724,29 @@ def criar_banco():
             pass
 
     executar("""
+    CREATE TABLE IF NOT EXISTS custos_fixos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        categoria TEXT DEFAULT 'Outros',
+        valor_mensal REAL DEFAULT 0,
+        percentual_empresa REAL DEFAULT 100,
+        ativo TEXT DEFAULT 'Sim',
+        observacoes TEXT,
+        data_cadastro TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Campos internos de precificação. Migração segura: não apaga dados existentes.
+    for _col, _tipo in {
+        "qtd_por_folha": "REAL DEFAULT 1",
+        "custo_fixos": "REAL DEFAULT 0",
+    }.items():
+        try:
+            executar(f"ALTER TABLE produtos ADD COLUMN {_col} {_tipo}")
+        except Exception:
+            pass
+
+    executar("""
     CREATE TABLE IF NOT EXISTS financeiro (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         data TEXT DEFAULT CURRENT_DATE,
@@ -1220,6 +1243,7 @@ def criar_banco():
         "reserva_erro": "5",
         "custo_kwh": "250",
         "validade_orcamento": "7",
+        "producao_media_mensal": "5000",
         "logo_path": "",
         "catalogo_titulo": "Sophi Personalizados Oficial",
         "catalogo_slogan": "Eternizando momentos com presentes personalizados",
@@ -1345,6 +1369,118 @@ def custo_equipamento(row, quantidade_lote=1, minutos=0, incluir_energia=False, 
         energia_total = (potencia / 1000) * custo_kwh * (minutos / 60)
 
     return desgaste_total + energia_total
+
+
+def resumo_custos_fixos():
+    """Retorna custos fixos mensais ativos, parcela da empresa e custo rateado por unidade."""
+    try:
+        df = consultar("SELECT * FROM custos_fixos WHERE ativo='Sim' ORDER BY categoria, nome")
+    except Exception:
+        df = pd.DataFrame()
+
+    producao_mensal = max(n(obter_config("producao_media_mensal", "5000"), 5000), 1)
+    total_mensal_empresa = 0.0
+    detalhes = []
+
+    if not df.empty:
+        for _, row in df.iterrows():
+            valor = n(row.get("valor_mensal", 0))
+            percentual = min(max(n(row.get("percentual_empresa", 100), 100), 0), 100)
+            parcela = valor * percentual / 100
+            por_unidade = parcela / producao_mensal
+            total_mensal_empresa += parcela
+            detalhes.append({
+                "nome": str(row.get("nome", "")),
+                "categoria": str(row.get("categoria", "Outros")),
+                "valor_mensal": valor,
+                "percentual_empresa": percentual,
+                "parcela_empresa": parcela,
+                "custo_unidade": por_unidade,
+            })
+
+    return {
+        "producao_mensal": producao_mensal,
+        "total_mensal_empresa": total_mensal_empresa,
+        "custo_fixo_unidade": total_mensal_empresa / producao_mensal,
+        "detalhes": detalhes,
+    }
+
+
+def custo_fixo_do_lote(quantidade_lote):
+    resumo = resumo_custos_fixos()
+    return resumo["custo_fixo_unidade"] * max(n(quantidade_lote, 0), 0)
+
+
+def tela_custos_fixos():
+    st.title("Custos Fixos da Empresa")
+    st.write("Cadastre as despesas mensais e informe qual percentual realmente pertence à empresa. O ERP rateia esses valores pela produção média mensal.")
+
+    producao_atual = max(n(obter_config("producao_media_mensal", "5000"), 5000), 1)
+    c1, c2 = st.columns([1, 2])
+    nova_producao = c1.number_input("Produção média mensal (unidades)", min_value=1.0, value=float(producao_atual), step=100.0)
+    c2.info("Exemplo: conta de luz da casa de R$250,00 e uso empresarial de 40% = R$100,00 rateados entre os produtos.")
+    if st.button("Salvar produção média mensal"):
+        salvar_config("producao_media_mensal", nova_producao)
+        st.success("Produção média mensal atualizada.")
+        st.rerun()
+
+    st.subheader("Adicionar custo fixo")
+    with st.form("form_novo_custo_fixo", clear_on_submit=True):
+        a, b, c = st.columns(3)
+        nome = a.text_input("Nome", placeholder="Energia elétrica")
+        categoria = b.selectbox("Categoria", ["Casa / Empresa", "Software", "Administrativo", "Comunicação", "Aluguel", "Outros"])
+        valor = c.number_input("Valor mensal", min_value=0.0, step=0.01, format="%.2f")
+        d, e = st.columns(2)
+        percentual = d.number_input("Percentual usado pela empresa (%)", min_value=0.0, max_value=100.0, value=100.0, step=5.0)
+        observacoes = e.text_input("Observações")
+        salvar = st.form_submit_button("Adicionar custo fixo")
+        if salvar:
+            if not nome.strip():
+                st.error("Informe o nome do custo.")
+            else:
+                executar("""
+                    INSERT INTO custos_fixos(nome, categoria, valor_mensal, percentual_empresa, ativo, observacoes)
+                    VALUES (?, ?, ?, ?, 'Sim', ?)
+                """, (nome.strip(), categoria, valor, percentual, observacoes))
+                st.success("Custo fixo adicionado.")
+                st.rerun()
+
+    resumo = resumo_custos_fixos()
+    r1, r2, r3 = st.columns(3)
+    with r1: card("Custos fixos da empresa / mês", real(resumo["total_mensal_empresa"]))
+    with r2: card("Produção média mensal", f"{resumo['producao_mensal']:.0f} un")
+    with r3: card("Custo fixo por unidade", real4(resumo["custo_fixo_unidade"]))
+
+    df = consultar("SELECT * FROM custos_fixos ORDER BY ativo DESC, categoria, nome")
+    if df.empty:
+        st.info("Nenhum custo fixo cadastrado.")
+        return
+
+    exib = df.copy()
+    exib["Parcela da empresa"] = exib["valor_mensal"] * exib["percentual_empresa"] / 100
+    exib["Custo por unidade"] = exib["Parcela da empresa"] / resumo["producao_mensal"]
+    st.dataframe(formatar_valores_tabela(exib[["id", "nome", "categoria", "valor_mensal", "percentual_empresa", "Parcela da empresa", "Custo por unidade", "ativo"]]), use_container_width=True, hide_index=True)
+
+    st.subheader("Editar ou excluir")
+    mapa = {f"{int(r['id'])} - {r['nome']}": int(r['id']) for _, r in df.iterrows()}
+    escolhido = st.selectbox("Selecione", list(mapa.keys()))
+    rid = mapa[escolhido]
+    row = df[df["id"] == rid].iloc[0]
+    with st.form(f"editar_custo_{rid}"):
+        x1, x2, x3 = st.columns(3)
+        nome_e = x1.text_input("Nome", value=str(row["nome"]))
+        valor_e = x2.number_input("Valor mensal", min_value=0.0, value=float(n(row["valor_mensal"])), step=0.01, format="%.2f")
+        perc_e = x3.number_input("Percentual empresa (%)", min_value=0.0, max_value=100.0, value=float(n(row["percentual_empresa"],100)), step=5.0)
+        ativo_e = st.selectbox("Ativo?", ["Sim", "Não"], index=0 if str(row["ativo"]) == "Sim" else 1)
+        salvar_e = st.form_submit_button("Salvar alterações")
+        if salvar_e:
+            executar("UPDATE custos_fixos SET nome=?, valor_mensal=?, percentual_empresa=?, ativo=? WHERE id=?", (nome_e, valor_e, perc_e, ativo_e, rid))
+            st.success("Custo atualizado.")
+            st.rerun()
+    if st.button("Excluir custo selecionado", type="secondary"):
+        executar("DELETE FROM custos_fixos WHERE id=?", (rid,))
+        st.success("Custo excluído.")
+        st.rerun()
 
 
 def categorias_ativas():
@@ -3466,8 +3602,8 @@ def seletor_embalagem_precificacao(linha):
 
 
 def tela_produtos():
-    st.title("Produtos / Precificação")
-    st.write("Cadastre, edite, duplique e gerencie seus produtos sem precisar apagar e refazer.")
+    st.title("Precificação e Produtos Internos")
+    st.write("Calcule preços, salve históricos internos e reutilize produtos em orçamentos. O catálogo público fica no Offstore.")
 
     # Garante campos novos em bancos antigos.
     for coluna, tipo_coluna in {
@@ -3489,11 +3625,11 @@ def tela_produtos():
         nome = c1.text_input("Nome do produto")
         categoria_produto = c2.text_input("Categoria do produto")
         ativo = c3.selectbox("Ativo?", ["Sim", "Não"])
-        favorito = st.checkbox("⭐ Marcar como favorito", value=False)
-        status_catalogo = st.selectbox("Status no catálogo", ["Disponível", "Esgotado", "Sob encomenda"], key="status_catalogo_novo")
-
-        foto_upload = st.file_uploader("Foto do produto", type=["png", "jpg", "jpeg", "webp"])
-        descricao_catalogo = st.text_area("Descrição para catálogo público", placeholder="Texto curto que o cliente verá no catálogo.")
+        favorito = False
+        status_catalogo = "Uso interno"
+        foto_upload = None
+        descricao_catalogo = ""
+        st.caption("Cadastro interno para precificação e orçamento. Fotos e descrições públicas ficam no Offstore.")
 
         c_qtd1, c_qtd2 = st.columns(2)
         qtd_total_lote = c_qtd1.number_input("Quantidade total do lote", min_value=1.0, value=1000.0, step=1.0)
@@ -3570,7 +3706,10 @@ def tela_produtos():
         margem = c3.number_input("Margem desejada (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f")
 
         custo_mao_obra = tempo_min / 60 * valor_hora
-        custo_lote_sem_reserva = custo_insumos_total + custo_embalagens_total + custo_tintas_total + custo_equip_total + custo_mao_obra
+        custo_fixos_total = custo_fixo_do_lote(qtd_total_lote)
+        resumo_fixos = resumo_custos_fixos()
+        st.caption(f"Custos fixos rateados: {real(custo_fixos_total)} no lote ({real4(resumo_fixos['custo_fixo_unidade'])} por unidade).")
+        custo_lote_sem_reserva = custo_insumos_total + custo_embalagens_total + custo_tintas_total + custo_equip_total + custo_fixos_total + custo_mao_obra
         reserva_valor_lote = custo_lote_sem_reserva * (reserva / 100)
         custo_total_lote = custo_lote_sem_reserva + reserva_valor_lote
         custo_unitario = custo_total_lote / qtd_total_lote if qtd_total_lote else 0
@@ -3586,7 +3725,7 @@ def tela_produtos():
         margem_real = lucro_lote / preco_final_lote * 100 if preco_final_lote else 0
 
         st.subheader("Resumo automático")
-        r1, r2, r3, r4 = st.columns(4)
+        r1, r2, r3, r4, rfix = st.columns(5)
         with r1:
             card("Insumos", real(custo_insumos_total))
         with r2:
@@ -3594,6 +3733,8 @@ def tela_produtos():
         with r3:
             card("Equipamentos", real(custo_equip_total))
         with r4:
+            card("Custos fixos", real(custo_fixos_total))
+        with rfix:
             card("Mão de obra", real(custo_mao_obra))
 
         r5, r6, r7, r8 = st.columns(4)
@@ -3643,6 +3784,7 @@ def tela_produtos():
                     "nome": nome,
                     "categoria": categoria_produto,
                     "qtd_por_lote": qtd_por_lote,
+                    "qtd_por_folha": qtd_por_folha,
                     "receita_json": json.dumps(receita_para_salvar, ensure_ascii=False),
                     "tintas_json": json.dumps(tintas, ensure_ascii=False),
                     "equipamentos_json": json.dumps(equipamentos, ensure_ascii=False),
@@ -3653,6 +3795,7 @@ def tela_produtos():
                     "custo_insumos": custo_insumos_total,
                     "custo_tintas": custo_tintas_total,
                     "custo_equipamentos": custo_equip_total,
+                    "custo_fixos": custo_fixos_total,
                     "custo_mao_obra": custo_mao_obra,
                     "custo_total_lote": custo_total_lote,
                     "custo_unitario": custo_unitario,
@@ -15452,7 +15595,7 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 botao_sair()
-notificar_pedidos_catalogo_novos()
+# Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
     "Menu",
@@ -15463,15 +15606,14 @@ menu = st.sidebar.radio(
         "💬 Mensagens WhatsApp",
         "📝 Orçamentos",
         "🏭 Produção / Agenda",
-        "🏷 Produtos / Precificação",
+        "🏷 Precificação",
+        "🏠 Custos Fixos",
         "🧾 Materiais",
         "🎁 Kits",
         "📦 Estoque",
         "💰 Financeiro",
         "📊 Relatórios",
         "⚡ Central de Automação",
-        "🛒 Catálogo / Portal",
-        "🧾 Pedidos do Catálogo",
         "🖼 Biblioteca de Artes",
         "⚙ Configurações",
     ],
@@ -15499,8 +15641,10 @@ elif menu_limpo == "Orçamentos":
     tela_orcamentos()
 elif menu_limpo == "Produção / Agenda":
     tela_producao_agenda()
-elif menu_limpo == "Produtos / Precificação":
+elif menu_limpo == "Precificação":
     tela_produtos()
+elif menu_limpo == "Custos Fixos":
+    tela_custos_fixos()
 elif menu_limpo == "Materiais":
     tela_materiais()
 elif menu_limpo == "Kits":
@@ -15513,10 +15657,6 @@ elif menu_limpo == "Relatórios":
     tela_relatorios_inteligentes()
 elif menu_limpo == "Central de Automação":
     tela_central_automacao()
-elif menu_limpo == "Catálogo / Portal":
-    tela_catalogo_portal()
-elif menu_limpo == "Pedidos do Catálogo":
-    tela_pedidos_catalogo()
 elif menu_limpo == "Biblioteca de Artes":
     tela_biblioteca_artes()
 elif menu_limpo == "Configurações":
