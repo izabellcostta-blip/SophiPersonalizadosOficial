@@ -16216,6 +16216,17 @@ if detectar_pagina_publica() == "catalogo":
     st.stop()
 
 criar_banco()
+
+# Limpeza única solicitada: remove os produtos antigos do cadastro interno.
+# A precificação continua funcionando somente como simulador e não salva novos produtos.
+try:
+    _limpeza_produtos = consultar("SELECT valor FROM configuracoes WHERE chave='limpeza_produtos_internos_2026'")
+    if _limpeza_produtos.empty or str(_limpeza_produtos.iloc[0]["valor"]).strip() != "Sim":
+        executar("DELETE FROM produtos")
+        salvar_config("limpeza_produtos_internos_2026", "Sim")
+except Exception:
+    pass
+
 enviar_banco_para_nuvem(force=True)
 
 # Se você já tem categorias no banco, marca como inicializadas para não recriar depois que excluir.
@@ -16625,6 +16636,7 @@ menu = st.sidebar.radio(
         "🏠 Dashboard",
         "✅ Tarefas do Dia",
         "🏷 Precificação",
+        "💡 Custos Fixos",
         "📝 Orçamentos",
         "🏭 Produção / Agenda",
         "👥 Clientes / CRM",
@@ -16643,7 +16655,7 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -16653,7 +16665,7 @@ try:
     _operador_ui = st.session_state.get("usuario_logado", "Operador") or "Operador"
     _icone_tela = {
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
-        "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
+        "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
