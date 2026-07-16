@@ -228,11 +228,11 @@ def real(valor):
 
 
 def real4(valor):
-    """Formata custos unitários com 4 casas decimais para não esconder centavos fracionados."""
+    # Mantido para compatibilidade, mas agora também mostra só 2 casas.
     try:
-        return f"R$ {float(valor):,.4f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return "R$ 0,0000"
+        return "R$ 0,00"
 
 
 def hoje_iso():
@@ -3706,9 +3706,55 @@ def tela_produtos():
         margem = c3.number_input("Margem desejada (%)", min_value=0.0, value=n(obter_config("margem_padrao", "50"), 50), step=0.1, format="%.2f")
 
         custo_mao_obra = tempo_min / 60 * valor_hora
-        custo_fixos_total = custo_fixo_do_lote(qtd_total_lote)
+
+        # Custos fixos são rateados por UNIDADE DE PRODUÇÃO, e não necessariamente
+        # por cada peça final. Para produtos que rendem várias peças por folha A4
+        # (cartões, tags, adesivos etc.), a base padrão é a quantidade de folhas.
         resumo_fixos = resumo_custos_fixos()
-        st.caption(f"Custos fixos rateados: {real(custo_fixos_total)} no lote ({real4(resumo_fixos['custo_fixo_unidade'])} por unidade).")
+        incluir_custos_fixos = st.checkbox(
+            "Incluir custos fixos nesta precificação?",
+            value=True,
+            help="Desmarque apenas para simulações sem despesas mensais da empresa.",
+        )
+
+        base_rateio_fixos = st.selectbox(
+            "Como ratear os custos fixos neste produto?",
+            ["Por folhas A4 utilizadas", "Por unidades finais do lote", "Quantidade manual de unidades de produção"],
+            index=0,
+            help=(
+                "Para cartões, tags e adesivos, normalmente use folhas A4. "
+                "Exemplo: 1.000 cartões, 10 por folha = 100 unidades de produção."
+            ),
+        )
+
+        if base_rateio_fixos == "Por folhas A4 utilizadas":
+            unidades_rateio_fixos = float(folhas_estimadas)
+            descricao_rateio_fixos = f"{folhas_estimadas} folhas A4"
+        elif base_rateio_fixos == "Por unidades finais do lote":
+            unidades_rateio_fixos = float(qtd_total_lote)
+            descricao_rateio_fixos = f"{qtd_total_lote:.0f} unidades finais"
+        else:
+            unidades_rateio_fixos = st.number_input(
+                "Quantidade de unidades de produção para o rateio",
+                min_value=0.0,
+                value=float(folhas_estimadas),
+                step=1.0,
+                help="Informe quantas folhas, ciclos, peças-base ou lotes internos foram realmente produzidos.",
+            )
+            descricao_rateio_fixos = f"{unidades_rateio_fixos:.0f} unidades de produção"
+
+        custo_fixos_total = (
+            resumo_fixos["custo_fixo_unidade"] * unidades_rateio_fixos
+            if incluir_custos_fixos
+            else 0.0
+        )
+
+        st.caption(
+            f"Custos fixos rateados: {real(custo_fixos_total)} no lote — "
+            f"{real4(resumo_fixos['custo_fixo_unidade'])} por unidade de produção × "
+            f"{descricao_rateio_fixos}."
+        )
+
         custo_lote_sem_reserva = custo_insumos_total + custo_embalagens_total + custo_tintas_total + custo_equip_total + custo_fixos_total + custo_mao_obra
         reserva_valor_lote = custo_lote_sem_reserva * (reserva / 100)
         custo_total_lote = custo_lote_sem_reserva + reserva_valor_lote
@@ -3733,26 +3779,19 @@ def tela_produtos():
         with r3:
             card("Equipamentos", real(custo_equip_total))
         with r4:
-            card("Custos fixos", real(custo_fixos_total))
+            card("Custos fixos", real(custo_fixos_total), descricao_rateio_fixos if incluir_custos_fixos else "Não incluídos")
         with rfix:
             card("Mão de obra", real(custo_mao_obra))
 
         r5, r6, r7, r8 = st.columns(4)
         with r5:
-            card("Custo por unidade", real4(custo_unitario), f"Lote: {qtd_total_lote:.0f} unidades")
+            card("Custo por unidade", real(custo_unitario))
         with r6:
-            card("Preço sugerido unidade", real4(preco_sugerido), f"Margem aplicada: {margem:.2f}%")
+            card("Preço sugerido unidade", real(preco_sugerido))
         with r7:
-            card("Preço escolhido unidade", real4(preco_final), "Calculado pelo preço do lote")
+            card("Preço escolhido unidade", real(preco_final))
         with r8:
-            card("Lucro unidade / Margem", real4(lucro), f"Margem real: {margem_real:.2f}%")
-
-        st.caption(
-            f"Conferência: custos antes da reserva {real(custo_lote_sem_reserva)} + "
-            f"reserva de erro {real(reserva_valor_lote)} = custo final {real(custo_total_lote)}. "
-            f"Custos fixos: {real4(resumo_fixos['custo_fixo_unidade'])} por unidade × "
-            f"{qtd_total_lote:.0f} unidades = {real(custo_fixos_total)}."
-        )
+            card("Lucro unidade / Margem", real(lucro), f"{margem_real:.2f}%")
 
         r9, r10, r11, r12 = st.columns(4)
         with r9:
