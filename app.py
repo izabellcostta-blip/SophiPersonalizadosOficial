@@ -747,6 +747,65 @@ def criar_banco():
             pass
 
     executar("""
+    CREATE TABLE IF NOT EXISTS vendas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero TEXT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        cliente_id INTEGER,
+        cliente_nome TEXT,
+        cliente_whatsapp TEXT,
+        origem TEXT DEFAULT 'Venda direta',
+        status TEXT DEFAULT 'Pago',
+        status_producao TEXT DEFAULT 'Aguardando',
+        forma_pagamento TEXT,
+        subtotal REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        acrescimo REAL DEFAULT 0,
+        frete REAL DEFAULT 0,
+        taxa_cartao REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        valor_recebido REAL DEFAULT 0,
+        troco REAL DEFAULT 0,
+        saldo_pendente REAL DEFAULT 0,
+        data_entrega TEXT,
+        observacoes TEXT,
+        cancelada TEXT DEFAULT 'Não',
+        motivo_cancelamento TEXT,
+        operador TEXT,
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS venda_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        venda_id INTEGER,
+        produto_id INTEGER,
+        produto TEXT NOT NULL,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        custo_unitario REAL DEFAULT 0,
+        desconto REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
+    CREATE TABLE IF NOT EXISTS caixa_movimentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        tipo TEXT,
+        descricao TEXT,
+        forma_pagamento TEXT,
+        valor REAL DEFAULT 0,
+        venda_id INTEGER,
+        operador TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    executar("""
     CREATE TABLE IF NOT EXISTS financeiro (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         data TEXT DEFAULT CURRENT_DATE,
@@ -5638,6 +5697,199 @@ def tela_producao():
                 cols = ["data", "codigo", "cliente_nome", "acao", "observacoes"]
                 hist = hist[[c for c in cols if c in hist.columns]]
             st.dataframe(hist, use_container_width=True, hide_index=True)
+
+
+
+def _numero_venda(nid):
+    return f"VD-{datetime.now().year}-{int(nid):05d}"
+
+
+def _html_comprovante_termico(venda_id, largura_mm=80):
+    venda = consultar("SELECT * FROM vendas WHERE id=?", (int(venda_id),))
+    itens = consultar("SELECT * FROM venda_itens WHERE venda_id=? ORDER BY id", (int(venda_id),))
+    if venda.empty:
+        return ""
+    v = venda.iloc[0]
+    empresa = obter_config("nome_empresa", EMPRESA)
+    whatsapp = obter_config("whatsapp", "")
+    instagram = obter_config("instagram", "")
+    endereco = obter_config("catalogo_endereco", "")
+    pix = obter_config("pix", "")
+    logo = obter_config("logo_path", "")
+    logo_html = ""
+    if logo and Path(logo).exists():
+        b64 = imagem_base64(logo)
+        ext = Path(logo).suffix.replace('.', '').lower() or 'png'
+        logo_html = f'<img src="data:image/{ext};base64,{b64}" style="max-width:90px;max-height:60px;filter:grayscale(1);">'
+    linhas = ""
+    for _, r in itens.iterrows():
+        linhas += f"""
+        <tr><td colspan="3"><b>{html.escape(str(r['produto']))}</b></td></tr>
+        <tr><td>{n(r['quantidade']):.0f} x {real(r['valor_unitario'])}</td><td></td><td class="right">{real(r['total'])}</td></tr>
+        """
+    saldo = n(v.get('saldo_pendente', 0))
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+    @page{{size:{largura_mm}mm auto;margin:2mm}} body{{font-family:Arial,sans-serif;width:{largura_mm-6}mm;margin:0 auto;font-size:11px;color:#000}}
+    .center{{text-align:center}} .right{{text-align:right}} .sep{{border-top:1px dashed #000;margin:7px 0}} table{{width:100%;border-collapse:collapse}} td{{padding:2px 0;vertical-align:top}}
+    .total{{font-size:16px;font-weight:800}} .small{{font-size:9px}} button{{margin:10px 0;padding:8px;width:100%}} @media print{{button{{display:none}}}}
+    </style></head><body><button onclick="window.print()">Imprimir</button><div class="center">{logo_html}<br><b>{html.escape(empresa)}</b><br><span class="small">Desde 2018</span><br>{html.escape(whatsapp)}<br>{html.escape(instagram)}<br>{html.escape(endereco)}</div>
+    <div class="sep"></div><b>VENDA:</b> {html.escape(str(v.get('numero','')))}<br><b>DATA:</b> {data_hora_br_segura(v.get('data_criacao',''))}<br><b>CLIENTE:</b> {html.escape(str(v.get('cliente_nome','Consumidor')))}<br><b>ORIGEM:</b> {html.escape(str(v.get('origem','')))}
+    <div class="sep"></div><table>{linhas}</table><div class="sep"></div>
+    <table><tr><td>Subtotal</td><td class="right">{real(v.get('subtotal',0))}</td></tr><tr><td>Desconto</td><td class="right">-{real(v.get('desconto',0))}</td></tr><tr><td>Acréscimo/Frete</td><td class="right">{real(n(v.get('acrescimo',0))+n(v.get('frete',0)))}</td></tr><tr><td class="total">TOTAL</td><td class="right total">{real(v.get('total',0))}</td></tr><tr><td>Recebido</td><td class="right">{real(v.get('valor_recebido',0))}</td></tr><tr><td>Troco</td><td class="right">{real(v.get('troco',0))}</td></tr>{f'<tr><td><b>Saldo pendente</b></td><td class="right"><b>{real(saldo)}</b></td></tr>' if saldo>0 else ''}</table>
+    <div class="sep"></div><b>Pagamento:</b> {html.escape(str(v.get('forma_pagamento','')))}<br><b>Produção:</b> {html.escape(str(v.get('status_producao','')))}<br><b>Entrega:</b> {data_br_segura(v.get('data_entrega','')) or '-'}<br><br><div class="center">Obrigada pela preferência! 🖤<br>{('PIX: '+html.escape(pix)) if pix else ''}</div></body></html>"""
+
+
+def _html_etiqueta_pedido(venda_id, largura_mm=50, altura_mm=30):
+    venda = consultar("SELECT * FROM vendas WHERE id=?", (int(venda_id),))
+    itens = consultar("SELECT * FROM venda_itens WHERE venda_id=? ORDER BY id", (int(venda_id),))
+    if venda.empty:
+        return ""
+    v=venda.iloc[0]
+    resumo=', '.join([f"{n(r['quantidade']):.0f}x {r['produto']}" for _,r in itens.iterrows()])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>@page{{size:{largura_mm}mm {altura_mm}mm;margin:1.5mm}}body{{font-family:Arial;width:{largura_mm-4}mm;height:{altura_mm-4}mm;margin:0;font-size:9px;overflow:hidden}}.big{{font-size:13px;font-weight:800}}.sep{{border-top:1px solid #000;margin:3px 0}}button{{font-size:10px}}@media print{{button{{display:none}}}}</style></head><body><button onclick="window.print()">Imprimir</button><div class="big">{html.escape(str(v.get('numero','')))}</div><b>{html.escape(str(v.get('cliente_nome','Consumidor')))}</b><br>{html.escape(str(v.get('cliente_whatsapp','')))}<div class="sep"></div>{html.escape(resumo[:180])}<div class="sep"></div><b>Entrega:</b> {data_br_segura(v.get('data_entrega','')) or '-'} | <b>{html.escape(str(v.get('status_producao','')))}</b><br>{html.escape(str(v.get('observacoes',''))[:100])}</body></html>"""
+
+
+def tela_vendas_pdv():
+    st.title("PDV • Vendas")
+    st.caption("Frente de caixa da Sophi Personalizados: venda, pagamento, produção, comprovante térmico e etiqueta.")
+    abas = st.tabs(["🛒 Nova venda", "📋 Histórico de vendas", "💵 Caixa", "🖨 Impressões"])
+
+    with abas[0]:
+        if 'pdv_itens' not in st.session_state:
+            st.session_state.pdv_itens=[]
+        topo1, topo2, topo3 = st.columns([2,1,1])
+        cliente_nome = topo1.text_input("Cliente", placeholder="Consumidor ou nome do cliente", key="pdv_cliente")
+        cliente_whatsapp = topo2.text_input("WhatsApp", key="pdv_whatsapp")
+        origem = topo3.selectbox("Origem", ["Offstore","WhatsApp","Instagram","Shopee","iFood","Venda direta"], key="pdv_origem")
+
+        esquerda, direita = st.columns([1.55, 1], gap="large")
+        with esquerda:
+            st.subheader("Adicionar produto")
+            produtos = consultar("SELECT id,nome,preco_escolhido,preco_sugerido,custo_unitario,ativo FROM produtos WHERE ativo='Sim' ORDER BY nome")
+            opcoes=["Produto manual"]
+            mapa={}
+            if not produtos.empty:
+                for _,r in produtos.iterrows():
+                    label=f"{r['nome']} • {real(n(r['preco_escolhido']) or n(r['preco_sugerido']))}"
+                    opcoes.append(label); mapa[label]=r
+            escolha=st.selectbox("Produto",opcoes,key="pdv_produto")
+            a,b,c=st.columns([2,1,1])
+            if escolha=="Produto manual":
+                nome_prod=a.text_input("Descrição",key="pdv_nome_manual")
+                preco_padrao=0.0; custo_padrao=0.0; pid=None
+            else:
+                r=mapa[escolha]; nome_prod=str(r['nome']); pid=int(r['id'])
+                preco_padrao=n(r['preco_escolhido']) or n(r['preco_sugerido']); custo_padrao=n(r['custo_unitario'])
+                a.text_input("Descrição",value=nome_prod,disabled=True,key="pdv_nome_cad")
+            qtd=b.number_input("Qtd",min_value=0.01,value=1.0,step=1.0,key="pdv_qtd")
+            preco=c.number_input("Valor unitário",min_value=0.0,value=float(preco_padrao),step=0.01,format="%.2f",key=f"pdv_preco_{escolha}")
+            obs_item=st.text_input("Personalização / observação do item",key="pdv_obs_item")
+            if st.button("➕ Adicionar ao carrinho",use_container_width=True,type="primary"):
+                if not str(nome_prod).strip(): st.error("Informe o produto.")
+                elif preco<=0: st.error("Informe o valor unitário.")
+                else:
+                    st.session_state.pdv_itens.append({"produto_id":pid,"produto":str(nome_prod).strip(),"quantidade":qtd,"valor_unitario":preco,"custo_unitario":custo_padrao,"desconto":0.0,"total":qtd*preco,"observacoes":obs_item})
+                    st.rerun()
+            if st.session_state.pdv_itens:
+                dfc=pd.DataFrame(st.session_state.pdv_itens)
+                st.dataframe(formatar_valores_tabela(dfc[["produto","quantidade","valor_unitario","total","observacoes"]]),use_container_width=True,hide_index=True)
+                remover=st.selectbox("Remover item",["Nenhum"]+[f"{i+1} - {x['produto']}" for i,x in enumerate(st.session_state.pdv_itens)])
+                if st.button("Remover selecionado") and remover!="Nenhum":
+                    st.session_state.pdv_itens.pop(int(remover.split(' - ')[0])-1); st.rerun()
+                if st.button("Limpar carrinho"):
+                    st.session_state.pdv_itens=[]; st.rerun()
+            else: st.info("Carrinho vazio.")
+
+        with direita:
+            st.subheader("Fechamento")
+            subtotal=sum(n(x['total']) for x in st.session_state.pdv_itens)
+            desconto=st.number_input("Desconto (R$)",min_value=0.0,value=0.0,step=0.01,format="%.2f")
+            acrescimo=st.number_input("Acréscimo / urgência (R$)",min_value=0.0,value=0.0,step=0.01,format="%.2f")
+            frete=st.number_input("Frete / entrega (R$)",min_value=0.0,value=0.0,step=0.01,format="%.2f")
+            forma=st.selectbox("Forma de pagamento",["Pix","Dinheiro","Débito","Crédito 1x","Crédito parcelado","Offstore","Pagamento misto","Pendente"])
+            taxa_pct=st.number_input("Taxa do cartão/plataforma (%)",min_value=0.0,value=0.0,step=0.1,format="%.2f")
+            total=max(subtotal-desconto+acrescimo+frete,0)
+            taxa_cartao=total*taxa_pct/100
+            recebido=st.number_input("Valor recebido agora",min_value=0.0,value=float(total),step=0.01,format="%.2f")
+            troco=max(recebido-total,0) if forma=="Dinheiro" else 0
+            saldo=max(total-recebido,0)
+            status="Pago" if saldo<=0.009 else ("Parcial" if recebido>0 else "Pendente")
+            status_prod=st.selectbox("Status da produção",["Aguardando","Em produção","Pronto","Entregue","Não se aplica"])
+            data_entrega=st.date_input("Data prevista de entrega",value=date.today())
+            observacoes=st.text_area("Observações da venda")
+            card("TOTAL",real(total),f"Líquido após taxa: {real(total-taxa_cartao)}")
+            st.caption(f"Recebido: {real(recebido)} • Saldo: {real(saldo)} • Troco: {real(troco)}")
+            if st.button("✅ Finalizar venda",use_container_width=True,type="primary"):
+                if not st.session_state.pdv_itens: st.error("Adicione pelo menos um item.")
+                else:
+                    operador=st.session_state.get('usuario_logado','')
+                    venda_id=executar("""INSERT INTO vendas(cliente_nome,cliente_whatsapp,origem,status,status_producao,forma_pagamento,subtotal,desconto,acrescimo,frete,taxa_cartao,total,valor_recebido,troco,saldo_pendente,data_entrega,observacoes,operador) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(cliente_nome or 'Consumidor',cliente_whatsapp,origem,status,status_prod,forma,subtotal,desconto,acrescimo,frete,taxa_cartao,total,recebido,troco,saldo,data_entrega.isoformat(),observacoes,operador))
+                    numero=_numero_venda(venda_id); executar("UPDATE vendas SET numero=? WHERE id=?",(numero,venda_id))
+                    for x in st.session_state.pdv_itens:
+                        executar("INSERT INTO venda_itens(venda_id,produto_id,produto,quantidade,valor_unitario,custo_unitario,desconto,total,observacoes) VALUES (?,?,?,?,?,?,?,?,?)",(venda_id,x['produto_id'],x['produto'],x['quantidade'],x['valor_unitario'],x['custo_unitario'],x['desconto'],x['total'],x['observacoes']))
+                    if recebido>0:
+                        executar("INSERT INTO financeiro(data,tipo,descricao,categoria,forma_pagamento,valor,origem,referencia_id,observacoes) VALUES (?,?,?,?,?,?,?,?,?)",(hoje_iso(),'Entrada',f'Venda {numero}','Venda',forma,recebido,'PDV',venda_id,observacoes))
+                        executar("INSERT INTO caixa_movimentos(tipo,descricao,forma_pagamento,valor,venda_id,operador,observacoes) VALUES ('Entrada',?,?,?,?,?,?)",(f'Venda {numero}',forma,recebido,venda_id,operador,observacoes))
+                    if saldo>0:
+                        executar("INSERT INTO contas_receber(descricao,cliente_nome,categoria,forma_pagamento,valor,valor_recebido,data_emissao,data_vencimento,status,origem,referencia_id,observacoes,ativo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Sim')",(f'Saldo venda {numero}',cliente_nome or 'Consumidor','Venda',forma,total,recebido,hoje_iso(),data_entrega.isoformat(),'Pendente','PDV',venda_id,observacoes))
+                    executar("INSERT INTO ordens_producao(codigo,cliente_nome,whatsapp,data_entrega,status,itens_json,observacoes,ativo) VALUES (?,?,?,?,?,?,?,'Sim')",(f'OP-{datetime.now().year}-{venda_id:04d}',cliente_nome or 'Consumidor',cliente_whatsapp,data_entrega.isoformat(),status_prod,json.dumps(st.session_state.pdv_itens,ensure_ascii=False),observacoes))
+                    st.session_state.pdv_itens=[]; st.session_state['ultima_venda_id']=venda_id
+                    st.success(f"Venda {numero} finalizada."); st.rerun()
+
+    with abas[1]:
+        st.subheader("Histórico")
+        vendas=consultar("SELECT * FROM vendas ORDER BY id DESC")
+        if vendas.empty: st.info("Nenhuma venda registrada.")
+        else:
+            f1,f2,f3=st.columns(3)
+            status_f=f1.selectbox("Status",["Todos","Pago","Parcial","Pendente","Cancelado"])
+            origem_f=f2.selectbox("Origem",["Todas"]+sorted(vendas['origem'].dropna().unique().tolist()))
+            busca=f3.text_input("Buscar cliente ou venda")
+            vf=vendas.copy()
+            if status_f!="Todos": vf=vf[vf['status']==status_f]
+            if origem_f!="Todas": vf=vf[vf['origem']==origem_f]
+            if busca: vf=vf[vf.astype(str).apply(lambda r:r.str.contains(busca,case=False,na=False).any(),axis=1)]
+            st.dataframe(formatar_valores_tabela(vf[["id","numero","data_criacao","cliente_nome","origem","status","status_producao","forma_pagamento","total","valor_recebido","saldo_pendente"]]),use_container_width=True,hide_index=True)
+            if not vf.empty:
+                mapa={f"{r['numero']} - {r['cliente_nome']} - {real(r['total'])}":int(r['id']) for _,r in vf.iterrows()}
+                esc=st.selectbox("Abrir venda",list(mapa.keys())); vid=mapa[esc]
+                vv=consultar("SELECT * FROM vendas WHERE id=?",(vid,)).iloc[0]; its=consultar("SELECT * FROM venda_itens WHERE venda_id=?",(vid,))
+                st.write(f"**Cliente:** {vv['cliente_nome']} | **Status:** {vv['status']} | **Produção:** {vv['status_producao']}")
+                st.dataframe(formatar_valores_tabela(its[["produto","quantidade","valor_unitario","total","observacoes"]]),use_container_width=True,hide_index=True)
+                u1,u2=st.columns(2)
+                novo_status=u1.selectbox("Atualizar pagamento",["Pago","Parcial","Pendente","Cancelado"],index=["Pago","Parcial","Pendente","Cancelado"].index(str(vv['status'])) if str(vv['status']) in ["Pago","Parcial","Pendente","Cancelado"] else 0,key=f"vs_{vid}")
+                novo_prod=u2.selectbox("Atualizar produção",["Aguardando","Em produção","Pronto","Entregue","Não se aplica"],index=["Aguardando","Em produção","Pronto","Entregue","Não se aplica"].index(str(vv['status_producao'])) if str(vv['status_producao']) in ["Aguardando","Em produção","Pronto","Entregue","Não se aplica"] else 0,key=f"vp_{vid}")
+                if st.button("Salvar status",key=f"salvar_v_{vid}"):
+                    executar("UPDATE vendas SET status=?,status_producao=? WHERE id=?",(novo_status,novo_prod,vid)); st.success("Atualizado."); st.rerun()
+
+    with abas[2]:
+        st.subheader("Caixa")
+        mov=consultar("SELECT * FROM caixa_movimentos ORDER BY id DESC")
+        entradas=n(mov[mov['tipo']=='Entrada']['valor'].sum()) if not mov.empty else 0
+        saidas=n(mov[mov['tipo']=='Saída']['valor'].sum()) if not mov.empty else 0
+        c1,c2,c3=st.columns(3); c1.metric("Entradas",real(entradas)); c2.metric("Saídas",real(saidas)); c3.metric("Saldo",real(entradas-saidas))
+        with st.form("mov_caixa"):
+            m1,m2,m3=st.columns(3); tipo=m1.selectbox("Tipo",["Entrada","Saída","Sangria","Suprimento"]); desc=m2.text_input("Descrição"); val=m3.number_input("Valor",min_value=0.0,step=0.01,format="%.2f")
+            forma_m=st.selectbox("Forma",["Pix","Dinheiro","Débito","Crédito","Transferência","Outro"])
+            if st.form_submit_button("Registrar movimento"):
+                executar("INSERT INTO caixa_movimentos(tipo,descricao,forma_pagamento,valor,operador) VALUES (?,?,?,?,?)",(tipo,desc,forma_m,val,st.session_state.get('usuario_logado',''))); st.success("Movimento registrado."); st.rerun()
+        if not mov.empty: st.dataframe(formatar_valores_tabela(mov),use_container_width=True,hide_index=True)
+
+    with abas[3]:
+        st.subheader("Comprovante térmico e etiqueta")
+        vendas=consultar("SELECT id,numero,cliente_nome,total FROM vendas ORDER BY id DESC LIMIT 200")
+        if vendas.empty: st.info("Finalize uma venda para imprimir.")
+        else:
+            mapa={f"{r['numero']} - {r['cliente_nome']} - {real(r['total'])}":int(r['id']) for _,r in vendas.iterrows()}
+            escolha=st.selectbox("Venda",list(mapa.keys()),key="imp_venda"); vid=mapa[escolha]
+            largura=st.selectbox("Bobina do comprovante",[80,58],format_func=lambda x:f"{x} mm")
+            html_rec=_html_comprovante_termico(vid,largura)
+            st.download_button("Baixar comprovante HTML",html_rec,file_name=f"comprovante_{vid}.html",mime="text/html",use_container_width=True)
+            st.components.v1.html(html_rec,height=520,scrolling=True)
+            st.divider(); t1,t2=st.columns(2); lw=t1.selectbox("Largura etiqueta",[50,40,100]); ah=t2.selectbox("Altura etiqueta",[30,50,150])
+            html_etq=_html_etiqueta_pedido(vid,lw,ah)
+            st.download_button("Baixar etiqueta HTML",html_etq,file_name=f"etiqueta_{vid}.html",mime="text/html",use_container_width=True)
+            st.components.v1.html(html_etq,height=240,scrolling=True)
 
 
 def tela_kits():
@@ -15655,7 +15907,7 @@ menu = st.sidebar.radio(
         "🏷 Precificação",
         "🏠 Custos Fixos",
         "🧾 Materiais",
-        "🎁 Kits",
+        "🛒 Vendas / PDV",
         "📦 Estoque",
         "💰 Financeiro",
         "📊 Relatórios",
@@ -15693,8 +15945,8 @@ elif menu_limpo == "Custos Fixos":
     tela_custos_fixos()
 elif menu_limpo == "Materiais":
     tela_materiais()
-elif menu_limpo == "Kits":
-    tela_kits()
+elif menu_limpo == "Vendas / PDV":
+    tela_vendas_pdv()
 elif menu_limpo == "Estoque":
     tela_estoque_unificado()
 elif menu_limpo == "Financeiro":
