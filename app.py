@@ -5,6 +5,7 @@ import json
 import sqlite3
 import shutil
 import html
+import os
 import urllib.request
 import urllib.error
 from datetime import date, datetime, timedelta
@@ -21,10 +22,14 @@ except Exception:
 
 
 EMPRESA = "Sophi Personalizados Oficial"
+# No Railway, /data é o Volume persistente. Fora dele, mantém o comportamento local.
+DATA_DIR = Path(os.getenv("SOPHI_DATA_DIR", "/data" if Path("/data").exists() else "."))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 # Usa o banco existente sem trocar maiúscula/minúscula.
 # Isso evita o Streamlit/Linux criar um banco vazio só porque o arquivo se chama Sophi_erp.db.
-DB_PATH_MIN = Path("banco") / "sophi_erp.db"
-DB_PATH_MAI = Path("banco") / "Sophi_erp.db"
+DB_PATH_MIN = DATA_DIR / "banco" / "sophi_erp.db"
+DB_PATH_MAI = DATA_DIR / "banco" / "Sophi_erp.db"
 
 # Banco fixo e seguro:
 # se o banco com S maiúsculo já existir, usa ele; senão usa o minúsculo.
@@ -34,9 +39,11 @@ if DB_PATH_MAI.exists():
 else:
     DB_PATH = DB_PATH_MIN
 
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-DB_PATH.parent.mkdir(exist_ok=True)
+UPLOAD_DIR = DATA_DIR / "uploads"
+BACKUP_DIR = DATA_DIR / "backups"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
@@ -54,9 +61,19 @@ _SYNC_NUVEM_ATIVO = False
 _ULTIMO_UPLOAD_NUVEM = None
 
 
+def _segredo(nome, padrao=""):
+    try:
+        valor = os.getenv(nome, "")
+        if valor:
+            return valor
+        return st.secrets.get(nome, padrao)
+    except Exception:
+        return os.getenv(nome, padrao)
+
+
 def supabase_configurado():
     try:
-        return bool(st.secrets.get("SUPABASE_URL")) and bool(st.secrets.get("SUPABASE_KEY")) and create_client is not None
+        return bool(_segredo("SUPABASE_URL")) and bool(_segredo("SUPABASE_KEY")) and create_client is not None
     except Exception:
         return False
 
@@ -65,14 +82,14 @@ def cliente_supabase():
     if not supabase_configurado():
         return None
     try:
-        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+        return create_client(_segredo("SUPABASE_URL"), _segredo("SUPABASE_KEY"))
     except Exception:
         return None
 
 
 def bucket_supabase():
     try:
-        return st.secrets.get("SUPABASE_BUCKET", SUPABASE_BUCKET_PADRAO)
+        return _segredo("SUPABASE_BUCKET", SUPABASE_BUCKET_PADRAO)
     except Exception:
         return SUPABASE_BUCKET_PADRAO
 
@@ -141,8 +158,8 @@ def backup_banco_automatico():
     try:
         if not DB_PATH.exists() or DB_PATH.stat().st_size <= 0:
             return
-        pasta = Path("backups")
-        pasta.mkdir(exist_ok=True)
+        pasta = BACKUP_DIR
+        pasta.mkdir(parents=True, exist_ok=True)
 
         # Evita criar dezenas de backups em cada rerun do Streamlit.
         existentes = sorted(pasta.glob("Sophi_erp_backup_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -13886,9 +13903,12 @@ def topo_login_premium():
 
 def obter_credenciais_login():
     try:
-        login = st.secrets.get("login", {})
-        usuario = str(login.get("usuario", "")).strip()
-        senha = str(login.get("senha", "")).strip()
+        try:
+            login = st.secrets.get("login", {})
+        except Exception:
+            login = {}
+        usuario = str(os.getenv("LOGIN_USUARIO", "") or login.get("usuario", "")).strip()
+        senha = str(os.getenv("LOGIN_SENHA", "") or login.get("senha", "")).strip()
         return usuario, senha
     except Exception:
         return "", ""
@@ -16119,8 +16139,8 @@ def _chamar_openai_sophi(pergunta, contexto):
     api_key = ""
     modelo = "gpt-5-mini"
     try:
-        api_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
-        modelo = str(st.secrets.get("OPENAI_MODEL", modelo)).strip() or modelo
+        api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
+        modelo = str(_segredo("OPENAI_MODEL", modelo)).strip() or modelo
     except Exception:
         pass
     if not api_key:
