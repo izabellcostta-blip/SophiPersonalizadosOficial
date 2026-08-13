@@ -17292,15 +17292,10 @@ def tela_central_automacao_v2():
 
 
 # Acesso público do Portal do Cliente sem login.
-# IMPORTANTE: usar a versão profissional (_portal_publico_v2),
-# que contém as ações de aprovação, alteração, pagamento e WhatsApp.
-try:
-    if st.query_params.get("portal", "") == "cliente":
-        _portal_publico_v2()
-        st.stop()
-except Exception:
-    pass
-
+# IMPORTANTE: o portal público não passa pelo login interno.
+if st.query_params.get("portal", "") == "cliente":
+    _portal_publico_v2()
+    st.stop()
 
 exigir_login()
 
