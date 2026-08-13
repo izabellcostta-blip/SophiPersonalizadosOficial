@@ -3583,40 +3583,89 @@ def seletor_insumo(linha):
     categoria = c1.selectbox("Categoria", categorias, key=f"cat_ins_{linha}")
 
     if categoria == "Laminação":
-        df_lam = consultar("""
-            SELECT id, nome, tipo, custo_a4, ativo
-            FROM laminacoes
-            WHERE ativo='Sim'
-            ORDER BY nome
-        """)
+        # ============================================================
+        # LAMINAÇÃO / BOPP — FONTE DIRETA DO CADASTRO DE LAMINAÇÃO
+        # ============================================================
+        # A precificação NÃO usa a tabela de insumos comuns para BOPP.
+        # Ela lê diretamente a tabela `laminacoes`, que é a mesma tabela
+        # usada em Materiais e Estoque > Laminação.
+        # Assim, todo BOPP salvo nessa tela aparece aqui automaticamente.
+        try:
+            df_lam = consultar("""
+                SELECT id, nome, tipo, largura_cm, comprimento_m, valor_pago,
+                       folhas_a4, custo_metro, custo_a4, observacoes, ativo
+                FROM laminacoes
+                ORDER BY id DESC, nome ASC
+            """)
+        except Exception:
+            df_lam = pd.DataFrame()
+
+        # Remove apenas registros sem nome. Não filtramos por `ativo`,
+        # porque um cadastro existente precisa continuar disponível para
+        # a memória de cálculo mesmo que tenha vindo de uma versão antiga.
+        if not df_lam.empty:
+            df_lam = df_lam[df_lam["nome"].fillna("").astype(str).str.strip() != ""].copy()
 
         if df_lam.empty:
-            c2.selectbox("Insumo", ["Nenhuma laminação cadastrada"], key=f"insumo_{linha}")
-            c3.number_input("Qtd (folhas A4)", min_value=0.0, value=0.0, key=f"qtd_ins_{linha}")
+            c2.selectbox(
+                "Laminação / BOPP",
+                ["Nenhum BOPP cadastrado em Materiais > Laminação"],
+                key=f"insumo_{linha}"
+            )
+            c3.number_input(
+                "Qtd (folhas A4)",
+                min_value=0.0,
+                value=0.0,
+                step=1.0,
+                key=f"qtd_ins_{linha}"
+            )
             return None
 
         opcoes = ["Nenhum"]
         mapa = {}
         for _, r in df_lam.iterrows():
-            custo_a4 = max(n(r.get("custo_a4", 0)), 0.0)
+            nome_lam = str(r.get("nome", "") or "").strip()
             tipo = str(r.get("tipo", "") or "").strip()
-            label = f"{r['nome']} — {tipo} — {real(custo_a4)}/A4" if tipo else f"{r['nome']} — {real(custo_a4)}/A4"
+            valor_pago = n(r.get("valor_pago", 0))
+            folhas_a4 = n(r.get("folhas_a4", 0))
+            custo_a4 = n(r.get("custo_a4", 0))
+
+            # Recalcula automaticamente se o custo A4 não estiver gravado.
+            if folhas_a4 <= 0:
+                largura_cm = n(r.get("largura_cm", 0))
+                comprimento_m = n(r.get("comprimento_m", 0))
+                area_total_m2 = (largura_cm / 100.0) * comprimento_m
+                area_a4_m2 = 0.21 * 0.297
+                folhas_a4 = area_total_m2 / area_a4_m2 if area_total_m2 > 0 else 0
+
+            if custo_a4 <= 0 and folhas_a4 > 0 and valor_pago > 0:
+                custo_a4 = valor_pago / folhas_a4
+
+            custo_a4 = max(custo_a4, 0.0)
+            label_tipo = f" — {tipo}" if tipo else ""
+            label = f"{nome_lam}{label_tipo} — {real(custo_a4)}/folha A4"
             opcoes.append(label)
             mapa[label] = {
                 "id": int(r["id"]),
-                "nome": str(r["nome"]),
+                "nome": nome_lam,
                 "categoria": "Laminação",
                 "tipo": tipo,
                 "custo_unitario": custo_a4,
+                "unidade": "folha A4",
+                "folhas_a4": folhas_a4,
             }
 
-        escolhido = c2.selectbox("Laminação", opcoes, key=f"insumo_{linha}")
+        escolhido = c2.selectbox(
+            "Laminação / BOPP",
+            opcoes,
+            key=f"insumo_{linha}"
+        )
         qtd = c3.number_input(
             "Qtd (folhas A4)",
             min_value=0.0,
             value=1.0 if escolhido != "Nenhum" else 0.0,
             step=1.0,
-            key=f"qtd_ins_{linha}",
+            key=f"qtd_ins_{linha}"
         )
 
         if escolhido == "Nenhum" or qtd <= 0:
