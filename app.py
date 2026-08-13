@@ -16676,6 +16676,9 @@ menu = st.sidebar.radio(
         "💰 Financeiro",
         "💬 Mensagens WhatsApp",
         "📊 Relatórios",
+        "🌐 Portal do Cliente",
+        "⚡ Central de Automação",
+        "🎨 Biblioteca de Artes",
         "🤖 Sophi Gestora IA",
         "⚙ Configurações",
     ],
@@ -16699,7 +16702,8 @@ try:
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
-        "Relatórios":"↗", "Sophi Gestora IA":"✦", "Configurações":"⚙"
+        "Relatórios":"↗", "Portal do Cliente":"🌐", "Central de Automação":"⚡",
+        "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
     <div class="erp-topbar">
@@ -16741,6 +16745,8 @@ elif menu_limpo == "Financeiro":
     tela_financeiro_unificado()
 elif menu_limpo == "Relatórios":
     tela_relatorios_inteligentes()
+elif menu_limpo == "Portal do Cliente":
+    tela_portal_cliente_admin()
 elif menu_limpo == "Central de Automação":
     tela_central_automacao()
 elif menu_limpo == "Biblioteca de Artes":
@@ -16749,4 +16755,3 @@ elif menu_limpo == "Sophi Gestora IA":
     tela_sophi_gestora_ia()
 elif menu_limpo == "Configurações":
     tela_configuracoes()
-
