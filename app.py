@@ -16670,6 +16670,25 @@ def garantir_portal_profissional():
         status TEXT DEFAULT 'Aguardando aprovação', observacao TEXT,
         data TEXT DEFAULT CURRENT_TIMESTAMP, ativo TEXT DEFAULT 'Sim'
     )""")
+    # Compatibilidade com bancos criados em versões anteriores: adiciona colunas
+    # usadas pelo módulo de artes sem apagar os dados existentes.
+    try:
+        _cols_artes = consultar("PRAGMA table_info(portal_artes)")
+        _nomes_artes = set(_cols_artes["name"].astype(str).tolist()) if not _cols_artes.empty else set()
+        for _col, _tipo, _default in [
+            ("versao", "INTEGER", "1"),
+            ("status", "TEXT", "'Aguardando aprovação'"),
+            ("observacao", "TEXT", "NULL"),
+            ("ativo", "TEXT", "'Sim'"),
+        ]:
+            if _col not in _nomes_artes:
+                try:
+                    executar(f"ALTER TABLE portal_artes ADD COLUMN {_col} {_tipo} DEFAULT {_default}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     executar("""
     CREATE TABLE IF NOT EXISTS portal_status_historico (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16778,44 +16797,7 @@ def tela_portal_cliente_publico_profissional():
     if itens.empty: st.info("Nenhum item cadastrado.")
     else: st.dataframe(formatar_valores_tabela(itens),use_container_width=True,hide_index=True)
 
-    st.divider()
-    st.subheader("Arte / aprovação")
-    artes=consultar("""SELECT * FROM portal_artes
-        WHERE orcamento_id=? AND ativo='Sim' ORDER BY versao DESC,id DESC""",(orc_id,))
-    if artes.empty:
-        st.info("A arte ainda não foi enviada para este pedido.")
-    else:
-        arte=artes.iloc[0]
-        st.write(f"**Versão {int(arte.get('versao',1))}:** {arte.get('nome_arquivo','Arte')}")
-        path=str(arte.get("arquivo_path","") or "")
-        if path and Path(path).exists():
-            try: st.image(path,use_container_width=True)
-            except Exception: pass
-            try:
-                with open(path,"rb") as f:
-                    st.download_button("Baixar arte",f.read(),
-                        file_name=str(arte.get("nome_arquivo","arte")),key=f"arte_{arte['id']}")
-            except Exception: pass
-        st.info(f"Status da arte: {arte.get('status','Aguardando aprovação')}")
-        if str(arte.get("status","")) not in ("Aprovada","Aprovado"):
-            a,b=st.columns(2)
-            with a:
-                if st.button("Aprovar arte",use_container_width=True):
-                    executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?",(int(arte["id"]),))
-                    registrar_portal_interacao(token,orc_id,"Aprovação de arte","Cliente aprovou a arte.","Aprovado")
-                    registrar_portal_status(orc_id,"Arte aprovada","Cliente aprovou a arte.")
-                    st.success("Arte aprovada.")
-                    st.rerun()
-            with b:
-                if st.button("Solicitar alteração",use_container_width=True):
-                    st.session_state[f"alterar_arte_{arte['id']}"]=True
-            if st.session_state.get(f"alterar_arte_{arte['id']}"):
-                obs=st.text_area("O que deseja alterar?",key=f"obs_arte_{arte['id']}")
-                if st.button("Enviar alteração",key=f"send_arte_{arte['id']}",use_container_width=True):
-                    executar("UPDATE portal_artes SET status='Alteração solicitada',observacao=? WHERE id=?",(obs,int(arte["id"])))
-                    registrar_portal_interacao(token,orc_id,"Alteração de arte",obs,"Nova")
-                    st.success("Solicitação enviada.")
-                    st.rerun()
+    # A arte é aprovada por um link separado enviado ao cliente.
 
     st.divider()
     a,b=st.columns(2)
@@ -17037,7 +17019,7 @@ def _portal_publico_v2():
     <div style="background:#0b0b0b;color:#fff;border-radius:24px;padding:28px 30px;margin-bottom:22px;">
       <div style="font-size:12px;letter-spacing:2px;text-transform:uppercase;opacity:.65;">Sophi Personalizados Oficial</div>
       <div style="font-family:Georgia,serif;font-size:32px;font-weight:700;margin-top:6px;">Olá, {html.escape(cliente)} 🤍</div>
-      <div style="opacity:.72;margin-top:8px;">Acompanhe seu pedido, aprove a arte e envie decisões diretamente por este portal.</div>
+      <div style="opacity:.72;margin-top:8px;">Acompanhe seu pedido e informe sua decisão diretamente por este portal.</div>
       <div style="margin-top:16px;font-size:13px;opacity:.8;">Pedido <b>{html.escape(codigo)}</b></div>
     </div>
     """, unsafe_allow_html=True)
@@ -17091,44 +17073,8 @@ def _portal_publico_v2():
                     _portal_decisao_v2(token,oid,"Alteração solicitada",obs.strip(),"Pendente")
                     st.success("Solicitação enviada para a Sophi."); st.session_state[f"portal_alterar_v2_{oid}"]=False; st.rerun()
 
-    st.divider(); st.subheader("Arte / aprovação")
-    artes=consultar("SELECT * FROM portal_artes WHERE orcamento_id=? AND ativo='Sim' ORDER BY versao DESC,id DESC",(oid,))
-    if artes.empty: st.info("A arte ainda não foi disponibilizada para aprovação.")
-    else:
-        arte=artes.iloc[0]; path=str(arte.get("arquivo_path","") or "")
-        st.markdown(f"**Versão {int(arte.get('versao',1))}** · {html.escape(str(arte.get('nome_arquivo','Arte')))}")
-        if path and Path(path).exists():
-            st.image(path,use_container_width=True)
-            try:
-                with open(path,"rb") as f: st.download_button("Baixar arte",f.read(),file_name=str(arte.get("nome_arquivo","arte")),key=f"down_arte_v2_{arte['id']}")
-            except Exception: pass
-        arte_status=str(arte.get("status","Aguardando aprovação")); st.info(f"Status da arte: {arte_status}")
-        if arte_status not in ("Aprovada","Aprovado"):
-            a,b=st.columns(2)
-            with a:
-                if st.button("✓ Aprovar esta arte",type="primary",use_container_width=True,key=f"aprovar_arte_v2_{arte['id']}"):
-                    executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?",(int(arte["id"]),))
-                    _portal_decisao_v2(token,oid,"Aprovação de arte","Cliente aprovou a arte.","Aprovado")
-                    registrar_portal_status(oid,"Arte aprovada","Arte aprovada pelo cliente.")
-                    st.success("Arte aprovada e registrada."); st.rerun()
-            with b:
-                if st.button("✎ Solicitar alteração da arte",use_container_width=True,key=f"pedir_arte_v2_{arte['id']}"): st.session_state[f"pedir_arte_v2_{arte['id']}"]=True
-            if st.session_state.get(f"pedir_arte_v2_{arte['id']}"):
-                obs=st.text_area("Descreva a alteração",key=f"obs_arte_v2_{arte['id']}")
-                if st.button("Enviar alteração",use_container_width=True,key=f"enviar_arte_v2_{arte['id']}") and obs.strip():
-                    executar("UPDATE portal_artes SET status='Alteração solicitada',observacao=? WHERE id=?",(obs.strip(),int(arte["id"])))
-                    _portal_decisao_v2(token,oid,"Alteração de arte",obs.strip(),"Pendente"); st.success("Solicitação enviada."); st.rerun()
-
-    st.divider(); st.subheader("Entrega e pagamento")
-    e1,e2=st.columns(2)
-    with e1:
-        st.markdown(f"**Forma de pagamento:** {str(o.get('forma_pagamento','A combinar') or 'A combinar')}")
-        if str(o.get("status","")) in ("Aguardando pagamento","Aprovado"):
-            if st.button("✓ Já realizei o pagamento",use_container_width=True,key=f"pag_v2_{oid}"):
-                _portal_decisao_v2(token,oid,"Pagamento informado","Cliente informou que realizou o pagamento e aguarda conferência.","Pendente"); st.success("Aviso enviado para a Sophi.")
-    with e2:
-        st.markdown(f"**Tipo de entrega:** {str(o.get('tipo_entrega','A combinar') or 'A combinar')}")
-        st.markdown(f"**Endereço:** {html.escape(str(o.get('endereco_entrega','A combinar') or 'A combinar'))}")
+    # A aprovação de arte acontece em um link separado, enviado pela Sophi quando a arte estiver pronta.
+    # O Portal do Pedido fica focado somente na decisão sobre o orçamento/pedido.
 
     st.divider(); st.subheader("Fale com a Sophi")
     numero="".join(c for c in str(obter_config("whatsapp", "")) if c.isdigit())
