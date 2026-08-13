@@ -12953,84 +12953,84 @@ def garantir_modelos_whatsapp():
 def modelos_whatsapp_padrao():
     return {
         "Orçamento enviado": (
-            "Olá {nome}, tudo bem? 😊\n\n"
+            "Olá {nome}, tudo bem? \U0001F60A\n\n"
             "Segue seu orçamento {id} no valor de {valor}.\n\n"
-            "Qualquer dúvida, estou à disposição para ajustar o que for necessário. ✨\n\n"
-            "Equipe Sophi Personalizados Oficial 💜"
+            "Qualquer dúvida, estou à disposição para ajustar o que for necessário. \u2728\n\n"
+            "Equipe Sophi Personalizados Oficial \U0001F49C"
         ),
         "Orçamento aprovado": (
-            "Olá {nome}! 😊\n\n"
-            "Seu orçamento {id} foi aprovado com sucesso! 🎉\n\n"
+            "Olá {nome}! \U0001F60A\n\n"
+            "Seu orçamento {id} foi aprovado com sucesso! \U0001F389\n\n"
             "Para darmos continuidade, o próximo passo é a confirmação do pagamento.\n\n"
-            "Assim que confirmado, seu pedido entra na nossa fila de produção. 🛠️\n\n"
-            "Valor total: {valor} 💰\n\n"
-            "Aguardamos sua confirmação! 🙏\n\n"
-            "Equipe Sophi Personalizados Oficial 💜"
+            "Assim que confirmado, seu pedido entra na nossa fila de produção. \U0001F6E0\uFE0F\n\n"
+            "Valor total: {valor} \U0001F4B0\n\n"
+            "Aguardamos sua confirmação! \U0001F64F\n\n"
+            "Equipe Sophi Personalizados Oficial \U0001F49C"
         ),
         "Solicitar pagamento / Pix": (
-            "Olá {nome}, tudo bem? 😊\n\n"
+            "Olá {nome}, tudo bem? \U0001F60A\n\n"
             "Para confirmar seu pedido {id}, segue o valor e os dados para pagamento:\n\n"
-            "Valor total: {valor} 💰\n"
+            "Valor total: {valor} \U0001F4B0\n"
             "Pix: {pix}\n\n"
             "Após o pagamento, por gentileza envie o comprovante por aqui.\n\n"
-            "Assim que confirmado, seu pedido entra na nossa fila de produção. ✨\n\n"
-            "Equipe Sophi Personalizados Oficial 💜"
+            "Assim que confirmado, seu pedido entra na nossa fila de produção. \u2728\n\n"
+            "Equipe Sophi Personalizados Oficial \U0001F49C"
         ),
         "Pagamento recebido": (
-            "Olá {nome}! 💳\n\n"
+            "Olá {nome}! \U0001F4B3\n\n"
             "Pagamento recebido com sucesso referente ao pedido {id}.\n\n"
-            "Muito obrigada pela confiança! Seu pedido agora seguirá para produção. ✨\n\n"
-            "Equipe Sophi Personalizados Oficial 💜"
+            "Muito obrigada pela confiança! Seu pedido agora seguirá para produção. \u2728\n\n"
+            "Equipe Sophi Personalizados Oficial \U0001F49C"
         ),
         "Pedido em produção": (
-            "Olá {nome}! ✨\n\n"
+            "Olá {nome}! \u2728\n\n"
             "Passando para avisar que seu pedido {id} já entrou em produção.\n\n"
-            "Estamos preparando tudo com muito cuidado para entregar do jeitinho combinado. 🤍"
+            "Estamos preparando tudo com muito cuidado para entregar do jeitinho combinado. \U0001F90D"
         ),
         "Pedido em embalagem": (
-            "Olá {nome}! 📦\n\n"
+            "Olá {nome}! \U0001F4E6\n\n"
             "Seu pedido {id} já saiu da produção e está na etapa de acabamento/embalagem.\n\n"
-            "Está quase tudo pronto! ✨"
+            "Está quase tudo pronto! \u2728"
         ),
         "Pedido pronto": (
             "Olá {nome}! ✅\n\n"
             "Seu pedido {id} está pronto.\n\n"
-            "Podemos combinar a retirada ou a forma de entrega conforme combinado. 🤍"
+            "Podemos combinar a retirada ou a forma de entrega conforme combinado. \U0001F90D"
         ),
         "Saiu para entrega": (
-            "Olá {nome}! 🚚\n\n"
+            "Olá {nome}! \U0001F69A\n\n"
             "Seu pedido {id} saiu para entrega.\n\n"
-            "Assim que for entregue, te aviso por aqui. 🤍"
+            "Assim que for entregue, te aviso por aqui. \U0001F90D"
         ),
         "Pedido entregue": (
             "Olá {nome}! ✅\n\n"
             "Seu pedido {id} foi entregue.\n\n"
-            "Muito obrigada pela confiança na Sophi Personalizados Oficial. Esperamos que tenha amado cada detalhe! ✨"
+            "Muito obrigada pela confiança na Sophi Personalizados Oficial. Esperamos que tenha amado cada detalhe! \u2728"
         ),
         "Entrega prevista": (
-            "Olá {nome}! 📅\n\n"
+            "Olá {nome}! \U0001F4C5\n\n"
             "Sua entrega referente ao pedido {id} está prevista para {data}.\n\n"
-            "Qualquer alteração no prazo, te aviso por aqui. 🤍"
+            "Qualquer alteração no prazo, te aviso por aqui. \U0001F90D"
         ),
         "Pós-venda": (
-            "Olá {nome}, tudo bem? 🤍\n\n"
+            "Olá {nome}, tudo bem? \U0001F90D\n\n"
             "Passando para saber se deu tudo certo com seu pedido.\n\n"
-            "Sua opinião é muito importante para nós. Se puder, me conta se você gostou. ✨"
+            "Sua opinião é muito importante para nós. Se puder, me conta se você gostou. \u2728"
         ),
         "Aniversário": (
-            "Olá {nome}! 🎂✨\n\n"
+            "Olá {nome}! \U0001F382\u2728\n\n"
             "A Sophi Personalizados Oficial deseja um feliz aniversário, cheio de amor, saúde e momentos especiais.\n\n"
-            "Que seu dia seja lindo e inesquecível! 💜"
+            "Que seu dia seja lindo e inesquecível! \U0001F49C"
         ),
         "Recompra / cliente parado": (
-            "Olá {nome}, tudo bem? 🤍\n\n"
+            "Olá {nome}, tudo bem? \U0001F90D\n\n"
             "Passando para te mostrar que temos novidades lindas na Sophi Personalizados Oficial.\n\n"
-            "Temos opções de presentes personalizados, fotos, lembranças e produtos feitos para eternizar momentos especiais. ✨"
+            "Temos opções de presentes personalizados, fotos, lembranças e produtos feitos para eternizar momentos especiais. \u2728"
         ),
         "Promoção / novidade": (
-            "Olá {nome}! ✨\n\n"
+            "Olá {nome}! \u2728\n\n"
             "Temos novidades especiais na Sophi Personalizados Oficial.\n\n"
-            "Se quiser, posso te enviar algumas opções personalizadas e valores promocionais disponíveis no momento. 💜"
+            "Se quiser, posso te enviar algumas opções personalizadas e valores promocionais disponíveis no momento. \U0001F49C"
         ),
     }
 
@@ -13444,9 +13444,27 @@ def botao_portal_cliente_unico(numero, nome, codigo, status, valor, link):
         st.link_button("🔗 Enviar Portal do Cliente", link_wpp, use_container_width=True)
 
 
+def reparar_modelos_whatsapp_corrompidos():
+    """Restaura somente mensagens que contenham caracteres quebrados (�/��)."""
+    try:
+        garantir_modelos_whatsapp()
+        padroes = modelos_whatsapp_padrao()
+        atuais = consultar("SELECT tipo, mensagem FROM whatsapp_modelos")
+        if atuais.empty:
+            return
+        for _, row in atuais.iterrows():
+            msg = str(row.get("mensagem", ""))
+            if "�" in msg and str(row.get("tipo", "")) in padroes:
+                executar("UPDATE whatsapp_modelos SET mensagem=?, atualizado_em=CURRENT_TIMESTAMP WHERE tipo=?",
+                         (padroes[str(row.get("tipo"))], str(row.get("tipo"))))
+    except Exception:
+        pass
+
+
 def tela_mensagens_whatsapp():
     garantir_modelo_catalogo_online()
     garantir_modelo_portal_cliente()
+    reparar_modelos_whatsapp_corrompidos()
     garantir_modelos_whatsapp()
     aplicar_css_mensagens_whatsapp()
 
@@ -16644,6 +16662,120 @@ except Exception:
     pass
 
 
+def tela_impressao_etiquetas_profissional():
+    """Central profissional de impressão térmica e etiquetas de envio."""
+    st.title("Impressão / Etiquetas")
+    st.caption("Central de impressão térmica, etiquetas de envio, comprovantes e identificação de pedidos.")
+
+    abas = st.tabs(["Etiquetas de envio", "Pedidos", "Impressoras", "Comprovante térmico"])
+
+    with abas[0]:
+        st.subheader("Etiqueta de envio")
+        try:
+            orcs = consultar("""
+                SELECT id, cliente_nome, whatsapp, status, total
+                FROM orcamentos
+                ORDER BY id DESC
+                LIMIT 300
+            """)
+        except Exception:
+            orcs = pd.DataFrame()
+
+        if orcs.empty:
+            st.info("Nenhum pedido/orçamento disponível para impressão.")
+        else:
+            opcoes = {
+                f"{codigo_visual('ORC', int(r['id']), ano=datetime.now().year)} · {r['cliente_nome']}": int(r['id'])
+                for _, r in orcs.iterrows()
+            }
+            escolhido = st.selectbox("Selecione o pedido", list(opcoes.keys()))
+            oid = opcoes[escolhido]
+            c1, c2, c3 = st.columns(3)
+            largura = c1.selectbox("Largura", [40, 50, 100], index=1, format_func=lambda x: f"{x} mm")
+            altura = c2.selectbox("Altura", [30, 50, 100, 150], index=1, format_func=lambda x: f"{x} mm")
+            formato = c3.selectbox("Formato", ["Etiqueta térmica", "A4 / PDF"])
+
+            try:
+                html_etq = criar_html_etiqueta(int(oid))
+            except Exception:
+                html_etq = ""
+
+            if html_etq:
+                st.components.v1.html(html_etq, height=360, scrolling=True)
+                st.download_button(
+                    "Baixar etiqueta para imprimir",
+                    data=html_etq.encode("utf-8"),
+                    file_name=f"etiqueta_{oid}_{largura}x{altura}.html",
+                    mime="text/html",
+                    use_container_width=True,
+                )
+                st.caption(f"Configuração selecionada: {largura} × {altura} mm · {formato}. Para impressora térmica, use o tamanho real configurado no driver da impressora.")
+            else:
+                st.warning("Não foi possível gerar a etiqueta deste pedido.")
+
+    with abas[1]:
+        st.subheader("Fila de impressão")
+        try:
+            df = consultar("""
+                SELECT id, cliente_nome, status, total
+                FROM orcamentos
+                ORDER BY id DESC
+                LIMIT 100
+            """)
+            if df.empty:
+                st.info("A fila de impressão está vazia.")
+            else:
+                st.dataframe(formatar_valores_tabela(df), use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.error(f"Não foi possível carregar a fila: {exc}")
+
+    with abas[2]:
+        st.subheader("Configuração de impressoras")
+        st.info("A impressão é enviada pelo navegador. Selecione a impressora térmica no diálogo de impressão do Windows/Chrome e configure o papel conforme a etiqueta instalada.")
+        c1, c2 = st.columns(2)
+        c1.text_input("Nome da impressora térmica", placeholder="Ex.: Elgin L42 / Zebra / Epson")
+        c2.selectbox("Papel padrão", ["50 × 30 mm", "50 × 50 mm", "100 × 150 mm", "Personalizado"])
+        st.caption("Essa configuração é apenas de referência no ERP; a impressora física continua sendo definida pelo sistema operacional.")
+
+    with abas[3]:
+        st.subheader("Comprovante térmico")
+        st.info("Os comprovantes também podem ser impressos pelo módulo Vendas / PDV, na aba Comprovantes / Etiquetas.")
+        if st.button("Abrir Vendas / PDV", use_container_width=True):
+            st.session_state["menu_forcar"] = "🛒 Vendas / PDV"
+            st.rerun()
+
+
+def tela_calendario_comercial():
+    """Agenda comercial sem duplicar a agenda operacional de produção."""
+    st.title("Calendário Comercial")
+    st.caption("Planejamento de datas sazonais, campanhas, prazos de divulgação e oportunidades de venda.")
+
+    datas = [
+        ("01/01", "Ano Novo", "Campanha de início de ano"),
+        ("fevereiro", "Volta às aulas", "Etiquetas, papelaria e personalizados escolares"),
+        ("março/abril", "Páscoa", "Kits, lembranças e presentes"),
+        ("maio", "Dia das Mães", "Principal campanha de presentes"),
+        ("12/06", "Dia dos Namorados", "Kits românticos e presentes"),
+        ("agosto", "Dia dos Pais", "Kits presenteáveis e personalizados"),
+        ("12/10", "Dia das Crianças", "Lembranças e personalizados infantis"),
+        ("15/10", "Dia dos Professores", "Kits e lembranças para professores"),
+        ("31/10", "Halloween", "Personalizados temáticos"),
+        ("novembro", "Black Friday", "Campanha promocional e queima de estoque"),
+        ("25/12", "Natal", "Kits, presentes e personalizados"),
+    ]
+    df = pd.DataFrame(datas, columns=["Período", "Data / ocasião", "Oportunidade comercial"])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Planejamento da campanha")
+    c1, c2, c3 = st.columns(3)
+    c1.date_input("Início da campanha", value=datetime.now().date())
+    c2.date_input("Data principal", value=(datetime.now().date() + timedelta(days=30)))
+    c3.selectbox("Prioridade", ["Alta", "Média", "Baixa"])
+    st.text_area("O que preparar", placeholder="Ex.: criar artes, definir produtos, calcular preços, publicar no Instagram, preparar estoque...")
+    st.multiselect("Canais", ["Instagram", "WhatsApp", "Facebook", "Shopee", "iFood", "Loja física"])
+
+
 exigir_login()
 
 st.sidebar.markdown("""
@@ -16667,7 +16799,7 @@ menu = st.sidebar.radio(
         "🛒 Vendas / PDV",
         "🏠 Dashboard",
         "✅ Tarefas do Dia",
-        "🏷 Precificação",
+        "🏷️ Precificação",
         "💡 Custos Fixos",
         "📝 Orçamentos",
         "🏭 Produção / Agenda",
@@ -16676,8 +16808,13 @@ menu = st.sidebar.radio(
         "💰 Financeiro",
         "💬 Mensagens WhatsApp",
         "📊 Relatórios",
+        "🌐 Portal do Cliente",
+        "🖨️ Impressão / Etiquetas",
+        "📅 Calendário Comercial",
+        "⚡ Central de Automação",
+        "🎨 Biblioteca de Artes",
         "🤖 Sophi Gestora IA",
-        "⚙ Configurações",
+        "⚙️ Configurações",
     ],
 )
 
@@ -16687,7 +16824,12 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 "]:
+for _icone in [
+    "🏷️ ", "🏷 ", "🖨️ ", "🖨 ", "📅 ", "⚡ ", "🎨 ",
+    "✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "💡 ",
+    "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "🛒 ", "🧺 ", "🖼️ ",
+    "🖼 ", "🌐 ", "🤖 ", "⚙️ ", "⚙ ",
+]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -16699,7 +16841,9 @@ try:
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
-        "Relatórios":"↗", "Sophi Gestora IA":"✦", "Configurações":"⚙"
+        "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨️",
+        "Calendário Comercial":"📅", "Central de Automação":"⚡",
+        "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
     <div class="erp-topbar">
@@ -16741,6 +16885,12 @@ elif menu_limpo == "Financeiro":
     tela_financeiro_unificado()
 elif menu_limpo == "Relatórios":
     tela_relatorios_inteligentes()
+elif menu_limpo == "Portal do Cliente":
+    tela_portal_cliente_admin()
+elif menu_limpo == "Impressão / Etiquetas":
+    tela_impressao_etiquetas_profissional()
+elif menu_limpo == "Calendário Comercial":
+    tela_calendario_comercial()
 elif menu_limpo == "Central de Automação":
     tela_central_automacao()
 elif menu_limpo == "Biblioteca de Artes":
