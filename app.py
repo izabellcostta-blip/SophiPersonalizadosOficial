@@ -18,6 +18,11 @@ import pandas as pd
 import streamlit as st
 
 try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = ImageDraw = ImageFont = None
+
+try:
     from supabase import create_client
 except Exception:
     create_client = None
@@ -3616,58 +3621,42 @@ def seletor_insumo(linha):
 
 
 def seletor_laminacao_precificacao(linha, folhas_estimadas):
-    """Seleciona uma laminação cadastrada e calcula o custo por folha/base."""
+    """Seleciona a laminação cadastrada e calcula o custo por A4/base."""
     try:
-        df = consultar("""
-        SELECT id, nome, tipo, custo_a4
-        FROM laminacoes
-        WHERE ativo='Sim'
-        ORDER BY tipo, nome
-        """)
+        df=consultar("""SELECT id,nome,tipo,largura_cm,comprimento_m,valor_pago,folhas_a4,custo_metro,custo_a4,observacoes,ativo
+                       FROM laminacoes
+                       WHERE TRIM(LOWER(COALESCE(ativo,'Sim'))) IN ('sim','s','1','true','ativo')
+                          OR ativo IS NULL OR TRIM(COALESCE(ativo,''))=''
+                       ORDER BY nome""")
     except Exception:
-        df = pd.DataFrame()
-
-    c1, c2, c3 = st.columns([4, 1.4, 1.2])
-
+        df=pd.DataFrame()
+    c1,c2,c3=st.columns([4,1.4,1.2])
     if df.empty:
-        c1.selectbox("Laminação", ["Nenhuma laminação cadastrada"], key=f"lam_prec_{linha}")
-        c2.number_input("Qtd A4/bases", min_value=0.0, value=0.0, key=f"lam_qtd_{linha}")
-        c3.metric("Custo", real(0))
+        c1.selectbox("Laminação",["Nenhuma laminação cadastrada"],key=f"lam_prec_{linha}")
+        c2.number_input("Qtd A4/bases",min_value=0.0,value=0.0,key=f"lam_qtd_{linha}")
+        c3.metric("Custo",real(0))
+        st.caption("Cadastre uma laminação em Materiais e Estoque → Laminação para ela aparecer aqui.")
         return None
-
-    opcoes = ["Nenhuma"]
-    mapa = {}
-    for _, r in df.iterrows():
-        custo_a4 = n(r.get("custo_a4", 0))
-        label = f"{r['nome']} — {r['tipo']} — {real(custo_a4)}/A4"
+    opcoes=["Nenhuma"]; mapa={}
+    for _,r in df.iterrows():
+        largura_cm=n(r.get("largura_cm",0)); comprimento_m=n(r.get("comprimento_m",0)); valor_pago=n(r.get("valor_pago",0))
+        area_total_m2=(largura_cm/100.0)*comprimento_m
+        folhas_a4_calc=area_total_m2/(0.21*0.297) if area_total_m2>0 else 0.0
+        custo_metro_calc=valor_pago/comprimento_m if comprimento_m>0 else 0.0
+        custo_a4_calc=valor_pago/folhas_a4_calc if folhas_a4_calc>0 else n(r.get("custo_a4",0))
+        if custo_a4_calc<=0: custo_a4_calc=n(r.get("custo_a4",0))
+        label=f"{str(r.get('nome','')).strip()} — {str(r.get('tipo','')).strip()} — {real(custo_a4_calc)}/A4"
         opcoes.append(label)
-        mapa[label] = {
-            "id": int(r["id"]),
-            "nome": str(r["nome"]),
-            "tipo": str(r.get("tipo", "")),
-            "custo_unitario": custo_a4,
-        }
-
-    escolhido = c1.selectbox("Laminação", opcoes, key=f"lam_prec_{linha}")
-    qtd_padrao = float(folhas_estimadas) if escolhido != "Nenhuma" else 0.0
-    qtd = c2.number_input(
-        "Qtd A4/bases",
-        min_value=0.0,
-        value=qtd_padrao,
-        step=1.0,
-        key=f"lam_qtd_{linha}",
-    )
-
-    if escolhido == "Nenhuma" or qtd <= 0:
-        c3.metric("Custo", real(0))
-        return None
-
-    item = mapa[escolhido].copy()
-    item["qtd"] = qtd
-    item["total"] = item["custo_unitario"] * qtd
-    c3.metric("Custo", real(item["total"]))
+        mapa[label]={"id":int(r["id"]),"nome":str(r.get("nome","")).strip(),"tipo":str(r.get("tipo","")).strip(),"custo_unitario":float(custo_a4_calc),"custo_metro":float(custo_metro_calc),"folhas_a4":float(folhas_a4_calc)}
+    escolhido=c1.selectbox("Laminação",opcoes,key=f"lam_prec_{linha}")
+    qtd_padrao=float(folhas_estimadas) if escolhido!="Nenhuma" else 0.0
+    qtd=c2.number_input("Qtd A4/bases",min_value=0.0,value=qtd_padrao,step=1.0,key=f"lam_qtd_{linha}")
+    if escolhido=="Nenhuma" or qtd<=0:
+        c3.metric("Custo",real(0)); return None
+    item=mapa[escolhido].copy(); item["qtd"]=qtd; item["total"]=item["custo_unitario"]*qtd
+    c3.metric("Custo",real(item["total"]))
+    st.caption(f"Custo da laminação: {real(item['custo_unitario'])} por folha A4/base · {real(item['custo_metro'])} por metro")
     return item
-
 
 def seletor_tinta(linha):
     df = consultar("SELECT * FROM tintas WHERE ativo='Sim' ORDER BY nome")
@@ -5079,6 +5068,19 @@ def aplicar_visual_publico_limpo():
         padding-bottom: 3rem !important;
     }
     a[href^="#"] {display: none !important;}
+    /* Portal do cliente: alto contraste nos botões para leitura fácil. */
+    .stButton > button, .stButton > button[kind="primary"], [data-testid="stLinkButton"] a {
+        background:#111111 !important; color:#ffffff !important; border:1px solid #111111 !important;
+        border-radius:12px !important; font-weight:800 !important; text-shadow:none !important;
+        box-shadow:0 8px 18px rgba(0,0,0,.12) !important; min-height:48px !important;
+    }
+    .stButton > button:hover, .stButton > button[kind="primary"]:hover, [data-testid="stLinkButton"] a:hover {
+        background:#000000 !important; color:#ffffff !important; border-color:#000000 !important;
+    }
+    .stButton > button p, .stButton > button span, [data-testid="stLinkButton"] a p, [data-testid="stLinkButton"] a span {
+        color:#ffffff !important; font-weight:800 !important;
+    }
+    [data-testid="stDownloadButton"] { display:none !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -11236,6 +11238,52 @@ def gerar_token_portal(tipo, referencia_id):
     return token
 
 
+def _arte_portal_com_marca_dagua(caminho):
+    """Gera somente uma prévia protegida; nunca entrega a arte original."""
+    if Image is None or ImageDraw is None or ImageFont is None: return None
+    try:
+        img=Image.open(caminho).convert("RGBA")
+        max_dim=1800
+        if max(img.size)>max_dim:
+            escala=max_dim/max(img.size); img=img.resize((int(img.width*escala),int(img.height*escala)),Image.LANCZOS)
+        layer=Image.new("RGBA",img.size,(255,255,255,0)); draw=ImageDraw.Draw(layer)
+        texto="SOPHI PERSONALIZADOS OFICIAL  •  ARTE PARA APROVAÇÃO  •  NÃO AUTORIZADA PARA USO"
+        try: fonte=ImageFont.truetype("DejaVuSans-Bold.ttf",max(18,int(min(img.size)*0.026)))
+        except Exception: fonte=ImageFont.load_default()
+        bbox=draw.textbbox((0,0),texto,font=fonte); tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+        px=max(tw+120,520); py=max(th+120,150)
+        big=Image.new("RGBA",(max(img.width*2,px*2),max(img.height*2,py*2)),(255,255,255,0)); bd=ImageDraw.Draw(big)
+        for yy in range(-big.height,big.height,py):
+            for xx in range(-big.width,big.width,px):
+                bd.text((xx,yy),texto,font=fonte,fill=(255,255,255,165),stroke_width=2,stroke_fill=(0,0,0,120))
+        big=big.rotate(28,expand=False,resample=Image.BICUBIC)
+        left=max(0,(big.width-img.width)//2); top=max(0,(big.height-img.height)//2)
+        layer.alpha_composite(big.crop((left,top,left+img.width,top+img.height)))
+        out=Image.alpha_composite(img,layer).convert("RGB")
+        from io import BytesIO
+        buf=BytesIO(); out.save(buf,format="PNG",optimize=True); return buf.getvalue()
+    except Exception:
+        return None
+
+def _formatar_data_hora_portal(valor):
+    """Formata timestamps do Portal no horário de Brasília.
+    Timestamps sem fuso vindos do SQLite são tratados como UTC; os novos
+    eventos do Portal são gravados com o offset -03:00.
+    """
+    try:
+        if valor is None or str(valor).strip() in ("", "None", "nan", "NaT"):
+            return ""
+        texto=str(valor).strip()
+        dt=pd.to_datetime(texto,errors="coerce",utc=True)
+        if pd.notna(dt):
+            return dt.tz_convert("America/Sao_Paulo").strftime("%d/%m/%Y às %H:%M")
+        dt2=pd.to_datetime(texto,errors="coerce",dayfirst=True)
+        if pd.isna(dt2): return texto
+        if getattr(dt2,"tzinfo",None) is not None: dt2=dt2.tz_convert("America/Sao_Paulo")
+        return dt2.strftime("%d/%m/%Y às %H:%M")
+    except Exception:
+        return str(valor)
+
 def tela_portal_cliente_publico():
     aplicar_visual_publico_limpo()
     garantir_portal_cliente()
@@ -16022,14 +16070,12 @@ def tela_precificacao_profissional():
                 custo_insumos_total += n(item.get("total", 0))
 
         st.subheader("2. Laminação")
-        laminacoes_usadas = []
-        custo_laminacao_total = 0.0
-        usa_laminacao = st.checkbox("Incluir laminação", value=False, key="prof_usa_laminacao")
-        if usa_laminacao:
-            lam = seletor_laminacao_precificacao(101, folhas_estimadas)
-            if lam:
-                laminacoes_usadas.append(lam)
-                custo_laminacao_total += n(lam.get("total", 0))
+        laminacoes_usadas=[]
+        custo_laminacao_total=0.0
+        lam=seletor_laminacao_precificacao(101,folhas_estimadas)
+        if lam:
+            laminacoes_usadas.append(lam)
+            custo_laminacao_total += n(lam.get("total",0))
 
         st.subheader("3. Tinta")
         tintas = []
@@ -16845,8 +16891,8 @@ def garantir_portal_v2():
 def portal_evento(orcamento_id, token, evento, descricao):
     try:
         garantir_portal_v2()
-        executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao) VALUES(?,?,?,?)",
-                 (int(orcamento_id), str(token), str(evento), str(descricao)))
+        executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
+                 (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
     except Exception:
         pass
 
@@ -16940,7 +16986,16 @@ def tela_portal_cliente_publico():
     c1.metric("Status", _portal_status_v2(status))
     c2.metric("Total", real(total))
     c3.metric("Pedido", codigo)
-    c4.metric("Entrega", str(o.get("data_prevista_entrega") or "A definir"))
+    data_entrega_portal=data_br_segura(o.get("data_prevista_entrega")) or "A definir"
+    hora_entrega_portal=str(o.get("hora_prevista_entrega") or "").strip()
+    if hora_entrega_portal:
+        try:
+            hora_dt=pd.to_datetime(hora_entrega_portal,errors="coerce")
+            hora_entrega_portal=hora_dt.strftime("%H:%M") if pd.notna(hora_dt) else hora_entrega_portal[:5]
+        except Exception:
+            hora_entrega_portal=hora_entrega_portal[:5]
+        data_entrega_portal=f"{data_entrega_portal} às {hora_entrega_portal}"
+    c4.metric("Entrega", data_entrega_portal)
 
     itens = consultar("SELECT produto,categoria,quantidade,valor_unitario,desconto,total FROM orcamento_itens WHERE orcamento_id=?", (oid,))
     st.subheader("🛍️ Seu pedido")
@@ -16986,11 +17041,12 @@ def tela_portal_cliente_publico():
             caminho = str(a.get("caminho") or "")
             if caminho and Path(caminho).exists():
                 try:
-                    st.image(caminho, use_container_width=True)
-                except Exception:
-                    pass
-                try:
-                    st.download_button("Baixar arte", Path(caminho).read_bytes(), file_name=Path(caminho).name, key=f"down_art_{a['id']}")
+                    arte_preview=_arte_portal_com_marca_dagua(caminho)
+                    if arte_preview:
+                        st.image(arte_preview,use_container_width=True)
+                        st.caption("🔒 Sophi Personalizados Oficial · prévia protegida para aprovação. A arte final sem marca d’água é entregue somente após a confirmação do pedido e pagamento.")
+                    else:
+                        st.error("Não foi possível gerar a prévia protegida desta arte.")
                 except Exception:
                     pass
             aprov = consultar("SELECT * FROM portal_aprovacoes WHERE orcamento_id=? AND tipo='Arte' ORDER BY id DESC LIMIT 1", (oid,))
@@ -17046,7 +17102,9 @@ def tela_portal_cliente_publico():
         r = op.iloc[0]
         st.write(f"**Ordem de produção:** {codigo_op_seguro(r['id'])}")
         st.write(f"**Etapa:** {r.get('status','-')}")
-        st.write(f"**Previsão:** {r.get('data_entrega') or o.get('data_prevista_entrega') or 'A definir'}")
+        data_prev=data_br_segura(r.get("data_entrega") or o.get("data_prevista_entrega")) or "A definir"
+        hora_prev=str(r.get("hora_entrega") or o.get("hora_prevista_entrega") or "").strip()
+        st.write(f"**Previsão:** {data_prev}{(' às '+hora_prev) if hora_prev else ''}")
         try:
             chk = json.loads(r.get("checklist_json") or "{}")
             if chk:
@@ -17056,12 +17114,16 @@ def tela_portal_cliente_publico():
     ent = consultar("SELECT * FROM entregas WHERE referencia_tipo='OP' AND referencia_id IN (SELECT id FROM ordens_producao WHERE orcamento_id=?) AND ativo='Sim' ORDER BY id DESC LIMIT 1", (oid,))
     if not ent.empty:
         e=ent.iloc[0]
-        st.write(f"**Entrega:** {e.get('tipo_entrega','-')} · {e.get('status','-')} · {e.get('data_entrega','-')}")
+        data_ent=data_br_segura(e.get("data_entrega")) or "-"
+        st.write(f"**Entrega:** {e.get('tipo_entrega','-')} · {e.get('status','-')} · {data_ent}")
 
     st.subheader("📜 Histórico")
     hist = consultar("SELECT data,evento,descricao FROM portal_eventos WHERE orcamento_id=? ORDER BY id DESC LIMIT 100", (oid,))
     if hist.empty: st.info("O histórico será preenchido conforme o pedido avançar.")
-    else: st.dataframe(hist, use_container_width=True, hide_index=True)
+    else:
+        hist=hist.copy()
+        if "data" in hist.columns: hist["data"]=hist["data"].apply(_formatar_data_hora_portal)
+        st.dataframe(hist,use_container_width=True,hide_index=True)
 
     st.subheader("💬 Falar com a Sophi")
     whatsapp = obter_config("whatsapp", "")
@@ -17223,7 +17285,9 @@ def tela_portal_cliente_admin():
 
     artes = consultar("SELECT id,versao,nome_arquivo,status,observacao,data,caminho FROM portal_artes WHERE orcamento_id=? ORDER BY id DESC", (oid,))
     if not artes.empty:
-        st.dataframe(artes.drop(columns=["caminho"], errors="ignore"), use_container_width=True, hide_index=True)
+        artes_exib=artes.drop(columns=["caminho"],errors="ignore").copy()
+        if "data" in artes_exib.columns: artes_exib["data"]=artes_exib["data"].apply(_formatar_data_hora_portal)
+        st.dataframe(artes_exib,use_container_width=True,hide_index=True)
     else:
         st.info("Nenhuma arte enviada para este pedido ainda.")
 
@@ -17232,7 +17296,9 @@ def tela_portal_cliente_admin():
     if aps.empty:
         st.info("Nenhuma decisão recebida ainda.")
     else:
-        st.dataframe(aps, use_container_width=True, hide_index=True)
+        aps_exib=aps.copy()
+        if "data" in aps_exib.columns: aps_exib["data"]=aps_exib["data"].apply(_formatar_data_hora_portal)
+        st.dataframe(aps_exib,use_container_width=True,hide_index=True)
 
     st.link_button("🌐 Abrir Portal do Cliente", link, use_container_width=True)
 
@@ -17265,42 +17331,57 @@ def tela_calendario_comercial():
         st.success("Campanha salva.")
 
 
+def _html_etiqueta_correios_pedido(orcamento_id,destinatario,endereco,cep,cidade,uf,remetente,endereco_remetente,cep_remetente,codigo_rastreio=""):
+    empresa=html.escape(str(remetente or EMPRESA)); dest=html.escape(str(destinatario or "")); end=html.escape(str(endereco or "")); cep=html.escape(str(cep or "")); cidade=html.escape(str(cidade or "")); uf=html.escape(str(uf or "")); rem_end=html.escape(str(endereco_remetente or "")); rem_cep=html.escape(str(cep_remetente or "")); rast=html.escape(str(codigo_rastreio or ""))
+    codigo=codigo_visual("ORC",int(orcamento_id),ano=datetime.now().year)
+    try:
+        from urllib.parse import quote
+        token=gerar_token_portal("Orçamento",int(orcamento_id)); portal_url=f"{APP_URL_OFICIAL.rstrip('/')}/?portal=cliente&token={token}"; qr_url="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data="+quote(portal_url)
+    except Exception: qr_url=""
+    return f"""<!doctype html><html><head><meta charset='utf-8'><title>Etiqueta de envio {codigo}</title><style>
+@page{{size:100mm 150mm;margin:0}}*{{box-sizing:border-box}}body{{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#111}}.etq{{width:100mm;min-height:150mm;padding:7mm;border:1.5px solid #111}}.top{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4mm}}.brand{{font-size:18px;font-weight:900}}.kind{{font-size:11px;font-weight:800;border:1px solid #111;padding:2mm 3mm;border-radius:4px}}.bloco{{border:1px solid #222;margin-top:4mm;padding:4mm}}.titulo{{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2mm}}.dest{{font-size:18px;font-weight:900;line-height:1.15}}.end{{font-size:13px;line-height:1.35;margin-top:3mm}}.cep{{font-size:22px;font-weight:900;margin-top:3mm;letter-spacing:1px}}.rem{{font-size:11px;line-height:1.35}}.codigo{{font-size:13px;font-weight:900;margin-top:3mm}}.rastreio{{font-size:15px;font-weight:900;letter-spacing:1px;word-break:break-all}}.qr{{text-align:center;margin-top:4mm}}.qr img{{width:36mm;height:36mm}}.rodape{{margin-top:4mm;font-size:9px;text-align:center;color:#555}}.print{{margin:10px 0;padding:10px 14px;border:0;border-radius:8px;background:#111;color:#fff;font-weight:800}}@media print{{.print{{display:none}}body{{background:#fff}}.etq{{border:0}}}}
+</style></head><body><button class='print' onclick='window.print()'>Imprimir etiqueta</button><div class='etq'><div class='top'><div class='brand'>{empresa}</div><div class='kind'>ENVIO</div></div><div class='bloco'><div class='titulo'>DESTINATÁRIO</div><div class='dest'>{dest or 'Não informado'}</div><div class='end'>{end or 'Endereço não informado'}<br>{cidade}{(' - '+uf) if uf else ''}</div><div class='cep'>CEP {cep or '________-___'}</div></div><div class='bloco'><div class='titulo'>REMETENTE</div><div class='rem'><b>{empresa}</b><br>{rem_end or 'Endereço do remetente não informado'}<br>CEP {rem_cep or '________-___'}</div><div class='codigo'>Pedido: {codigo}</div></div><div class='bloco'><div class='titulo'>RASTREAMENTO</div><div class='rastreio'>{rast or 'CÓDIGO A INFORMAR APÓS POSTAGEM'}</div></div><div class='qr'><img src='{qr_url}' alt='QR Portal do Cliente'></div><div class='rodape'>Sophi Personalizados Oficial · Portal do Cliente · Valide os dados antes da postagem.</div></div></body></html>"""
+
+
 def tela_impressao_etiquetas():
     garantir_portal_v2()
     st.title("🖨️ Impressão / Etiquetas")
-    st.caption("Configuração e impressão de etiquetas, comprovantes e ordens para impressora térmica.")
-    abas=st.tabs(["Impressoras","Etiqueta de pedido","Ordem de produção","Recibo"])
+    st.caption("Impressão de etiquetas, comprovantes, ordens de produção e etiquetas de envio em formato 100×150 mm.")
+    abas=st.tabs(["Impressoras","Etiqueta de pedido","Etiqueta de envio / Correios","Ordem de produção","Recibo"])
     with abas[0]:
         with st.form("form_imp"):
-            nome=st.text_input("Nome da impressora")
-            modelo=st.text_input("Modelo")
-            largura=st.selectbox("Largura",["58 mm","80 mm","50×30 mm","100×150 mm"])
-            padrao=st.checkbox("Definir como padrão")
+            nome=st.text_input("Nome da impressora"); modelo=st.text_input("Modelo"); largura=st.selectbox("Largura",["58 mm","80 mm","50×30 mm","100×150 mm"]); padrao=st.checkbox("Definir como padrão")
             if st.form_submit_button("Cadastrar impressora"):
                 if padrao: executar("UPDATE impressoras_termicas SET padrao='Não'")
-                executar("INSERT INTO impressoras_termicas(nome,modelo,largura,padrao) VALUES(?,?,?,?)",(nome,modelo,largura,'Sim' if padrao else 'Não'))
-                st.success("Impressora cadastrada.")
+                executar("INSERT INTO impressoras_termicas(nome,modelo,largura,padrao) VALUES(?,?,?,?)",(nome,modelo,largura,'Sim' if padrao else 'Não')); st.success("Impressora cadastrada.")
         imp=consultar("SELECT id,nome,modelo,largura,padrao,ativo FROM impressoras_termicas ORDER BY id DESC")
         if not imp.empty: st.dataframe(imp,use_container_width=True,hide_index=True)
-    orcs=consultar("SELECT id,cliente_nome,total,status FROM orcamentos ORDER BY id DESC LIMIT 200")
+    orcs=consultar("SELECT id,cliente_nome,whatsapp,total,status,data_prevista_entrega,hora_prevista_entrega,tipo_entrega,endereco_entrega,cliente_id FROM orcamentos ORDER BY id DESC LIMIT 300")
     if orcs.empty:
         with abas[1]: st.info("Crie um orçamento para imprimir etiquetas.")
+        with abas[2]: st.info("Crie um orçamento para imprimir etiquetas de envio.")
         return
-    mapa={f"{codigo_visual('ORC',r.id,ano=datetime.now().year)} · {r.cliente_nome}":int(r.id) for _,r in orcs.iterrows()}
+    mapa={f"{codigo_visual('ORC',r.id,ano=datetime.now().year)} · {r.cliente_nome} · {r.status}":int(r.id) for _,r in orcs.iterrows()}
     with abas[1]:
-        oid=mapa[st.selectbox("Pedido",list(mapa.keys()),key="imp_oid")]
-        o=orcs[orcs.id==oid].iloc[0]
+        oid=mapa[st.selectbox("Pedido",list(mapa.keys()),key="imp_oid")]; o=orcs[orcs.id==oid].iloc[0]
         st.markdown(f"### SOPHI PERSONALIZADOS\n**Pedido:** {codigo_visual('ORC',oid,ano=datetime.now().year)}  \n**Cliente:** {o.cliente_nome}  \n**Total:** {real(o.total)}  \n**Status:** {o.status}")
-        st.caption("Use a impressão do navegador (Ctrl+P) e selecione a impressora térmica.")
+        html_pedido=criar_html_etiqueta(int(oid)); st.download_button("Baixar etiqueta do pedido",html_pedido,file_name=f"etiqueta_pedido_{oid}.html",mime="text/html",use_container_width=True); st.components.v1.html(html_pedido,height=300,scrolling=True)
     with abas[2]:
-        oid2=mapa[st.selectbox("Pedido para OP",list(mapa.keys()),key="imp_op")]
-        op=consultar("SELECT * FROM ordens_producao WHERE orcamento_id=? ORDER BY id DESC LIMIT 1",(oid2,))
+        oid_env=mapa[st.selectbox("Pedido para envio",list(mapa.keys()),key="imp_envio_oid")]; o=orcs[orcs.id==oid_env].iloc[0]
+        cli=consultar("SELECT * FROM clientes WHERE id=?",(int(o.get("cliente_id") or 0),)); c=cli.iloc[0] if not cli.empty else {}
+        st.markdown("### 📦 Etiqueta de envio — Correios"); st.info("Modelo de etiqueta 100×150 mm para preparação de encomendas. Organiza destinatário, remetente, CEP e rastreio. Não é uma etiqueta oficial emitida pelos Correios; o código de rastreio é informado após a postagem.")
+        c1,c2=st.columns(2); destinatario=c1.text_input("Destinatário",value=str(o.get("cliente_nome") or ""),key="etq_dest"); cep=c2.text_input("CEP",value="",placeholder="00000-000",key="etq_cep")
+        c3,c4=st.columns([2.5,1]); endereco_default=str(o.get("endereco_entrega") or c.get("endereco","") or ""); endereco=c3.text_input("Endereço / número / complemento",value=endereco_default,key="etq_end"); cidade=c4.text_input("Cidade",value=str(c.get("cidade","") or ""),key="etq_cidade")
+        c5,c6=st.columns(2); uf=c5.text_input("UF",value="",max_chars=2,key="etq_uf"); rast=c6.text_input("Código de rastreio",value="",placeholder="Ex.: AA123456789BR",key="etq_rast")
+        st.markdown("#### Remetente"); r1,r2=st.columns(2); remetente=r1.text_input("Nome do remetente",value=obter_config("nome_empresa",EMPRESA),key="etq_rem"); cep_remetente=r2.text_input("CEP do remetente",value=obter_config("cep_empresa",""),key="etq_cep_rem"); endereco_remetente=st.text_input("Endereço do remetente",value=obter_config("endereco_empresa",obter_config("endereco","")),key="etq_end_rem")
+        html_env=_html_etiqueta_correios_pedido(oid_env,destinatario,endereco,cep,cidade,uf,remetente,endereco_remetente,cep_remetente,rast); st.download_button("Baixar etiqueta 100×150 mm",html_env,file_name=f"etiqueta_envio_{oid_env}.html",mime="text/html",use_container_width=True); st.components.v1.html(html_env,height=720,scrolling=True)
+    with abas[3]:
+        oid2=mapa[st.selectbox("Pedido para OP",list(mapa.keys()),key="imp_op")]; op=consultar("SELECT * FROM ordens_producao WHERE orcamento_id=? ORDER BY id DESC LIMIT 1",(oid2,))
         if op.empty: st.info("Ainda não existe ordem de produção.")
         else:
-            r=op.iloc[0]; st.markdown(f"### ORDEM DE PRODUÇÃO\n**OP:** {codigo_op_seguro(r.id)}\n\n**Pedido:** {codigo_visual('ORC',oid2,ano=datetime.now().year)}\n\n**Status:** {r.get('status','-')}\n\n**Entrega:** {r.get('data_entrega','-')}")
-    with abas[3]:
-        oid3=mapa[st.selectbox("Pedido para recibo",list(mapa.keys()),key="imp_rec")]
-        o=orcs[orcs.id==oid3].iloc[0]; st.markdown(f"### RECIBO — SOPHI PERSONALIZADOS\nCliente: **{o.cliente_nome}**\n\nPedido: **{codigo_visual('ORC',oid3,ano=datetime.now().year)}**\n\nValor: **{real(o.total)}**\n\nStatus: **{o.status}**")
+            r=op.iloc[0]; data_op=data_br_segura(r.get('data_entrega')) or '-'; st.markdown(f"### ORDEM DE PRODUÇÃO\n**OP:** {codigo_op_seguro(r.id)}\n\n**Pedido:** {codigo_visual('ORC',oid2,ano=datetime.now().year)}\n\n**Status:** {r.get('status','-')}\n\n**Entrega:** {data_op}")
+    with abas[4]:
+        oid3=mapa[st.selectbox("Pedido para recibo",list(mapa.keys()),key="imp_rec")]; o=orcs[orcs.id==oid3].iloc[0]; st.markdown(f"### RECIBO — SOPHI PERSONALIZADOS\nCliente: **{o.cliente_nome}**\n\nPedido: **{codigo_visual('ORC',oid3,ano=datetime.now().year)}**\n\nValor: **{real(o.total)}**\n\nStatus: **{o.status}")
 
 
 # Acesso público do Portal do Cliente sem login.
