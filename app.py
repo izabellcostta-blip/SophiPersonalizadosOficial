@@ -3621,41 +3621,114 @@ def seletor_insumo(linha):
 
 
 def seletor_laminacao_precificacao(linha, folhas_estimadas):
-    """Seleciona a laminação cadastrada e calcula o custo por A4/base."""
+    """Seleciona qualquer BOPP/laminação cadastrada e calcula o custo real por folha A4."""
+    registros = []
     try:
-        df=consultar("""SELECT id,nome,tipo,largura_cm,comprimento_m,valor_pago,folhas_a4,custo_metro,custo_a4,observacoes,ativo
-                       FROM laminacoes
-                       WHERE TRIM(LOWER(COALESCE(ativo,'Sim'))) IN ('sim','s','1','true','ativo')
-                          OR ativo IS NULL OR TRIM(COALESCE(ativo,''))=''
-                       ORDER BY nome""")
+        # Fonte principal: tabela específica de laminações.
+        df = consultar("""
+            SELECT id, nome, tipo, largura_cm, comprimento_m, valor_pago,
+                   folhas_a4, custo_metro, custo_a4, observacoes, ativo
+            FROM laminacoes
+            ORDER BY nome
+        """)
+        if not df.empty:
+            registros.extend(df.to_dict(orient="records"))
     except Exception:
-        df=pd.DataFrame()
-    c1,c2,c3=st.columns([4,1.4,1.2])
-    if df.empty:
-        c1.selectbox("Laminação",["Nenhuma laminação cadastrada"],key=f"lam_prec_{linha}")
-        c2.number_input("Qtd A4/bases",min_value=0.0,value=0.0,key=f"lam_qtd_{linha}")
-        c3.metric("Custo",real(0))
+        pass
+
+    # Compatibilidade com cadastros antigos que possam ter sido gravados em insumos.
+    try:
+        df_old = consultar("""
+            SELECT id, nome, categoria, valor_pacote, quantidade_pacote, ativo
+            FROM insumos
+            WHERE ativo='Sim' AND (
+                LOWER(COALESCE(categoria,'')) LIKE '%lamina%'
+                OR LOWER(COALESCE(categoria,'')) LIKE '%bopp%'
+            )
+            ORDER BY nome
+        """)
+        if not df_old.empty:
+            nomes_existentes = {str(x.get('nome','')).strip().lower() for x in registros}
+            for _, r in df_old.iterrows():
+                nome = str(r.get('nome','')).strip()
+                if nome and nome.lower() not in nomes_existentes:
+                    registros.append({
+                        'id': r.get('id'),
+                        'nome': nome,
+                        'tipo': str(r.get('categoria','Laminação')),
+                        'largura_cm': 22.0,
+                        'comprimento_m': float(n(r.get('quantidade_pacote', 0))),
+                        'valor_pago': float(n(r.get('valor_pacote', 0))),
+                        'folhas_a4': 0.0,
+                        'custo_metro': 0.0,
+                        'custo_a4': 0.0,
+                        'observacoes': '',
+                        'ativo': 'Sim',
+                    })
+    except Exception:
+        pass
+
+    c1, c2, c3 = st.columns([4, 1.4, 1.2])
+    if not registros:
+        c1.selectbox("Laminação", ["Nenhuma laminação cadastrada"], key=f"lam_prec_{linha}")
+        c2.number_input("Qtd A4/bases", min_value=0.0, value=0.0, key=f"lam_qtd_{linha}")
+        c3.metric("Custo", real(0))
         st.caption("Cadastre uma laminação em Materiais e Estoque → Laminação para ela aparecer aqui.")
         return None
-    opcoes=["Nenhuma"]; mapa={}
-    for _,r in df.iterrows():
-        largura_cm=n(r.get("largura_cm",0)); comprimento_m=n(r.get("comprimento_m",0)); valor_pago=n(r.get("valor_pago",0))
-        area_total_m2=(largura_cm/100.0)*comprimento_m
-        folhas_a4_calc=area_total_m2/(0.21*0.297) if area_total_m2>0 else 0.0
-        custo_metro_calc=valor_pago/comprimento_m if comprimento_m>0 else 0.0
-        custo_a4_calc=valor_pago/folhas_a4_calc if folhas_a4_calc>0 else n(r.get("custo_a4",0))
-        if custo_a4_calc<=0: custo_a4_calc=n(r.get("custo_a4",0))
-        label=f"{str(r.get('nome','')).strip()} — {str(r.get('tipo','')).strip()} — {real(custo_a4_calc)}/A4"
+
+    opcoes = ["Nenhuma"]
+    mapa = {}
+    for r in registros:
+        nome = str(r.get('nome', '')).strip()
+        if not nome:
+            continue
+        largura_cm = n(r.get('largura_cm', 22))
+        comprimento_m = n(r.get('comprimento_m', 0))
+        valor_pago = n(r.get('valor_pago', 0))
+
+        # Uma folha A4 usa 29,7 cm = 0,297 m de comprimento.
+        # A largura da bobina define quantas folhas A4 cabem lado a lado.
+        folhas_lado = max(int(largura_cm // 21.0), 0)
+        if folhas_lado <= 0:
+            folhas_lado = 1 if largura_cm >= 21 else 0
+        metros_por_a4 = 0.297 / folhas_lado if folhas_lado else 0.0
+        custo_metro = valor_pago / comprimento_m if comprimento_m > 0 else n(r.get('custo_metro', 0))
+        custo_a4 = custo_metro * metros_por_a4 if custo_metro > 0 and metros_por_a4 > 0 else n(r.get('custo_a4', 0))
+
+        # Se houver valor calculado válido, ele sempre prevalece sobre um valor antigo salvo.
+        if custo_a4 <= 0:
+            custo_a4 = n(r.get('custo_a4', 0))
+
+        label = f"{nome} — {str(r.get('tipo','Laminação')).strip()} — {real(custo_a4)}/folha A4"
         opcoes.append(label)
-        mapa[label]={"id":int(r["id"]),"nome":str(r.get("nome","")).strip(),"tipo":str(r.get("tipo","")).strip(),"custo_unitario":float(custo_a4_calc),"custo_metro":float(custo_metro_calc),"folhas_a4":float(folhas_a4_calc)}
-    escolhido=c1.selectbox("Laminação",opcoes,key=f"lam_prec_{linha}")
-    qtd_padrao=float(folhas_estimadas) if escolhido!="Nenhuma" else 0.0
-    qtd=c2.number_input("Qtd A4/bases",min_value=0.0,value=qtd_padrao,step=1.0,key=f"lam_qtd_{linha}")
-    if escolhido=="Nenhuma" or qtd<=0:
-        c3.metric("Custo",real(0)); return None
-    item=mapa[escolhido].copy(); item["qtd"]=qtd; item["total"]=item["custo_unitario"]*qtd
-    c3.metric("Custo",real(item["total"]))
-    st.caption(f"Custo da laminação: {real(item['custo_unitario'])} por folha A4/base · {real(item['custo_metro'])} por metro")
+        mapa[label] = {
+            'id': r.get('id'),
+            'nome': nome,
+            'tipo': str(r.get('tipo', 'Laminação')).strip(),
+            'custo_unitario': float(custo_a4),
+            'custo_metro': float(custo_metro),
+            'folhas_a4': float((comprimento_m / metros_por_a4) if metros_por_a4 > 0 else n(r.get('folhas_a4', 0))),
+            'metros_por_a4': float(metros_por_a4),
+        }
+
+    escolhido = c1.selectbox("Laminação", opcoes, key=f"lam_prec_{linha}")
+    qtd_padrao = float(folhas_estimadas) if escolhido != "Nenhuma" else 0.0
+    qtd = c2.number_input(
+        "Qtd A4/bases", min_value=0.0, value=qtd_padrao, step=1.0,
+        key=f"lam_qtd_{linha}"
+    )
+    if escolhido == "Nenhuma" or qtd <= 0:
+        c3.metric("Custo", real(0))
+        return None
+
+    item = mapa[escolhido].copy()
+    item['qtd'] = qtd
+    item['total'] = item['custo_unitario'] * qtd
+    c3.metric("Custo", real(item['total']))
+    st.caption(
+        f"Custo da laminação: {real(item['custo_unitario'])} por folha A4 · "
+        f"{real(item['custo_metro'])} por metro · consumo de {item['metros_por_a4']:.3f} m/A4"
+    )
     return item
 
 def seletor_tinta(linha):
