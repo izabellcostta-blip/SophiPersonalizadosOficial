@@ -22,6 +22,8 @@ except Exception:
 
 
 EMPRESA = "Sophi Personalizados Oficial"
+SITE_CATALOGO_OFICIAL = "https://sophipersonalizadosoficial.offstore.me"
+APP_PORTAL_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 # No Railway, /data é o Volume persistente. Fora dele, mantém o comportamento local.
 DATA_DIR = Path(os.getenv("SOPHI_DATA_DIR", "/data" if Path("/data").exists() else "."))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -4617,7 +4619,7 @@ def tela_orcamentos():
                         f"Olá {dados_envio.get('cliente_nome') or 'cliente'}! 🤍\n\n"
                         f"Seu orçamento {codigo_envio} está pronto! ✨\n\n"
                         f"Estou enviando o orçamento para você conferir.\n\n"
-                        f"🔗 Você também pode acompanhar seu orçamento e futuras atualizações pelo Portal do Cliente:\n"
+                        f"🔐 Você também pode acompanhar seu orçamento e futuras atualizações pelo Portal do Cliente. Quando a arte estiver disponível, você poderá visualizá-la e aprová-la por lá:\n"
                         f"{link_portal_envio}\n\n"
                         f"Qualquer dúvida, estou à disposição! 💕\n\n"
                         f"Sophi Personalizados Oficial"
@@ -4959,14 +4961,9 @@ def criar_html_etiqueta(orcamento_id):
     except Exception:
         token = ""
 
-    try:
-        base_url = obter_config("catalogo_link_base", "").strip()
-    except Exception:
-        base_url = ""
-
-    if not base_url:
-        base_url = "https://sophipersonalizadosoficial.streamlit.app"
-
+    # O QR da etiqueta usa sempre o mesmo domínio oficial do Portal atual.
+    # Não reutiliza configurações antigas do catálogo/Streamlit.
+    base_url = SITE_CATALOGO_OFICIAL
     base_url = base_url.split("?")[0].rstrip("/")
     portal_url = f"{base_url}/?portal=cliente&token={token}" if token else f"{base_url}/?portal=cliente"
 
@@ -6726,17 +6723,9 @@ def detectar_pagina_publica():
 
 
 def link_catalogo_publico():
-    try:
-        app_url = obter_config("catalogo_link_base", "").strip()
-    except Exception:
-        app_url = ""
-
-    if app_url:
-        if "?pagina=catalogo" in app_url:
-            return app_url
-        return app_url.rstrip("/") + "/?pagina=catalogo"
-
-    return "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
+    # O catálogo oficial atual é o próprio domínio offstore.me.
+    # Não usa mais catalogo_link_base antigo para evitar links do Streamlit.
+    return SITE_CATALOGO_OFICIAL + "/"
 
 
 
@@ -6804,11 +6793,11 @@ def obter_app_url_padrao():
             return str(url).strip().rstrip("/")
     except Exception:
         pass
-    return "https://seuapp.streamlit.app"
+    return "https://sophipersonalizadosoficial.offstore.me"
 
 
 def gerar_link_portal_orcamento(orc_id, base_url=None):
-    base_url = (base_url or obter_app_url_padrao()).rstrip("/")
+    base_url = APP_PORTAL_URL_OFICIAL.rstrip("/")
     try:
         token = gerar_token_portal("Orçamento", int(orc_id))
     except TypeError:
@@ -7310,7 +7299,7 @@ def html_hero_catalogo_empresa():
 # AJUSTE FINAL — CATÁLOGO CENTRALIZADO + LOGO + PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = APP_PORTAL_URL_OFICIAL
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
@@ -11217,6 +11206,85 @@ def garantir_portal_cliente():
         status TEXT DEFAULT 'Nova'
     )
     """)
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_interacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT,
+        orcamento_id INTEGER,
+        tipo TEXT,
+        mensagem TEXT,
+        status TEXT DEFAULT 'Novo',
+        data TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_artes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        token TEXT,
+        nome_arquivo TEXT,
+        arquivo_path TEXT,
+        arquivo_blob BLOB,
+        mime_type TEXT,
+        tamanho_bytes INTEGER DEFAULT 0,
+        versao INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'Aguardando aprovação',
+        observacao TEXT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        ativo TEXT DEFAULT 'Sim'
+    )
+    """)
+    # Compatibilidade com instalações que já tinham portal_artes sem os novos campos.
+    for coluna, tipo in {
+        'arquivo_blob': 'BLOB',
+        'mime_type': 'TEXT',
+        'tamanho_bytes': 'INTEGER DEFAULT 0',
+    }.items():
+        try:
+            executar(f"ALTER TABLE portal_artes ADD COLUMN {coluna} {tipo}")
+        except Exception:
+            pass
+
+
+def registrar_portal_interacao(token, orcamento_id, tipo, mensagem='', status='Novo'):
+    garantir_portal_cliente()
+    executar("""
+    INSERT INTO portal_interacoes(token, orcamento_id, tipo, mensagem, status)
+    VALUES (?, ?, ?, ?, ?)
+    """, (str(token or ''), int(orcamento_id), str(tipo), str(mensagem or ''), str(status or 'Novo')))
+
+
+def obter_arte_portal(orcamento_id, apenas_ativa=True):
+    garantir_portal_cliente()
+    filtro = " AND ativo='Sim'" if apenas_ativa else ""
+    return consultar(f"""
+        SELECT * FROM portal_artes
+        WHERE orcamento_id=?{filtro}
+        ORDER BY versao DESC, id DESC
+    """, (int(orcamento_id),))
+
+
+def disponibilizar_arte_portal(orcamento_id, token, arquivo, nome_arquivo, mime_type):
+    garantir_portal_cliente()
+    dados = arquivo.getvalue() if arquivo is not None else b''
+    if not dados:
+        return None
+
+    existentes = consultar("SELECT COALESCE(MAX(versao),0) AS maior FROM portal_artes WHERE orcamento_id=?", (int(orcamento_id),))
+    proxima_versao = int(existentes.iloc[0]['maior'] or 0) + 1 if not existentes.empty else 1
+
+    # A nova versão passa a ser a única arte ativa do portal.
+    executar("UPDATE portal_artes SET ativo='Não' WHERE orcamento_id=? AND ativo='Sim'", (int(orcamento_id),))
+
+    arte_id = executar("""
+        INSERT INTO portal_artes(orcamento_id, token, nome_arquivo, arquivo_path, arquivo_blob, mime_type, tamanho_bytes, versao, status, observacao, ativo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Aguardando aprovação', '', 'Sim')
+    """, (
+        int(orcamento_id), str(token or ''), str(nome_arquivo or 'arte'), '', sqlite3.Binary(dados),
+        str(mime_type or 'application/octet-stream'), len(dados), proxima_versao
+    ))
+    registrar_portal_interacao(token, orcamento_id, 'Arte disponibilizada', f'Versão {proxima_versao}: {nome_arquivo}', 'Aguardando aprovação')
+    return arte_id
 
 
 def gerar_token_portal(tipo, referencia_id):
@@ -11248,33 +11316,41 @@ def tela_portal_cliente_publico():
     garantir_portal_cliente()
 
     try:
-        token = st.query_params.get("token", "")
+        token = str(st.query_params.get("token", "") or "").strip()
     except Exception:
         token = ""
 
     st.title("Portal do Cliente")
-    st.write("Acompanhe seu pedido da Sophi Personalizados.")
+    st.caption("Sophi Personalizados Oficial · acompanhe seu pedido, orçamento e aprovação da arte.")
 
     if not token:
         st.error("Link inválido.")
         st.stop()
 
     token_df = consultar("""
-    SELECT * FROM portal_tokens
-    WHERE token=? AND ativo='Sim'
-    LIMIT 1
-    """, (str(token),))
+        SELECT * FROM portal_tokens
+        WHERE token=? AND ativo='Sim'
+        LIMIT 1
+    """, (token,))
 
     if token_df.empty:
         st.error("Link inválido ou expirado.")
         st.stop()
 
     try:
+        validade = str(token_df.iloc[0].get("validade", "") or "").strip()
+        if validade and date.fromisoformat(validade) < date.today():
+            st.error("Este link do Portal do Cliente expirou.")
+            st.stop()
+    except Exception:
+        pass
+
+    try:
         executar("""
-        UPDATE portal_tokens
-        SET acessos=COALESCE(acessos,0)+1, ultimo_acesso=CURRENT_TIMESTAMP
-        WHERE token=?
-        """, (str(token),))
+            UPDATE portal_tokens
+            SET acessos=COALESCE(acessos,0)+1, ultimo_acesso=CURRENT_TIMESTAMP
+            WHERE token=?
+        """, (token,))
     except Exception:
         pass
 
@@ -11297,140 +11373,267 @@ def tela_portal_cliente_publico():
         st.stop()
 
     o = orc.iloc[0]
+    orc_id = int(o["id"])
+    codigo = codigo_visual("ORC", orc_id, ano=datetime.now().year)
+    cliente_nome = str(o.get("cliente_nome", "cliente") or "cliente")
 
-    st.subheader(f"Olá, {o.get('cliente_nome', 'cliente')} 🤍")
-
+    st.markdown(f"### Olá, {html.escape(cliente_nome)} 🤍")
     c1, c2, c3 = st.columns(3)
     with c1:
         card("Status", str(o.get("status", "")))
     with c2:
-        card("Total", real(o.get("total", 0)))
+        card("Valor do pedido", real(o.get("total", 0)))
     with c3:
-        card("Orçamento", codigo_visual("ORC", o.get("id", 0), ano=datetime.now().year))
+        card("Orçamento", codigo)
 
+    st.divider()
+    st.subheader("Seu orçamento")
     itens = consultar("""
-    SELECT produto, categoria, quantidade, valor_unitario, desconto, total
-    FROM orcamento_itens
-    WHERE orcamento_id=?
-    """, (int(o["id"]),))
-
-    st.subheader("Itens do pedido")
+        SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+        FROM orcamento_itens
+        WHERE orcamento_id=?
+    """, (orc_id,))
     if itens.empty:
         st.info("Nenhum item encontrado.")
     else:
         st.dataframe(formatar_valores_tabela(itens), use_container_width=True, hide_index=True)
 
-    st.subheader("Produção")
-    try:
-        op = consultar("""
-        SELECT * FROM ordens_producao
-        WHERE orcamento_id=? AND ativo='Sim'
-        ORDER BY id DESC LIMIT 1
-        """, (int(o["id"]),))
-    except Exception:
-        op = pd.DataFrame()
+    # ========================================================
+    # ARTE PARA APROVAÇÃO — mesma página do Portal do Cliente
+    # ========================================================
+    st.divider()
+    st.subheader("🎨 Arte para aprovação")
+    st.caption("Quando a arte estiver disponível, você poderá visualizar a versão enviada, aprovar ou solicitar alterações aqui mesmo, sem precisar receber a arte pelo WhatsApp.")
 
-    if op.empty:
-        st.info("Produção ainda não iniciada.")
+    artes = obter_arte_portal(orc_id, apenas_ativa=True)
+    if artes.empty:
+        st.info("A arte ainda não foi disponibilizada para este pedido. Assim que a Sophi enviar, ela aparecerá automaticamente neste mesmo Portal.")
     else:
-        opr = op.iloc[0]
-        st.write(f"**OP:** {codigo_op_seguro(opr['id'])}")
-        st.write(f"**Status:** {opr.get('status', '-')}")
-        st.write(f"**Previsão:** {opr.get('data_entrega', '-')}")
-        try:
-            checklist = json.loads(opr.get("checklist_json", "{}") or "{}")
-            for nome, feito in checklist.items():
-                st.write(("✅ " if feito else "⬜ ") + nome)
-        except Exception:
-            pass
+        arte = artes.iloc[0]
+        arte_id = int(arte["id"])
+        versao = int(arte.get("versao", 1) or 1)
+        nome_arquivo = str(arte.get("nome_arquivo", "Arte") or "Arte")
+        arte_status = str(arte.get("status", "Aguardando aprovação") or "Aguardando aprovação")
+        mime_type = str(arte.get("mime_type", "") or "")
+        blob = arte.get("arquivo_blob", None)
+        caminho = str(arte.get("arquivo_path", "") or "")
 
-    st.subheader("Entrega")
-    try:
-        entrega = consultar("""
-        SELECT * FROM entregas
-        WHERE referencia_tipo='OP'
-          AND referencia_id IN (SELECT id FROM ordens_producao WHERE orcamento_id=?)
-          AND ativo='Sim'
-        ORDER BY id DESC LIMIT 1
-        """, (int(o["id"]),))
-    except Exception:
-        entrega = pd.DataFrame()
+        st.markdown(f"**Versão {versao}** · `{html.escape(nome_arquivo)}`")
 
-    if entrega.empty:
-        st.info("Entrega ainda não cadastrada.")
-    else:
-        e = entrega.iloc[0]
-        st.write(f"**Código:** {e.get('codigo', '-')}")
-        st.write(f"**Status:** {e.get('status', '-')}")
-        st.write(f"**Data:** {e.get('data_entrega', '-')}")
-        st.write(f"**Tipo:** {e.get('tipo_entrega', '-')}")
+        exibiu = False
+        if blob is not None and not (isinstance(blob, float) and pd.isna(blob)):
+            try:
+                dados_arte = bytes(blob)
+                if mime_type.startswith("image/"):
+                    st.image(dados_arte, use_container_width=True)
+                    exibiu = True
+                st.download_button(
+                    "Baixar esta arte",
+                    data=dados_arte,
+                    file_name=nome_arquivo,
+                    mime=mime_type or "application/octet-stream",
+                    use_container_width=True,
+                    key=f"download_arte_portal_{arte_id}",
+                )
+            except Exception:
+                pass
 
+        if not exibiu and caminho:
+            try:
+                caminho_obj = Path(caminho)
+                if caminho_obj.exists():
+                    if mime_type.startswith("image/") or caminho_obj.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                        st.image(str(caminho_obj), use_container_width=True)
+                    st.download_button(
+                        "Baixar esta arte",
+                        data=caminho_obj.read_bytes(),
+                        file_name=nome_arquivo,
+                        mime=mime_type or "application/octet-stream",
+                        use_container_width=True,
+                        key=f"download_arte_path_{arte_id}",
+                    )
+                    exibiu = True
+            except Exception:
+                pass
+
+        if not exibiu:
+            st.warning("A arte foi enviada, mas não foi possível exibir a prévia neste dispositivo. Use o botão de download para visualizar o arquivo.")
+
+        st.info(f"Status da arte: {arte_status}")
+
+        if arte_status not in ("Aprovada", "Aprovado"):
+            a, b = st.columns(2)
+            with a:
+                if st.button("✓ Aprovar esta arte", type="primary", use_container_width=True, key=f"aprovar_arte_portal_{arte_id}"):
+                    executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (arte_id,))
+                    registrar_portal_interacao(token, orc_id, "Aprovação de arte", "Cliente aprovou a arte.", "Aprovada")
+                    st.session_state[f"arte_aprovada_{arte_id}"] = True
+                    st.success("Arte aprovada! A Sophi já recebeu sua aprovação.")
+                    st.rerun()
+            with b:
+                if st.button("✎ Solicitar alteração", use_container_width=True, key=f"pedir_alteracao_arte_portal_{arte_id}"):
+                    st.session_state[f"abrir_alteracao_arte_{arte_id}"] = True
+
+            if st.session_state.get(f"abrir_alteracao_arte_{arte_id}"):
+                feedback = st.text_area(
+                    "O que você gostaria de alterar?",
+                    placeholder="Ex.: trocar a cor, alterar o texto, aumentar o nome, mudar a foto...",
+                    key=f"feedback_arte_{arte_id}",
+                )
+                if st.button("Enviar solicitação de alteração", type="primary", use_container_width=True, key=f"enviar_feedback_arte_{arte_id}"):
+                    if not feedback.strip():
+                        st.warning("Descreva o que você gostaria de alterar.")
+                    else:
+                        executar("""
+                            UPDATE portal_artes
+                            SET status='Alteração solicitada', observacao=?
+                            WHERE id=?
+                        """, (feedback.strip(), arte_id))
+                        executar("""
+                            INSERT INTO portal_mensagens(token, cliente_nome, mensagem, status)
+                            VALUES (?, ?, ?, 'Nova')
+                        """, (token, cliente_nome, f"Alteração da arte {codigo} — versão {versao}: {feedback.strip()}"))
+                        registrar_portal_interacao(token, orc_id, "Alteração de arte", feedback.strip(), "Pendente")
+
+                        numero = limpar_numero_whatsapp(obter_config("whatsapp", ""))
+                        if numero:
+                            import urllib.parse
+                            texto_wpp = (
+                                f"Olá, Sophi! 🤍\n\n"
+                                f"Estou falando pelo Portal do Cliente sobre o pedido {codigo}.\n\n"
+                                f"🎨 Solicitação de alteração da arte — versão {versao}:\n"
+                                f"{feedback.strip()}\n\n"
+                                f"Obrigada!"
+                            )
+                            st.session_state[f"feedback_wpp_{arte_id}"] = link_whatsapp(numero, texto_wpp)
+                        st.session_state[f"abrir_alteracao_arte_{arte_id}"] = False
+                        st.success("Sua solicitação foi registrada no Portal. Você também pode enviá-la pelo WhatsApp usando o botão abaixo.")
+                        st.rerun()
+
+        feedback_wpp = st.session_state.get(f"feedback_wpp_{arte_id}", "")
+        if feedback_wpp:
+            st.link_button("💬 Enviar este feedback pelo WhatsApp", feedback_wpp, use_container_width=True)
+
+    st.divider()
     st.subheader("Falar com a Sophi")
     whatsapp = obter_config("whatsapp", "")
     if whatsapp:
+        numero = limpar_numero_whatsapp(whatsapp)
         import urllib.parse
-        numero = "".join([c for c in whatsapp if c.isdigit()])
-        msg = f"Olá, estou acompanhando meu pedido pelo portal."
-        link = f"https://wa.me/55{numero}?text={urllib.parse.quote(msg)}" if numero and not numero.startswith("55") else f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
-        st.link_button("Chamar no WhatsApp", link)
+        msg = f"Olá! Estou falando pelo Portal do Cliente sobre o pedido {codigo}."
+        link = f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
+        st.link_button("💬 Falar com atendimento pelo WhatsApp", link, use_container_width=True)
+
+    st.caption("As decisões feitas neste Portal ficam registradas no sistema da Sophi Personalizados Oficial.")
 
 
 def tela_portal_cliente_admin():
     garantir_portal_cliente()
 
     st.title("Portal do Cliente")
-    st.write("Gere links para o cliente acompanhar orçamento, produção e entrega.")
+    st.write("Gere o link do orçamento e disponibilize a arte para aprovação dentro do próprio Portal do Cliente.")
 
-    abas = st.tabs(["Gerar link", "Links gerados"])
-
-    with abas[0]:
-        orcs = consultar("""
+    orcs = consultar("""
         SELECT id, cliente_nome, whatsapp, status, total
         FROM orcamentos
         ORDER BY id DESC
         LIMIT 500
-        """)
+    """)
 
-        if orcs.empty:
-            st.info("Nenhum orçamento encontrado.")
-        else:
-            mapa = {
-                f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
-                for _, r in orcs.iterrows()
-            }
-            esc = st.selectbox("Escolha o orçamento", list(mapa.keys()))
-            orc_id = mapa[esc]
-            o = orcs[orcs["id"] == orc_id].iloc[0]
-            codigo = codigo_visual("ORC", int(orc_id), ano=datetime.now().year)
+    if orcs.empty:
+        st.info("Nenhum orçamento encontrado.")
+        return
 
-            base_url = st.text_input("Link principal do seu app", value=obter_app_url_padrao())
-            if st.button("Gerar link do portal", use_container_width=True):
-                link = gerar_link_portal_orcamento(int(orc_id), base_url)
-                st.session_state["portal_link_gerado"] = link
-                st.session_state["portal_orc_id_gerado"] = int(orc_id)
-                st.success("Link gerado.")
+    mapa = {
+        f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r['id'])
+        for _, r in orcs.iterrows()
+    }
+    esc = st.selectbox("Escolha o orçamento", list(mapa.keys()), key="portal_cliente_orcamento")
+    orc_id = mapa[esc]
+    o = orcs[orcs["id"] == orc_id].iloc[0]
+    codigo = codigo_visual("ORC", int(orc_id), ano=datetime.now().year)
 
-            link = st.session_state.get("portal_link_gerado", "")
-            if link and st.session_state.get("portal_orc_id_gerado") == int(orc_id):
-                st.code(link)
-                msg = mensagem_portal_cliente(o["cliente_nome"], codigo, str(o["status"]), real(o["total"]), link)
-                msg_final = st.text_area("Mensagem pronta para WhatsApp", value=msg, height=180, key=f"msg_portal_{orc_id}")
-                link_wpp = link_whatsapp(o["whatsapp"], msg_final)
-                if link_wpp:
-                    st.link_button("Enviar portal no WhatsApp", link_wpp, use_container_width=True)
-                else:
-                    st.warning("Este orçamento não tem WhatsApp cadastrado.")
-                st.link_button("Abrir portal do cliente", link, use_container_width=True)
+    link = gerar_link_portal_orcamento(int(orc_id), APP_URL_OFICIAL)
+    msg = mensagem_portal_cliente(o["cliente_nome"], codigo, str(o["status"]), real(o["total"]), link)
 
-    with abas[1]:
-        try:
-            toks = consultar("SELECT * FROM portal_tokens ORDER BY id DESC LIMIT 500")
-        except Exception:
-            toks = pd.DataFrame()
-        if toks.empty:
-            st.info("Nenhum link gerado.")
-        else:
-            st.dataframe(formatar_valores_tabela(toks), use_container_width=True, hide_index=True)
+    st.markdown("### 🔐 Link do Portal")
+    st.code(link)
+    msg_final = st.text_area("Mensagem pronta para WhatsApp", value=msg, height=190, key=f"msg_portal_{orc_id}")
+    link_wpp = link_whatsapp(o["whatsapp"], msg_final)
+    if link_wpp:
+        st.link_button("Enviar Portal no WhatsApp", link_wpp, use_container_width=True)
+    else:
+        st.warning("Este orçamento não tem WhatsApp cadastrado.")
+    st.link_button("Abrir Portal do Cliente", link, use_container_width=True)
+
+    st.divider()
+    st.markdown("### 🎨 Arte para aprovação")
+    st.caption("É aqui que você coloca a arte. Depois de disponibilizada, ela aparece automaticamente dentro do link do Portal deste orçamento para a cliente visualizar, aprovar ou solicitar alteração.")
+
+    artes = obter_arte_portal(orc_id, apenas_ativa=True)
+    if not artes.empty:
+        arte_atual = artes.iloc[0]
+        versao_atual = int(arte_atual.get("versao", 1) or 1)
+        status_atual = str(arte_atual.get("status", "Aguardando aprovação") or "Aguardando aprovação")
+        st.success(f"Arte ativa: versão {versao_atual} · {arte_atual.get('nome_arquivo', 'Arte')} · {status_atual}")
+
+        blob = arte_atual.get("arquivo_blob", None)
+        mime = str(arte_atual.get("mime_type", "") or "")
+        if blob is not None and not (isinstance(blob, float) and pd.isna(blob)) and mime.startswith("image/"):
+            try:
+                st.image(bytes(blob), use_container_width=True)
+            except Exception:
+                pass
+        elif str(arte_atual.get("arquivo_path", "") or "") and Path(str(arte_atual.get("arquivo_path"))).exists():
+            try:
+                st.image(str(arte_atual.get("arquivo_path")), use_container_width=True)
+            except Exception:
+                pass
+
+    with st.container(border=True):
+        st.markdown("#### 📤 Enviar nova arte / nova versão")
+        st.caption("Selecione o arquivo final da arte. Ao disponibilizar, a versão anterior deixa de ser a ativa e esta passa a ser a versão exibida no Portal.")
+        arquivo = st.file_uploader(
+            "Selecionar arte",
+            type=["png", "jpg", "jpeg", "webp", "pdf"],
+            accept_multiple_files=False,
+            key=f"upload_arte_portal_{orc_id}",
+            help="Prefira PNG, JPG, JPEG ou WEBP para que a cliente consiga visualizar a arte diretamente no Portal. PDFs também podem ser enviados para download.",
+            max_upload_size=20,
+        )
+
+        if arquivo is not None:
+            mime = str(arquivo.type or "")
+            dados = arquivo.getvalue()
+            if mime.startswith("image/"):
+                try:
+                    st.image(dados, caption="Pré-visualização antes de disponibilizar", use_container_width=True)
+                except Exception:
+                    pass
+            else:
+                st.info(f"Arquivo selecionado: {arquivo.name} · {len(dados) / 1024:.1f} KB")
+
+            if st.button("📤 Disponibilizar arte no Portal", type="primary", use_container_width=True, key=f"disponibilizar_arte_{orc_id}"):
+                try:
+                    token = gerar_token_portal("Orçamento", int(orc_id))
+                    arte_id = disponibilizar_arte_portal(int(orc_id), token, arquivo, arquivo.name, mime)
+                    if arte_id:
+                        st.success("Arte disponibilizada no Portal do Cliente. A cliente já pode abrir o mesmo link e aprovar ou solicitar alterações.")
+                        st.rerun()
+                    else:
+                        st.error("Não foi possível salvar a arte.")
+                except Exception as e:
+                    st.error(f"Não foi possível disponibilizar a arte: {e}")
+
+    st.divider()
+    st.markdown("### Histórico de versões")
+    historico = obter_arte_portal(orc_id, apenas_ativa=False)
+    if historico.empty:
+        st.info("Nenhuma arte foi disponibilizada para este orçamento.")
+    else:
+        exibicao = historico[[c for c in ["versao", "nome_arquivo", "status", "data", "ativo"] if c in historico.columns]].copy()
+        exibicao.columns = ["Versão", "Arquivo", "Status", "Data", "Ativa"]
+        st.dataframe(exibicao, use_container_width=True, hide_index=True)
 
 # ============================================================
 # MÓDULO 9 — CENTRAL DE AUTOMAÇÃO / ALERTAS INTELIGENTES
@@ -12952,14 +13155,51 @@ def limpar_texto_whatsapp(texto):
     return texto
 
 
-def aplicar_variaveis_mensagem(modelo, nome="", codigo="", valor="", data="", link="", pix=""):
+def variaveis_mensagem_configuradas():
+    """Retorna as variáveis editáveis da aba Mensagens.
+    O valor real de cada variável continua sendo preenchido automaticamente pelo ERP.
+    """
+    padrao = {
+        "nome": ("{nome}", "Nome do cliente"),
+        "id": ("{id}", "Número/código do orçamento ou pedido"),
+        "valor": ("{valor}", "Valor total do orçamento/pedido"),
+        "data": ("{data}", "Data prevista de entrega"),
+        "pix": ("{pix}", "Chave/dados de Pix da Sophi"),
+        "link": ("{link}", "Link do Portal do Cliente — automático e individual para cada orçamento/pedido"),
+        "site": ("{site}", "Link do Site/Catálogo Online — Sophi Personalizados"),
+        "status": ("{status}", "Status atual do orçamento/pedido"),
+        "empresa": ("{empresa}", "Nome da empresa"),
+    }
+    resultado = {}
+    for chave, (token_padrao, descricao_padrao) in padrao.items():
+        token = str(obter_config(f"whatsapp_var_token_{chave}", token_padrao) or token_padrao).strip() or token_padrao
+        descricao = str(obter_config(f"whatsapp_var_desc_{chave}", descricao_padrao) or descricao_padrao).strip() or descricao_padrao
+        resultado[chave] = {"token": token, "padrao": token_padrao, "descricao": descricao}
+    return resultado
+
+
+def aplicar_variaveis_mensagem(modelo, nome="", codigo="", valor="", data="", link="", pix="", status="", empresa="Sophi Personalizados Oficial", site=""):
     texto = str(modelo or "")
-    texto = texto.replace("{nome}", str(nome or "cliente"))
-    texto = texto.replace("{id}", str(codigo or ""))
-    texto = texto.replace("{valor}", str(valor or ""))
-    texto = texto.replace("{data}", str(data or ""))
-    texto = texto.replace("{link}", str(link or ""))
-    texto = texto.replace("{pix}", str(pix or pix_empresa()))
+    valores = {
+        "nome": str(nome or "cliente"),
+        "id": str(codigo or ""),
+        "valor": str(valor or ""),
+        "data": str(data or ""),
+        "pix": str(pix or pix_empresa()),
+        "link": str(link or ""),
+        "site": str(site or SITE_CATALOGO_OFICIAL),
+        "status": str(status or ""),
+        "empresa": str(empresa or "Sophi Personalizados Oficial"),
+    }
+    configuradas = variaveis_mensagem_configuradas()
+    for chave, valor_real in valores.items():
+        info = configuradas[chave]
+        # Aceita o token padrão e o token personalizado definido pela própria usuária.
+        for token in dict.fromkeys([info["padrao"], info["token"]]):
+            if token:
+                texto = texto.replace(token, valor_real)
+                # Também aceita a versão em MAIÚSCULAS, ex.: {LINK}.
+                texto = texto.replace(token.upper(), valor_real)
     try:
         return limpar_texto_whatsapp(texto)
     except Exception:
@@ -13091,12 +13331,14 @@ def modelos_whatsapp_padrao():
         "Recompra / cliente parado": (
             "Olá {nome}, tudo bem? 🤍\n\n"
             "Passando para te mostrar que temos novidades lindas na Sophi Personalizados Oficial.\n\n"
-            "Temos opções de presentes personalizados, fotos, lembranças e produtos feitos para eternizar momentos especiais. ✨"
+            "Temos opções de presentes personalizados, fotos, lembranças e produtos feitos para eternizar momentos especiais. ✨\n\n"
+            "🛍️ Confira nosso site e catálogo: {site}"
         ),
         "Promoção / novidade": (
             "Olá {nome}! ✨\n\n"
             "Temos novidades especiais na Sophi Personalizados Oficial.\n\n"
-            "Se quiser, posso te enviar algumas opções personalizadas e valores promocionais disponíveis no momento. 💜"
+            "Confira nosso site e catálogo para ver as opções disponíveis: {site}\n\n"
+            "Se quiser, também posso te ajudar a escolher uma opção personalizada. 💜"
         ),
     }
 
@@ -13149,21 +13391,58 @@ def pix_empresa():
     return "INFORME SUA CHAVE PIX NAS CONFIGURAÇÕES"
 
 
-def aplicar_variaveis_mensagem(modelo, nome="", codigo="", valor="", data="", link="", pix=""):
+def variaveis_mensagem_configuradas():
+    """Retorna as variáveis editáveis da aba Mensagens.
+    O valor real de cada variável continua sendo preenchido automaticamente pelo ERP.
+    """
+    padrao = {
+        "nome": ("{nome}", "Nome do cliente"),
+        "id": ("{id}", "Número/código do orçamento ou pedido"),
+        "valor": ("{valor}", "Valor total do orçamento/pedido"),
+        "data": ("{data}", "Data prevista de entrega"),
+        "pix": ("{pix}", "Chave/dados de Pix da Sophi"),
+        "link": ("{link}", "Link do Portal do Cliente — automático e individual para cada orçamento/pedido"),
+        "site": ("{site}", "Link do Site/Catálogo Online — Sophi Personalizados"),
+        "status": ("{status}", "Status atual do orçamento/pedido"),
+        "empresa": ("{empresa}", "Nome da empresa"),
+    }
+    resultado = {}
+    for chave, (token_padrao, descricao_padrao) in padrao.items():
+        token = str(obter_config(f"whatsapp_var_token_{chave}", token_padrao) or token_padrao).strip() or token_padrao
+        descricao = str(obter_config(f"whatsapp_var_desc_{chave}", descricao_padrao) or descricao_padrao).strip() or descricao_padrao
+        resultado[chave] = {"token": token, "padrao": token_padrao, "descricao": descricao}
+    return resultado
+
+
+def aplicar_variaveis_mensagem(modelo, nome="", codigo="", valor="", data="", link="", pix="", status="", empresa="Sophi Personalizados Oficial", site=""):
     texto = str(modelo or "")
-    texto = texto.replace("{nome}", str(nome or "cliente"))
-    texto = texto.replace("{id}", str(codigo or ""))
-    texto = texto.replace("{valor}", str(valor or ""))
-    texto = texto.replace("{data}", str(data or ""))
-    texto = texto.replace("{link}", str(link or ""))
-    texto = texto.replace("{pix}", str(pix or pix_empresa()))
+    valores = {
+        "nome": str(nome or "cliente"),
+        "id": str(codigo or ""),
+        "valor": str(valor or ""),
+        "data": str(data or ""),
+        "pix": str(pix or pix_empresa()),
+        "link": str(link or ""),
+        "site": str(site or SITE_CATALOGO_OFICIAL),
+        "status": str(status or ""),
+        "empresa": str(empresa or "Sophi Personalizados Oficial"),
+    }
+    configuradas = variaveis_mensagem_configuradas()
+    for chave, valor_real in valores.items():
+        info = configuradas[chave]
+        # Aceita o token padrão e o token personalizado definido pela própria usuária.
+        for token in dict.fromkeys([info["padrao"], info["token"]]):
+            if token:
+                texto = texto.replace(token, valor_real)
+                # Também aceita a versão em MAIÚSCULAS, ex.: {LINK}.
+                texto = texto.replace(token.upper(), valor_real)
     try:
         return limpar_texto_whatsapp(texto)
     except Exception:
         return texto
 
 
-def template_mensagem_whatsapp(tipo, cliente_nome="", codigo="", status="", data_entrega="", total="", empresa="Sophi Personalizados Oficial"):
+def template_mensagem_whatsapp(tipo, cliente_nome="", codigo="", status="", data_entrega="", total="", empresa="Sophi Personalizados Oficial", link=""):
     nome = cliente_nome or "cliente"
     codigo = codigo or ""
     total = total or ""
@@ -13176,6 +13455,10 @@ def template_mensagem_whatsapp(tipo, cliente_nome="", codigo="", status="", data
         valor=total,
         data=data_txt,
         pix=pix_empresa(),
+        link=link,
+        status=status,
+        empresa=empresa,
+        site=SITE_CATALOGO_OFICIAL,
     )
 
 
@@ -13380,17 +13663,31 @@ def garantir_modelo_portal_cliente():
         tipo = "Portal do Cliente"
         mensagem = (
             "Olá {nome}! 🤍\n\n"
-            "Você pode acompanhar o status do seu pedido em tempo real pelo link abaixo:\n\n"
-            "Pedido: {id}\n"
-            "Status atual: {status}\n"
-            "Valor: {valor}\n\n"
-            "Acompanhar meu pedido:\n{link}\n\n"
-            "Sempre que atualizarmos seu pedido no sistema, esse mesmo link será atualizado automaticamente. ✨\n\n"
-            "Equipe Sophi Personalizados Oficial"
+            "Seu pedido {id} está disponível no Portal do Cliente.\n\n"
+            "💰 Valor: {valor}\n"
+            "📌 Status: {status}\n\n"
+            "🔐 Acesse seu Portal para conferir o orçamento, acompanhar as atualizações e, quando a arte estiver disponível, visualizar e aprovar ou solicitar alterações diretamente por lá:\n"
+            "{link}\n\n"
+            "Sempre que atualizarmos seu pedido, o mesmo link será atualizado automaticamente. ✨\n\n"
+            "Equipe Sophi Personalizados Oficial 💜"
         )
-        existe = consultar("SELECT id FROM whatsapp_modelos WHERE tipo=?", (tipo,))
+        existe = consultar("SELECT id, mensagem FROM whatsapp_modelos WHERE tipo=?", (tipo,))
         if existe.empty:
             salvar_modelo_whatsapp(tipo, mensagem)
+        else:
+            atual = str(existe.iloc[0].get("mensagem", "") or "")
+            antigo = (
+                "Olá {nome}! 🤍\n\n"
+                "Você pode acompanhar o status do seu pedido em tempo real pelo link abaixo:\n\n"
+                "Pedido: {id}\n"
+                "Status atual: {status}\n"
+                "Valor: {valor}\n\n"
+                "Acompanhar meu pedido:\n{link}\n\n"
+                "Sempre que atualizarmos seu pedido no sistema, esse mesmo link será atualizado automaticamente. ✨\n\n"
+                "Equipe Sophi Personalizados Oficial"
+            )
+            if atual.strip() == antigo.strip():
+                salvar_modelo_whatsapp(tipo, mensagem)
     except Exception:
         pass
 
@@ -13401,7 +13698,7 @@ def garantir_modelo_portal_cliente():
 # CORREÇÃO FINAL WHATSAPP: CATÁLOGO ONLINE + PORTAL ÚNICO
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = APP_PORTAL_URL_OFICIAL
 
 def modelo_pedido_recebido_catalogo_online():
     return (
@@ -13415,8 +13712,10 @@ def modelo_pedido_recebido_catalogo_online():
         "{pix}\n\n"
         "Após realizar o pagamento, envie o comprovante por este WhatsApp para confirmarmos a transação.\n\n"
         "Assim que o pagamento for confirmado, seu pedido será liberado para produção. 💖\n\n"
-        "🔗 Você também pode acompanhar o status do seu pedido pelo portal:\n"
+        "🔐 Você também pode acompanhar seu pedido pelo Portal do Cliente. Quando a arte estiver disponível, ela aparecerá nesse mesmo link para aprovação:\n"
         "{link}\n\n"
+        "🛍️ Para conhecer produtos e fazer novos pedidos, acesse nosso site e catálogo:\n"
+        "{site}\n\n"
         "Equipe Sophi Personalizados Oficial 💜"
     )
 
@@ -13441,12 +13740,33 @@ def garantir_modelo_catalogo_online():
         pass
 
     try:
-        existe = consultar("SELECT id FROM whatsapp_modelos WHERE tipo=?", ("Pedido recebido - Catálogo Online",))
+        existe = consultar("SELECT id, mensagem FROM whatsapp_modelos WHERE tipo=?", ("Pedido recebido - Catálogo Online",))
         if existe.empty:
             executar("""
             INSERT INTO whatsapp_modelos(tipo, mensagem, ativo, atualizado_em)
             VALUES (?, ?, 'Sim', CURRENT_TIMESTAMP)
             """, ("Pedido recebido - Catálogo Online", modelo_pedido_recebido_catalogo_online()))
+        else:
+            atual = str(existe.iloc[0].get("mensagem", "") or "")
+            antigo = (
+                "🛒 Pedido recebido - Catálogo Online\n\n"
+                "Olá, {nome}! 🤍\n\n"
+                "Recebemos seu pedido realizado em nossa loja online e ele já chegou em nosso sistema. ✨\n\n"
+                "📋 Pedido: {id}\n"
+                "💰 Valor total: {valor}\n\n"
+                "Para iniciarmos a produção, é necessário efetuar o pagamento via Pix:\n\n"
+                "💳 Pix:\n"
+                "{pix}\n\n"
+                "Após realizar o pagamento, envie o comprovante por este WhatsApp para confirmarmos a transação.\n\n"
+                "Assim que o pagamento for confirmado, seu pedido será liberado para produção. 💖\n\n"
+                "🔗 Você também pode acompanhar o status do seu pedido pelo portal:\n"
+                "{link}\n\n"
+                "🛍️ Conheça nosso site e catálogo:\n"
+                "{site}\n\n"
+                "Equipe Sophi Personalizados Oficial 💜"
+            )
+            if atual.strip() == antigo.strip():
+                salvar_modelo_whatsapp("Pedido recebido - Catálogo Online", modelo_pedido_recebido_catalogo_online())
     except Exception:
         pass
 
@@ -13471,6 +13791,7 @@ def montar_mensagem_catalogo_online(nome, codigo, valor, pix="", link=""):
         .replace("{valor}", str(valor or ""))
         .replace("{pix}", str(pix or pix_empresa()))
         .replace("{link}", str(link or ""))
+        .replace("{site}", SITE_CATALOGO_OFICIAL)
     )
 
 
@@ -13528,7 +13849,7 @@ def tela_mensagens_whatsapp():
     </div>
     """, unsafe_allow_html=True)
 
-    abas = st.tabs(["Modelos por pedido", "Por cliente", "Editar modelos", "Aniversariantes", "Clientes parados"])
+    abas = st.tabs(["Modelos por pedido", "Por cliente", "Editar modelos", "Variáveis", "Aniversariantes", "Clientes parados"])
 
     with abas[0]:
         orcs = consultar("""
@@ -13595,7 +13916,7 @@ def tela_mensagens_whatsapp():
                 st.markdown("### Editar mensagem")
                 st.caption("Variáveis disponíveis:")
                 st.markdown(
-                    '<span class="var-pill">{nome}</span><span class="var-pill">{id}</span><span class="var-pill">{valor}</span><span class="var-pill">{data}</span><span class="var-pill">{pix}</span><span class="var-pill">{link}</span>',
+                    '<span class="var-pill">{nome}</span><span class="var-pill">{id}</span><span class="var-pill">{valor}</span><span class="var-pill">{data}</span><span class="var-pill">{pix}</span><span class="var-pill">{link}</span><span class="var-pill">{site}</span><span class="var-pill">{status}</span><span class="var-pill">{empresa}</span>',
                     unsafe_allow_html=True,
                 )
 
@@ -13633,7 +13954,9 @@ def tela_mensagens_whatsapp():
                     data=data_br(o.get("data_prevista_entrega", "")) if o.get("data_prevista_entrega", "") else "",
                     pix=pix_empresa(),
                     link=link_portal_cliente,
-                ).replace("{status}", status_atual_cliente)
+                    status=status_atual_cliente,
+                    site=SITE_CATALOGO_OFICIAL,
+                )
 
                 with st.expander("Mensagem final antes de enviar"):
                     mensagem_final_editavel = st.text_area(
@@ -13677,6 +14000,7 @@ def tela_mensagens_whatsapp():
                             data_entrega=o.get("data_prevista_entrega", ""),
                             total=real(o["total"]),
                             empresa=obter_config("nome_empresa", EMPRESA),
+                            link=link_portal_cliente,
                         )
                         link_atalho = link_whatsapp(o["whatsapp"], msg_atalho)
                         if link_atalho:
@@ -13791,7 +14115,7 @@ def tela_mensagens_whatsapp():
                         st.success("Modelo restaurado.")
                         st.rerun()
 
-                mensagem_editada = aplicar_variaveis_mensagem(modelo_edit, nome=c["nome"], pix=pix_empresa())
+                mensagem_editada = aplicar_variaveis_mensagem(modelo_edit, nome=c["nome"], pix=pix_empresa(), site=SITE_CATALOGO_OFICIAL)
                 link = link_whatsapp(c["whatsapp"], mensagem_editada)
                 if link:
                     st.link_button("Enviar no WhatsApp", link, use_container_width=True)
@@ -13815,7 +14139,7 @@ def tela_mensagens_whatsapp():
             tipo_modelo = st.selectbox("Modelo para editar", list(modelos["tipo"]), key="editar_todos_modelos")
             atual = modelos[modelos["tipo"] == tipo_modelo].iloc[0]
             texto = st.text_area("Mensagem do modelo", value=str(atual["mensagem"] or ""), height=360, key=f"modelo_global_{tipo_modelo}")
-            st.caption("Use {nome}, {id}, {valor}, {data}, {pix} e {link}. Pode colar emojis do WhatsApp aqui.")
+            st.caption("Use os marcadores definidos na aba Variáveis. Por padrão: {nome}, {id}, {valor}, {data}, {pix}, {link}, {site}, {status} e {empresa}. {link} é o Portal do Cliente e é automático por pedido; {site} é o seu site/catálogo. Você pode trocar os nomes dos marcadores na aba Variáveis. Pode colar emojis do WhatsApp aqui.")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Salvar este modelo", key=f"salvar_global_{tipo_modelo}", use_container_width=True):
@@ -13829,6 +14153,67 @@ def tela_mensagens_whatsapp():
                     st.rerun()
 
     with abas[3]:
+        st.subheader("Variáveis das mensagens")
+        st.caption("Você pode definir como quer escrever cada marcador dentro dos modelos. O valor real continua sendo preenchido automaticamente pelo ERP. {link} é o Portal do Cliente individual e automático; {site} é o seu Site/Catálogo.")
+
+        vars_cfg = variaveis_mensagem_configuradas()
+        ordem_vars = ["nome", "id", "valor", "data", "pix", "link", "site", "status", "empresa"]
+        descricoes = {
+            "nome": "Nome do cliente",
+            "id": "Número/código do orçamento ou pedido",
+            "valor": "Valor total do orçamento/pedido",
+            "data": "Data prevista de entrega",
+            "pix": "Chave/dados de Pix",
+            "link": "Portal do Cliente (automático por cliente/pedido)",
+            "site": "Site/Catálogo Online",
+            "status": "Status atual do pedido",
+            "empresa": "Nome da empresa",
+        }
+
+        st.info("Exemplo: {link} = Portal do Cliente (automático). {site} = Site/Catálogo. Você pode trocar o nome dos marcadores na tabela abaixo; os valores reais continuam sendo preenchidos pelo ERP.")
+
+        for chave in ordem_vars:
+            info = vars_cfg[chave]
+            c1, c2, c3 = st.columns([1, 1.7, 1.8])
+            with c1:
+                st.text_input(
+                    f"Marcador de {descricoes[chave]}",
+                    value=info["token"],
+                    key=f"wpp_var_token_edit_{chave}",
+                )
+            with c2:
+                st.text_input(
+                    "O que essa variável significa",
+                    value=info["descricao"],
+                    key=f"wpp_var_desc_edit_{chave}",
+                )
+            with c3:
+                if chave == "link":
+                    st.text_input("Valor", value="Automático • Portal individual", disabled=True, key=f"wpp_var_value_{chave}")
+                elif chave == "site":
+                    st.text_input("Valor", value=SITE_CATALOGO_OFICIAL, disabled=True, key=f"wpp_var_value_{chave}")
+                elif chave == "pix":
+                    st.text_input("Valor", value="Automático • Configuração Pix", disabled=True, key=f"wpp_var_value_{chave}")
+                else:
+                    st.text_input("Valor", value="Automático pelo ERP", disabled=True, key=f"wpp_var_value_{chave}")
+            st.caption(f"Exemplo: {info['token']} → {info['descricao']}")
+
+        if st.button("Salvar variáveis", type="primary", use_container_width=True, key="salvar_variaveis_wpp"):
+            for chave in ordem_vars:
+                token = str(st.session_state.get(f"wpp_var_token_edit_{chave}", vars_cfg[chave]["token"]) or "").strip()
+                descricao = str(st.session_state.get(f"wpp_var_desc_edit_{chave}", vars_cfg[chave]["descricao"]) or "").strip()
+                if not token:
+                    token = vars_cfg[chave]["padrao"]
+                salvar_config(f"whatsapp_var_token_{chave}", token)
+                salvar_config(f"whatsapp_var_desc_{chave}", descricao or vars_cfg[chave]["descricao"])
+            st.success("Variáveis salvas. Agora você pode usar os marcadores personalizados nos modelos.")
+            st.rerun()
+
+        st.markdown("### Como usar")
+        st.write("Escreva o marcador dentro do modelo exatamente como aparece acima. O ERP troca automaticamente pelo valor real no momento do envio. Você pode mudar o nome do marcador; o Portal e o Site continuam com seus valores automáticos.")
+        st.write("**Importante:** {link} não precisa ser preenchido por você. Em mensagens ligadas a orçamento/pedido, o ERP gera o Portal individual do cliente automaticamente. Já {site} sempre aponta para o seu catálogo atual.")
+
+    with abas[4]:
         try:
             anivers = aniversariantes_periodo()
         except Exception:
@@ -14058,7 +14443,7 @@ def exigir_login():
 # LOJA ONLINE + PORTAL DO CLIENTE — VERSÃO FINAL
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = APP_PORTAL_URL_OFICIAL
 
 def obter_app_url_padrao():
     return APP_URL_OFICIAL
@@ -14118,7 +14503,8 @@ def codigo_pedido_catalogo(pid):
 
 
 def gerar_link_portal_orcamento(orc_id, base_url=None):
-    base_url = (base_url or APP_URL_OFICIAL).rstrip("/")
+    # O Portal usa o endereço do ERP hospedado; o catálogo continua em offstore.me.
+    base_url = APP_PORTAL_URL_OFICIAL.rstrip("/")
     try:
         token = gerar_token_portal("Orçamento", int(orc_id))
     except TypeError:
@@ -14130,13 +14516,13 @@ def mensagem_portal_cliente(cliente_nome, codigo, status, total, link):
     nome = cliente_nome or "cliente"
     texto = (
         f"Olá {nome}! 🤍\n\n"
-        f"Você pode acompanhar o status do seu pedido em tempo real pelo link abaixo:\n\n"
-        f"Pedido: {codigo}\n"
-        f"Status atual: {status}\n"
-        f"Valor: {total}\n\n"
-        f"Acompanhar meu pedido:\n{link}\n\n"
-        f"Sempre que atualizarmos seu pedido no sistema, esse mesmo link será atualizado automaticamente. ✨\n\n"
-        f"Equipe Sophi Personalizados Oficial"
+        f"Seu pedido {codigo} está disponível no Portal do Cliente.\n\n"
+        f"💰 Valor: {total}\n"
+        f"📌 Status: {status}\n\n"
+        f"🔐 Acesse seu Portal para conferir o orçamento, acompanhar as atualizações e, quando a arte estiver disponível, visualizar e aprovar ou solicitar alterações diretamente por lá:\n"
+        f"{link}\n\n"
+        f"Sempre que atualizarmos seu pedido, o mesmo link será atualizado automaticamente. ✨\n\n"
+        f"Equipe Sophi Personalizados Oficial 💜"
     )
     try:
         return limpar_texto_whatsapp(texto)
@@ -14584,55 +14970,12 @@ def tela_pedidos_catalogo():
             st.rerun()
 
 
-def tela_portal_cliente_admin():
-    garantir_portal_cliente()
-
-    st.title("Portal do Cliente")
-    st.write("Gere o link para o cliente acompanhar o pedido em tempo real.")
-
-    orcs = consultar("""
-    SELECT id, cliente_nome, whatsapp, status, total
-    FROM orcamentos
-    ORDER BY id DESC
-    LIMIT 500
-    """)
-
-    if orcs.empty:
-        st.info("Nenhum orçamento encontrado.")
-        return
-
-    mapa = {
-        f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
-        for _, r in orcs.iterrows()
-    }
-
-    esc = st.selectbox("Escolha o orçamento", list(mapa.keys()), key="portal_cliente_orcamento")
-    orc_id = mapa[esc]
-    o = orcs[orcs["id"] == orc_id].iloc[0]
-    codigo = codigo_visual("ORC", int(orc_id), ano=datetime.now().year)
-
-    link = gerar_link_portal_orcamento(int(orc_id), APP_URL_OFICIAL)
-    msg = mensagem_portal_cliente(o["cliente_nome"], codigo, str(o["status"]), real(o["total"]), link)
-
-    st.markdown("### Link do portal")
-    st.code(link)
-    st.text_area("Mensagem pronta para enviar ao cliente", value=msg, height=190, key=f"portal_msg_pronta_{orc_id}")
-
-    link_wpp = link_whatsapp(o["whatsapp"], msg)
-    if link_wpp:
-        st.link_button("Enviar portal no WhatsApp", link_wpp, use_container_width=True)
-    else:
-        st.warning("Este orçamento não tem WhatsApp cadastrado.")
-
-    st.link_button("Abrir portal do cliente", link, use_container_width=True)
-
-
 
 # ============================================================
 # CORREÇÃO FINAL CATÁLOGO + MENU PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = APP_PORTAL_URL_OFICIAL
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
@@ -16742,6 +17085,7 @@ menu = st.sidebar.radio(
         "💰 Financeiro",
         "💬 Mensagens WhatsApp",
         "📊 Relatórios",
+        "🌐 Portal do Cliente",
         "🤖 Sophi Gestora IA",
         "⚙ Configurações",
     ],
@@ -16765,7 +17109,7 @@ try:
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
-        "Relatórios":"↗", "Sophi Gestora IA":"✦", "Configurações":"⚙"
+        "Relatórios":"↗", "Portal do Cliente":"🌐", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
     <div class="erp-topbar">
@@ -16807,6 +17151,8 @@ elif menu_limpo == "Financeiro":
     tela_financeiro_unificado()
 elif menu_limpo == "Relatórios":
     tela_relatorios_inteligentes()
+elif menu_limpo == "Portal do Cliente":
+    tela_portal_cliente_admin()
 elif menu_limpo == "Central de Automação":
     tela_central_automacao()
 elif menu_limpo == "Biblioteca de Artes":
