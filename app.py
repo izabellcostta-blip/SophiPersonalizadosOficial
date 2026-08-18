@@ -4920,7 +4920,7 @@ def criar_html_etiqueta(orcamento_id):
         base_url = ""
 
     if not base_url:
-        base_url = "https://sophipersonalizadosoficial.streamlit.app"
+        base_url = "https://sophipersonalizadosoficial-production.up.railway.app"
 
     base_url = base_url.split("?")[0].rstrip("/")
     portal_url = f"{base_url}/?portal=cliente&token={token}" if token else f"{base_url}/?portal=cliente"
@@ -6691,7 +6691,7 @@ def link_catalogo_publico():
             return app_url
         return app_url.rstrip("/") + "/?pagina=catalogo"
 
-    return "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
+    return "https://sophipersonalizadosoficial-production.up.railway.app/?pagina=catalogo"
 
 
 
@@ -7265,7 +7265,7 @@ def html_hero_catalogo_empresa():
 # AJUSTE FINAL — CATÁLOGO CENTRALIZADO + LOGO + PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
@@ -13356,7 +13356,7 @@ def garantir_modelo_portal_cliente():
 # CORREÇÃO FINAL WHATSAPP: CATÁLOGO ONLINE + PORTAL ÚNICO
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def modelo_pedido_recebido_catalogo_online():
     return (
@@ -14013,7 +14013,7 @@ def exigir_login():
 # LOJA ONLINE + PORTAL DO CLIENTE — VERSÃO FINAL
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_app_url_padrao():
     return APP_URL_OFICIAL
@@ -14587,7 +14587,7 @@ def tela_portal_cliente_admin():
 # CORREÇÃO FINAL CATÁLOGO + MENU PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
