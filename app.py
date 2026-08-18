@@ -4899,7 +4899,7 @@ def criar_html_etiqueta(orcamento_id):
         base_url = ""
 
     if not base_url:
-        base_url = "https://sophipersonalizadosoficial.streamlit.app"
+        base_url = "https://sophipersonalizadosoficial-production.up.railway.app"
 
     base_url = base_url.split("?")[0].rstrip("/")
     portal_url = f"{base_url}/?portal=cliente&token={token}" if token else f"{base_url}/?portal=cliente"
@@ -6670,7 +6670,7 @@ def link_catalogo_publico():
             return app_url
         return app_url.rstrip("/") + "/?pagina=catalogo"
 
-    return "https://sophipersonalizadosoficial.streamlit.app/?pagina=catalogo"
+    return "https://sophipersonalizadosoficial-production.up.railway.app/?pagina=catalogo"
 
 
 
@@ -6732,13 +6732,16 @@ def codigo_pedido_catalogo(pid):
 
 
 def obter_app_url_padrao():
+    # O Portal do Cliente deve usar sempre a aplicação publicada no Railway.
+    # Ignora configurações antigas que ainda apontem para o Streamlit.
+    url_oficial = "https://sophipersonalizadosoficial-production.up.railway.app"
     try:
-        url = obter_config("app_url", "")
-        if str(url or "").strip():
-            return str(url).strip().rstrip("/")
+        url = str(obter_config("app_url", "") or "").strip().rstrip("/")
+        if url and "streamlit.app" not in url.lower():
+            return url
     except Exception:
         pass
-    return "https://seuapp.streamlit.app"
+    return url_oficial
 
 
 def gerar_link_portal_orcamento(orc_id, base_url=None):
@@ -7244,7 +7247,7 @@ def html_hero_catalogo_empresa():
 # AJUSTE FINAL — CATÁLOGO CENTRALIZADO + LOGO + PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
@@ -13335,7 +13338,7 @@ def garantir_modelo_portal_cliente():
 # CORREÇÃO FINAL WHATSAPP: CATÁLOGO ONLINE + PORTAL ÚNICO
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def modelo_pedido_recebido_catalogo_online():
     return (
@@ -13533,7 +13536,23 @@ def tela_mensagens_whatsapp():
                     unsafe_allow_html=True,
                 )
 
-                modelo_base = obter_modelo_whatsapp(tipo)
+                # Portal do Cliente: sempre monta a mensagem de forma dinâmica.
+                # Não reutiliza um modelo antigo salvo no banco, pois ele pode conter
+                # URL antiga do Streamlit ou dados de outro pedido. O token é individual
+                # para cada orçamento e o link é sempre gerado pelo Railway.
+                if tipo == "Portal do Cliente":
+                    modelo_base = (
+                        "Olá {nome}! 🤍\n\n"
+                        "Você pode acompanhar o status do seu pedido em tempo real pelo link abaixo:\n\n"
+                        "Pedido: {id}\n"
+                        "Status atual: {status}\n"
+                        "Valor: {valor}\n\n"
+                        "Acompanhar meu pedido:\n{link}\n\n"
+                        "Sempre que atualizarmos seu pedido no sistema, esse mesmo link será atualizado automaticamente. ✨\n\n"
+                        "Equipe Sophi Personalizados Oficial"
+                    )
+                else:
+                    modelo_base = obter_modelo_whatsapp(tipo)
                 mensagem_modelo_editada = st.text_area(
                     "Modelo salvo/editável",
                     value=modelo_base,
@@ -13556,9 +13575,6 @@ def tela_mensagens_whatsapp():
 
                 link_portal_cliente = gerar_link_portal_orcamento(int(orc_id), APP_URL_OFICIAL)
                 status_atual_cliente = str(o.get("status", ""))
-                if tipo == "Portal do Cliente":
-                    mensagem_modelo_editada = obter_modelo_whatsapp("Portal do Cliente")
-
                 mensagem_editada = aplicar_variaveis_mensagem(
                     mensagem_modelo_editada,
                     nome=o["cliente_nome"],
@@ -13992,7 +14008,7 @@ def exigir_login():
 # LOJA ONLINE + PORTAL DO CLIENTE — VERSÃO FINAL
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_app_url_padrao():
     return APP_URL_OFICIAL
@@ -14052,7 +14068,8 @@ def codigo_pedido_catalogo(pid):
 
 
 def gerar_link_portal_orcamento(orc_id, base_url=None):
-    base_url = (base_url or APP_URL_OFICIAL).rstrip("/")
+    # Sempre gerar o link individual no domínio oficial do Railway.
+    base_url = APP_URL_OFICIAL.rstrip("/")
     try:
         token = gerar_token_portal("Orçamento", int(orc_id))
     except TypeError:
@@ -14566,7 +14583,7 @@ def tela_portal_cliente_admin():
 # CORREÇÃO FINAL CATÁLOGO + MENU PEDIDOS
 # ============================================================
 
-APP_URL_OFICIAL = "https://sophipersonalizadosoficial.streamlit.app"
+APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
 def obter_config_flex(chaves, padrao=""):
     for chave in chaves:
@@ -16722,7 +16739,8 @@ def _portal_contexto_v2(token):
 
 
 def _portal_url_v2(orcamento_id, base_url=None):
-    base = (base_url or obter_app_url_padrao()).rstrip("/")
+    # URL pública oficial do Portal. Nunca usar URL antiga do Streamlit.
+    base = APP_URL_OFICIAL.rstrip("/")
     token = gerar_token_portal("Orçamento", int(orcamento_id))
     return f"{base}/?portal=cliente&token={token}"
 
