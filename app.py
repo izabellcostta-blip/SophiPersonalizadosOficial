@@ -16691,6 +16691,19 @@ def garantir_portal_arte_aprovacao():
     )
     """)
 
+    # Migração segura para bancos já existentes.
+    # A tabela portal_artes pode ter sido criada por uma versão anterior
+    # sem a coluna mime. Sem esta migração, o upload da arte falha ao salvar.
+    try:
+        colunas_arte = consultar("PRAGMA table_info(portal_artes)")
+        nomes_colunas_arte = {str(x).strip() for x in colunas_arte["name"].tolist()} if not colunas_arte.empty else set()
+        if "mime" not in nomes_colunas_arte:
+            executar("ALTER TABLE portal_artes ADD COLUMN mime TEXT DEFAULT 'image/png'")
+    except Exception:
+        # Se a coluna já existir (por exemplo, após uma execução concorrente),
+        # não interrompe o aplicativo.
+        pass
+
 
 def salvar_arte_portal(orcamento_id, upload, observacao=""):
     import base64
