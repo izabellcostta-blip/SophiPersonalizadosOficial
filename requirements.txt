@@ -6,3 +6,4 @@ requests==2.34.2
 python-dateutil==2.9.0.post0
 tzdata==2026.2
 openpyxl
+reportlab
