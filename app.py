@@ -3578,25 +3578,40 @@ def tela_equipamentos():
 
 
 
-def seletor_insumo(linha):
+def seletor_insumo(linha, folhas_estimadas=1):
+    """
+    Uma única linha de material:
+    Categoria | Material | Quantidade.
+
+    Quando a categoria for Laminação, o campo Material consulta a tabela
+    específica de laminações e a quantidade padrão acompanha as folhas/bases
+    estimadas da produção.
+    """
     categorias = ["Todas"] + categorias_ativas()
     c1, c2, c3 = st.columns([2, 4, 1.2])
     categoria = c1.selectbox("Categoria", categorias, key=f"cat_ins_{linha}")
 
-    # Laminação é cadastrada em `laminacoes`, não em `insumos`.
-    # Quando a categoria escolhida for Laminação, o seletor usa diretamente
-    # o cadastro de BOPP/Laminação para que ele apareça aqui e entre no custo.
+    # Laminação continua sendo cadastrada na tabela própria `laminacoes`,
+    # mas aparece dentro da mesma linha de material.
     if categoria == "Laminação":
-        return seletor_laminacao_precificacao(linha, 1)
+        return seletor_laminacao_precificacao(linha, folhas_estimadas, c2=c2, c3=c3)
 
     if categoria == "Todas":
         df = consultar("SELECT * FROM insumos WHERE ativo='Sim' ORDER BY categoria, nome")
     else:
-        df = consultar("SELECT * FROM insumos WHERE ativo='Sim' AND categoria=? ORDER BY nome", (categoria,))
+        df = consultar(
+            "SELECT * FROM insumos WHERE ativo='Sim' AND categoria=? ORDER BY nome",
+            (categoria,),
+        )
 
     if df.empty:
-        c2.selectbox("Insumo", ["Nenhum"], key=f"insumo_{linha}")
-        c3.number_input("Qtd", min_value=0.0, value=0.0, key=f"qtd_ins_{linha}")
+        c2.selectbox("Material", ["Nenhum"], key=f"insumo_{linha}")
+        c3.number_input(
+            "Qtd",
+            min_value=0.0,
+            value=0.0,
+            key=f"qtd_ins_{linha}",
+        )
         return None
 
     opcoes = ["Nenhum"]
@@ -3606,9 +3621,13 @@ def seletor_insumo(linha):
         custo = custo_insumo(r["valor_pacote"], r["quantidade_pacote"])
         label = f"{r['nome']} — {r['categoria']} — {real(custo)}"
         opcoes.append(label)
-        mapa[label] = {"nome": r["nome"], "categoria": r["categoria"], "custo_unitario": custo}
+        mapa[label] = {
+            "nome": r["nome"],
+            "categoria": r["categoria"],
+            "custo_unitario": custo,
+        }
 
-    escolhido = c2.selectbox("Insumo", opcoes, key=f"insumo_{linha}")
+    escolhido = c2.selectbox("Material", opcoes, key=f"insumo_{linha}")
     qtd = c3.number_input(
         "Qtd",
         min_value=0.0,
@@ -3620,13 +3639,13 @@ def seletor_insumo(linha):
     if escolhido == "Nenhum" or qtd == 0:
         return None
 
-    item = mapa[escolhido]
+    item = mapa[escolhido].copy()
     item["qtd"] = qtd
     item["total"] = item["custo_unitario"] * qtd
     return item
 
 
-def seletor_laminacao_precificacao(linha, folhas_estimadas):
+def seletor_laminacao_precificacao(linha, folhas_estimadas, c2=None, c3=None):
     """Seleciona qualquer BOPP/laminação cadastrada e calcula o custo real por folha A4."""
     registros = []
     try:
@@ -3635,6 +3654,7 @@ def seletor_laminacao_precificacao(linha, folhas_estimadas):
             SELECT id, nome, tipo, largura_cm, comprimento_m, valor_pago,
                    folhas_a4, custo_metro, custo_a4, observacoes, ativo
             FROM laminacoes
+            WHERE ativo='Sim'
             ORDER BY nome
         """)
         if not df.empty:
@@ -3654,88 +3674,128 @@ def seletor_laminacao_precificacao(linha, folhas_estimadas):
             ORDER BY nome
         """)
         if not df_old.empty:
-            nomes_existentes = {str(x.get('nome','')).strip().lower() for x in registros}
+            nomes_existentes = {str(x.get("nome", "")).strip().lower() for x in registros}
             for _, r in df_old.iterrows():
-                nome = str(r.get('nome','')).strip()
+                nome = str(r.get("nome", "")).strip()
                 if nome and nome.lower() not in nomes_existentes:
                     registros.append({
-                        'id': r.get('id'),
-                        'nome': nome,
-                        'tipo': str(r.get('categoria','Laminação')),
-                        'largura_cm': 22.0,
-                        'comprimento_m': float(n(r.get('quantidade_pacote', 0))),
-                        'valor_pago': float(n(r.get('valor_pacote', 0))),
-                        'folhas_a4': 0.0,
-                        'custo_metro': 0.0,
-                        'custo_a4': 0.0,
-                        'observacoes': '',
-                        'ativo': 'Sim',
+                        "id": r.get("id"),
+                        "nome": nome,
+                        "tipo": str(r.get("categoria", "Laminação")),
+                        "largura_cm": 22.0,
+                        "comprimento_m": float(n(r.get("quantidade_pacote", 0))),
+                        "valor_pago": float(n(r.get("valor_pacote", 0))),
+                        "folhas_a4": 0.0,
+                        "custo_metro": 0.0,
+                        "custo_a4": 0.0,
+                        "observacoes": "",
+                        "ativo": "Sim",
                     })
     except Exception:
         pass
 
-    c1, c2, c3 = st.columns([4, 1.4, 1.2])
+    # Compatibilidade para chamadas antigas: se as colunas não forem passadas,
+    # cria a mesma estrutura visual usada na linha de material.
+    if c2 is None or c3 is None:
+        c1, c2, c3 = st.columns([4, 1.4, 1.2])
+
     if not registros:
-        c1.selectbox("Laminação", ["Nenhuma laminação cadastrada"], key=f"lam_prec_{linha}")
-        c2.number_input("Qtd A4/bases", min_value=0.0, value=0.0, key=f"lam_qtd_{linha}")
-        c3.metric("Custo", real(0))
-        st.caption("Cadastre uma laminação em Materiais e Estoque → Laminação para ela aparecer aqui.")
+        c2.selectbox(
+            "Material",
+            ["Nenhuma laminação cadastrada"],
+            key=f"lam_prec_{linha}",
+        )
+        c3.number_input(
+            "Qtd",
+            min_value=0.0,
+            value=0.0,
+            key=f"lam_qtd_{linha}",
+        )
+        st.caption(
+            "Cadastre uma laminação em Materiais e Estoque → Laminação "
+            "para ela aparecer aqui."
+        )
         return None
 
     opcoes = ["Nenhuma"]
     mapa = {}
+
     for r in registros:
-        nome = str(r.get('nome', '')).strip()
+        nome = str(r.get("nome", "")).strip()
         if not nome:
             continue
-        largura_cm = n(r.get('largura_cm', 22))
-        comprimento_m = n(r.get('comprimento_m', 0))
-        valor_pago = n(r.get('valor_pago', 0))
+
+        largura_cm = n(r.get("largura_cm", 22))
+        comprimento_m = n(r.get("comprimento_m", 0))
+        valor_pago = n(r.get("valor_pago", 0))
 
         # Uma folha A4 usa 29,7 cm = 0,297 m de comprimento.
         # A largura da bobina define quantas folhas A4 cabem lado a lado.
         folhas_lado = max(int(largura_cm // 21.0), 0)
         if folhas_lado <= 0:
             folhas_lado = 1 if largura_cm >= 21 else 0
+
         metros_por_a4 = 0.297 / folhas_lado if folhas_lado else 0.0
-        custo_metro = valor_pago / comprimento_m if comprimento_m > 0 else n(r.get('custo_metro', 0))
-        custo_a4 = custo_metro * metros_por_a4 if custo_metro > 0 and metros_por_a4 > 0 else n(r.get('custo_a4', 0))
+        custo_metro = (
+            valor_pago / comprimento_m
+            if comprimento_m > 0
+            else n(r.get("custo_metro", 0))
+        )
+        custo_a4 = (
+            custo_metro * metros_por_a4
+            if custo_metro > 0 and metros_por_a4 > 0
+            else n(r.get("custo_a4", 0))
+        )
 
         # Se houver valor calculado válido, ele sempre prevalece sobre um valor antigo salvo.
         if custo_a4 <= 0:
-            custo_a4 = n(r.get('custo_a4', 0))
+            custo_a4 = n(r.get("custo_a4", 0))
 
-        label = f"{nome} — {str(r.get('tipo','Laminação')).strip()} — {real(custo_a4)}/folha A4"
+        label = (
+            f"{nome} — {str(r.get('tipo', 'Laminação')).strip()} — "
+            f"{real(custo_a4)}/folha A4"
+        )
         opcoes.append(label)
         mapa[label] = {
-            'id': r.get('id'),
-            'nome': nome,
-            'tipo': str(r.get('tipo', 'Laminação')).strip(),
-            'custo_unitario': float(custo_a4),
-            'custo_metro': float(custo_metro),
-            'folhas_a4': float((comprimento_m / metros_por_a4) if metros_por_a4 > 0 else n(r.get('folhas_a4', 0))),
-            'metros_por_a4': float(metros_por_a4),
+            "id": r.get("id"),
+            "nome": nome,
+            "categoria": "Laminação",
+            "tipo": str(r.get("tipo", "Laminação")).strip(),
+            "custo_unitario": float(custo_a4),
+            "custo_metro": float(custo_metro),
+            "folhas_a4": float(
+                (comprimento_m / metros_por_a4)
+                if metros_por_a4 > 0
+                else n(r.get("folhas_a4", 0))
+            ),
+            "metros_por_a4": float(metros_por_a4),
         }
 
-    escolhido = c1.selectbox("Laminação", opcoes, key=f"lam_prec_{linha}")
+    escolhido = c2.selectbox("Material", opcoes, key=f"lam_prec_{linha}")
     qtd_padrao = float(folhas_estimadas) if escolhido != "Nenhuma" else 0.0
-    qtd = c2.number_input(
-        "Qtd A4/bases", min_value=0.0, value=qtd_padrao, step=1.0,
-        key=f"lam_qtd_{linha}"
+
+    qtd = c3.number_input(
+        "Qtd",
+        min_value=0.0,
+        value=qtd_padrao,
+        step=1.0,
+        key=f"lam_qtd_{linha}",
     )
+
     if escolhido == "Nenhuma" or qtd <= 0:
-        c3.metric("Custo", real(0))
         return None
 
     item = mapa[escolhido].copy()
-    item['qtd'] = qtd
-    item['total'] = item['custo_unitario'] * qtd
-    c3.metric("Custo", real(item['total']))
+    item["qtd"] = qtd
+    item["total"] = item["custo_unitario"] * qtd
+
     st.caption(
         f"Custo da laminação: {real(item['custo_unitario'])} por folha A4 · "
-        f"{real(item['custo_metro'])} por metro · consumo de {item['metros_por_a4']:.3f} m/A4"
+        f"{real(item['custo_metro'])} por metro · "
+        f"consumo de {item['metros_por_a4']:.3f} m/A4"
     )
     return item
+
 
 def seletor_tinta(linha):
     df = consultar("SELECT * FROM tintas WHERE ativo='Sim' ORDER BY nome")
@@ -16140,12 +16200,19 @@ def tela_precificacao_profissional():
         st.info(f"Produção estimada: {folhas_estimadas} folhas/bases para {qtd_total_lote:.0f} unidades finais.")
 
         st.subheader("1. Materiais utilizados")
+
+        # Começa com apenas 1 campo. Cada clique em "Adicionar material"
+        # cria mais uma linha sem apagar as anteriores.
+        if "prof_material_linhas" not in st.session_state:
+            st.session_state["prof_material_linhas"] = [101]
+
         receita = []
         custo_insumos_total = 0.0
         custo_laminacao_total = 0.0
         laminacoes_usadas = []
-        for linha in range(101, 111):
-            item = seletor_insumo(linha)
+
+        for linha in list(st.session_state["prof_material_linhas"]):
+            item = seletor_insumo(linha, folhas_estimadas)
             if item:
                 receita.append(item)
                 if str(item.get("categoria", "")).strip().lower() == "laminação":
@@ -16153,6 +16220,12 @@ def tela_precificacao_profissional():
                     custo_laminacao_total += n(item.get("total", 0))
                 else:
                     custo_insumos_total += n(item.get("total", 0))
+
+        if st.button("＋ Adicionar material", key="prof_adicionar_material", use_container_width=False):
+            existentes = st.session_state["prof_material_linhas"]
+            proxima = max(existentes, default=100) + 1
+            st.session_state["prof_material_linhas"].append(proxima)
+            st.rerun()
 
 
         st.subheader("3. Tinta")
@@ -17514,12 +17587,11 @@ menu = st.sidebar.radio(
 )
 
 
-
 # Limpa os emojis do menu para comparar apenas o nome da tela
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "📅 ", "⚡ ", "🎨 "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "📅 ", "🎨 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -17531,7 +17603,9 @@ try:
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
-        "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨", "Calendário Comercial":"📅", "Central de Automação":"⚡", "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
+        "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
+        "Calendário Comercial":"📅", "Central de Automação":"⚡",
+        "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
     <div class="erp-topbar">
