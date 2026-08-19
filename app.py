@@ -5297,28 +5297,46 @@ def aplicar_visual_publico_limpo():
         padding-bottom: 3rem !important;
     }
     a[href^="#"] {display: none !important;}
-    /* Portal do cliente: alto contraste nos botões para leitura fácil. */
-    .stButton > button, .stButton > button[kind="primary"], [data-testid="stLinkButton"] a {
-        background:#111111 !important; color:#ffffff !important; border:1px solid #111111 !important;
-        border-radius:12px !important; font-weight:800 !important; text-shadow:none !important;
-        box-shadow:0 8px 18px rgba(0,0,0,.12) !important; min-height:48px !important;
+    /* Portal do cliente: botões SEMPRE visíveis, inclusive no celular. */
+    .stButton > button,
+    [data-testid="stButton"] button,
+    [data-testid="stButton"] button[kind="primary"],
+    [data-testid="stLinkButton"] a {
+        background-color:#000000 !important;
+        background:#000000 !important;
+        color:#ffffff !important;
+        border:2px solid #000000 !important;
+        border-radius:12px !important;
+        font-weight:900 !important;
+        text-shadow:none !important;
+        box-shadow:0 8px 18px rgba(0,0,0,.12) !important;
+        min-height:48px !important;
+        opacity:1 !important;
+        -webkit-appearance:none !important;
+        appearance:none !important;
     }
-    .stButton > button:hover, .stButton > button[kind="primary"]:hover, [data-testid="stLinkButton"] a:hover {
-        background:#000000 !important; color:#ffffff !important; border-color:#000000 !important;
+    .stButton > button:hover,
+    .stButton > button:focus,
+    .stButton > button:active,
+    [data-testid="stButton"] button:hover,
+    [data-testid="stButton"] button:focus,
+    [data-testid="stButton"] button:active,
+    [data-testid="stLinkButton"] a:hover,
+    [data-testid="stLinkButton"] a:focus,
+    [data-testid="stLinkButton"] a:active {
+        background-color:#000000 !important;
+        background:#000000 !important;
+        color:#ffffff !important;
+        border-color:#000000 !important;
+        opacity:1 !important;
     }
-    .stButton > button p, .stButton > button span, [data-testid="stLinkButton"] a p, [data-testid="stLinkButton"] a span {
-        color:#ffffff !important; font-weight:800 !important;
-    }
-    /* Fallback para versões recentes do Streamlit: garante contraste dos botões de aprovação. */
-    [data-testid="stButton"] > button {
-        background:#111111 !important; color:#ffffff !important; border:1px solid #111111 !important;
-        font-weight:900 !important; text-shadow:none !important; box-shadow:0 8px 18px rgba(0,0,0,.12) !important;
-    }
-    [data-testid="stButton"] > button:hover {
-        background:#000000 !important; color:#ffffff !important; border-color:#000000 !important;
-    }
-    [data-testid="stButton"] > button p, [data-testid="stButton"] > button span {
-        color:#ffffff !important; font-weight:900 !important;
+    .stButton > button *,
+    [data-testid="stButton"] button *,
+    [data-testid="stLinkButton"] a * {
+        color:#ffffff !important;
+        font-weight:900 !important;
+        text-shadow:none !important;
+        opacity:1 !important;
     }
     [data-testid="stDownloadButton"] { display:none !important; }
     /* Botão exclusivo de saída: branco com texto preto para leitura clara. */
@@ -17430,24 +17448,6 @@ def tela_portal_cliente_publico():
 
     # Produção e entrega
     st.subheader("🏭 Produção e entrega")
-
-    # Puxa a(s) arte(s) vinculada(s) ao orçamento para a área de produção.
-    artes_producao = consultar("SELECT * FROM portal_artes WHERE orcamento_id=? AND COALESCE(status,'') NOT IN ('Substituída','Excluída') ORDER BY versao DESC, id DESC", (oid,))
-    if not artes_producao.empty:
-        st.markdown("**🎨 Arte do orçamento**")
-        for _, arte_prod in artes_producao.iterrows():
-            caminho_prod = str(arte_prod.get("caminho") or "")
-            nome_prod = html.escape(str(arte_prod.get("nome_arquivo") or "Arte"))
-            versao_prod = int(arte_prod.get("versao") or 1)
-            st.caption(f"Versão {versao_prod} — {nome_prod}")
-            if caminho_prod and Path(caminho_prod).exists():
-                try:
-                    preview_prod = _arte_portal_com_marca_dagua(caminho_prod)
-                    if preview_prod:
-                        st.image(preview_prod, use_container_width=True)
-                        st.caption("🔒 Prévia protegida da arte vinculada ao orçamento.")
-                except Exception:
-                    pass
 
     op = consultar("SELECT * FROM ordens_producao WHERE orcamento_id=? AND ativo='Sim' ORDER BY id DESC LIMIT 1", (oid,))
     if op.empty:
