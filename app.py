@@ -3583,6 +3583,12 @@ def seletor_insumo(linha):
     c1, c2, c3 = st.columns([2, 4, 1.2])
     categoria = c1.selectbox("Categoria", categorias, key=f"cat_ins_{linha}")
 
+    # Laminação é cadastrada em `laminacoes`, não em `insumos`.
+    # Quando a categoria escolhida for Laminação, o seletor usa diretamente
+    # o cadastro de BOPP/Laminação para que ele apareça aqui e entre no custo.
+    if categoria == "Laminação":
+        return seletor_laminacao_precificacao(linha, 1)
+
     if categoria == "Todas":
         df = consultar("SELECT * FROM insumos WHERE ativo='Sim' ORDER BY categoria, nome")
     else:
@@ -16136,19 +16142,18 @@ def tela_precificacao_profissional():
         st.subheader("1. Materiais utilizados")
         receita = []
         custo_insumos_total = 0.0
+        custo_laminacao_total = 0.0
+        laminacoes_usadas = []
         for linha in range(101, 111):
             item = seletor_insumo(linha)
             if item:
                 receita.append(item)
-                custo_insumos_total += n(item.get("total", 0))
+                if str(item.get("categoria", "")).strip().lower() == "laminação":
+                    laminacoes_usadas.append(item)
+                    custo_laminacao_total += n(item.get("total", 0))
+                else:
+                    custo_insumos_total += n(item.get("total", 0))
 
-        st.subheader("2. Laminação")
-        laminacoes_usadas=[]
-        custo_laminacao_total=0.0
-        lam=seletor_laminacao_precificacao(101,folhas_estimadas)
-        if lam:
-            laminacoes_usadas.append(lam)
-            custo_laminacao_total += n(lam.get("total",0))
 
         st.subheader("3. Tinta")
         tintas = []
