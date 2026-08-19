@@ -17177,6 +17177,14 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Permite que cada arte tenha sua própria aprovação/alteração quando houver várias artes no mesmo pedido.
+    try:
+        colunas_aprov = consultar("PRAGMA table_info(portal_aprovacoes)")["name"].astype(str).tolist()
+        if "arte_id" not in colunas_aprov:
+            executar("ALTER TABLE portal_aprovacoes ADD COLUMN arte_id INTEGER")
+    except Exception:
+        pass
+
     executar("""
     CREATE TABLE IF NOT EXISTS portal_artes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17345,7 +17353,9 @@ def tela_portal_cliente_publico():
 
     # Arte
     st.subheader("🎨 Arte para aprovação")
-    artes = consultar("SELECT * FROM portal_artes WHERE orcamento_id=? ORDER BY versao DESC, id DESC", (oid,))
+    # Mostra todas as artes atuais do pedido, mas nunca as que foram substituídas/excluídas.
+    # Assim é possível ter várias artes válidas no mesmo pedido sem deixar uma arte errada visível.
+    artes = consultar("SELECT * FROM portal_artes WHERE orcamento_id=? AND COALESCE(status,'') NOT IN ('Substituída','Excluída') ORDER BY versao DESC, id DESC", (oid,))
     if artes.empty:
         st.info("A arte ainda não foi disponibilizada. Assim que a Sophi enviar, ela aparecerá aqui.")
     else:
@@ -17362,7 +17372,8 @@ def tela_portal_cliente_publico():
                         st.error("Não foi possível gerar a prévia protegida desta arte.")
                 except Exception:
                     pass
-            aprov = consultar("SELECT * FROM portal_aprovacoes WHERE orcamento_id=? AND tipo='Arte' ORDER BY id DESC LIMIT 1", (oid,))
+            # Cada arte possui seu próprio estado de aprovação.
+            aprov = consultar("SELECT * FROM portal_aprovacoes WHERE orcamento_id=? AND tipo='Arte' AND arte_id=? ORDER BY id DESC LIMIT 1", (oid, int(a['id'])))
             estado = str(aprov.iloc[0]["status"]) if not aprov.empty else str(a.get("status") or "Aguardando aprovação")
             if estado == "Aprovada":
                 st.success("✅ Arte aprovada")
@@ -17372,7 +17383,7 @@ def tela_portal_cliente_publico():
                 b1,b2 = st.columns(2)
                 with b1:
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
-                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente"))
+                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
                         portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
                         st.success("Arte aprovada com sucesso!")
@@ -17383,7 +17394,7 @@ def tela_portal_cliente_publico():
                 if st.session_state.get(f"alterar_arte_{a['id']}"):
                     comentario = st.text_area("O que deseja alterar?", key=f"coment_arte_{a['id']}")
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
-                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario))
+                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
                         portal_evento(oid,token,"Alteração de arte",comentario)
                         st.success("Sua solicitação foi enviada para a Sophi.")
@@ -17585,7 +17596,7 @@ def tela_portal_cliente_admin():
             prev = consultar("SELECT COALESCE(MAX(versao),0) AS v FROM portal_artes WHERE orcamento_id=?", (oid,))
             vers = int(prev.iloc[0]['v'] or 0) + 1 if not prev.empty else 1
 
-            executar("UPDATE portal_artes SET status='Substituída' WHERE orcamento_id=? AND status='Aguardando aprovação'", (oid,))
+            # Não substitui automaticamente outras artes: um pedido pode ter várias artes válidas.
             executar(
                 "INSERT INTO portal_artes(orcamento_id,nome_arquivo,caminho,versao,status,observacao) VALUES(?,?,?,?,?,?)",
                 (oid, up.name, str(path), vers, 'Aguardando aprovação', obs)
@@ -17601,6 +17612,57 @@ def tela_portal_cliente_admin():
         artes_exib=artes.drop(columns=["caminho"],errors="ignore").copy()
         if "data" in artes_exib.columns: artes_exib["data"]=artes_exib["data"].apply(_formatar_data_hora_portal)
         st.dataframe(artes_exib,use_container_width=True,hide_index=True)
+
+        st.caption("Você pode manter várias artes no mesmo pedido. Use excluir para remover uma arte enviada por engano ou substituir para colocar uma nova versão no lugar dela.")
+        for _, arte_row in artes.iterrows():
+            arte_id = int(arte_row["id"])
+            versao = int(arte_row.get("versao") or 1)
+            nome_arte = str(arte_row.get("nome_arquivo") or "Arte")
+            status_arte = str(arte_row.get("status") or "")
+            c_arte, c_sub, c_del = st.columns([4,3,1])
+            with c_arte:
+                st.markdown(f"**Versão {versao} — {html.escape(nome_arte)}** · {html.escape(status_arte)}")
+            with c_sub:
+                novo_up = st.file_uploader(
+                    "Substituir arte",
+                    type=["png","jpg","jpeg","webp"],
+                    key=f"substituir_arte_upload_{oid}_{arte_id}",
+                    label_visibility="collapsed"
+                )
+                if novo_up is not None and st.button("🔄 Substituir", key=f"substituir_arte_btn_{oid}_{arte_id}", use_container_width=True):
+                    try:
+                        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                        safe_original = Path(novo_up.name).name.replace(" ", "_")
+                        safe_name = f"portal_{oid}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe_original}"
+                        novo_path = UPLOAD_DIR / safe_name
+                        novo_path.write_bytes(novo_up.getbuffer())
+                        prev = consultar("SELECT COALESCE(MAX(versao),0) AS v FROM portal_artes WHERE orcamento_id=?", (oid,))
+                        nova_versao = int(prev.iloc[0]['v'] or 0) + 1 if not prev.empty else versao + 1
+                        executar("UPDATE portal_artes SET status='Substituída' WHERE id=?", (arte_id,))
+                        executar(
+                            "INSERT INTO portal_artes(orcamento_id,nome_arquivo,caminho,versao,status,observacao) VALUES(?,?,?,?,?,?)",
+                            (oid, novo_up.name, str(novo_path), nova_versao, 'Aguardando aprovação', str(arte_row.get('observacao') or ''))
+                        )
+                        portal_evento(oid, gerar_token_portal('Orçamento', oid), 'Arte substituída', f'Versão {versao} substituída pela versão {nova_versao}.')
+                        st.success(f"Arte substituída pela versão {nova_versao}.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Não foi possível substituir a arte: {exc}")
+            with c_del:
+                if st.button("🗑️", key=f"excluir_arte_{oid}_{arte_id}", help="Excluir esta arte do Portal do Cliente", use_container_width=True):
+                    try:
+                        caminho_excluir = str(arte_row.get("caminho") or "")
+                        if caminho_excluir:
+                            try:
+                                Path(caminho_excluir).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        executar("DELETE FROM portal_artes WHERE id=?", (arte_id,))
+                        portal_evento(oid, gerar_token_portal('Orçamento', oid), 'Arte excluída', f'Versão {versao} removida do Portal do Cliente.')
+                        st.success(f"Arte versão {versao} excluída.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Não foi possível excluir a arte: {exc}")
     else:
         st.info("Nenhuma arte enviada para este pedido ainda.")
 
