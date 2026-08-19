@@ -2220,6 +2220,40 @@ def tela_inicio():
     st.title("Dashboard")
     st.write("Resumo rápido e clicável para acompanhar a Sophi Personalizados Oficial.")
 
+    # Painel adicional de pendências: apenas leitura, não altera os módulos existentes.
+    try:
+        hoje_painel = hoje_iso()
+        pend_artes = consultar("""
+            SELECT COUNT(*) AS total FROM orcamentos
+            WHERE status IN ('Aguardando aprovação','Arte para aprovação')
+        """).iloc[0]["total"]
+        pend_orc = consultar("""
+            SELECT COUNT(*) AS total FROM orcamentos
+            WHERE status IN ('Em orçamento','Aguardando resposta')
+        """).iloc[0]["total"]
+        pend_pag = consultar("""
+            SELECT COUNT(*) AS total FROM orcamentos
+            WHERE status IN ('Aguardando pagamento')
+        """).iloc[0]["total"]
+        pend_prod = consultar("""
+            SELECT COUNT(*) AS total FROM ordens_producao
+            WHERE ativo='Sim' AND status NOT IN ('Finalizado','Concluída','Concluído')
+        """).iloc[0]["total"]
+        pend_env = consultar("""
+            SELECT COUNT(*) AS total FROM entregas
+            WHERE ativo='Sim' AND status NOT IN ('Entregue','Cancelado')
+        """).iloc[0]["total"]
+        st.markdown("### 🚨 O que precisa da sua atenção")
+        pc1,pc2,pc3,pc4,pc5 = st.columns(5)
+        pc1.metric("🎨 Artes", int(pend_artes))
+        pc2.metric("📝 Orçamentos", int(pend_orc))
+        pc3.metric("💳 Pagamentos", int(pend_pag))
+        pc4.metric("🏭 Produção", int(pend_prod))
+        pc5.metric("🚚 Entregas", int(pend_env))
+        st.caption("Indicadores rápidos. As telas originais continuam responsáveis pelas ações.")
+    except Exception:
+        pass
+
     hoje = hoje_iso()
     mes_atual = hoje[:7]
 
@@ -3578,7 +3612,7 @@ def tela_equipamentos():
 
 
 
-def seletor_insumo(linha, folhas_estimadas=1):
+def seletor_insumo(linha, folhas_estimadas=1, c4=None):
     """
     Uma única linha de material:
     Categoria | Material | Quantidade.
@@ -3588,16 +3622,37 @@ def seletor_insumo(linha, folhas_estimadas=1):
     estimadas da produção.
     """
     categorias = ["Todas"] + categorias_ativas()
-    c1, c2, c3 = st.columns([2, 4, 1.2])
+    if c4 is None:
+        c1, c2, c3 = st.columns([2, 4, 1.2])
+    else:
+        c1, c2, c3, c4_real = st.columns([2, 4, 1.2, 0.8])
+        c4 = c4_real
     categoria = c1.selectbox("Categoria", categorias, key=f"cat_ins_{linha}")
 
     # Laminação continua sendo cadastrada na tabela própria `laminacoes`,
     # mas aparece dentro da mesma linha de material.
     if categoria == "Laminação":
-        return seletor_laminacao_precificacao(linha, folhas_estimadas, c2=c2, c3=c3)
+        return seletor_laminacao_precificacao(linha, folhas_estimadas, c2=c2, c3=c3, c4=c4)
 
     if categoria == "Todas":
+        # Mantém os insumos normais e acrescenta as laminações cadastradas,
+        # sem duplicar nomes. O usuário continua vendo uma única lista de material.
         df = consultar("SELECT * FROM insumos WHERE ativo='Sim' ORDER BY categoria, nome")
+        try:
+            dfl = consultar("SELECT nome,tipo,custo_a4,ativo FROM laminacoes WHERE ativo='Sim' ORDER BY nome")
+            if not dfl.empty:
+                extras = []
+                for _, lr in dfl.iterrows():
+                    extras.append({
+                        "nome": str(lr.get("nome","")),
+                        "categoria": "Laminação",
+                        "valor_pacote": n(lr.get("custo_a4",0)),
+                        "quantidade_pacote": 1,
+                    })
+                if extras:
+                    df = pd.concat([df, pd.DataFrame(extras)], ignore_index=True)
+        except Exception:
+            pass
     else:
         df = consultar(
             "SELECT * FROM insumos WHERE ativo='Sim' AND categoria=? ORDER BY nome",
@@ -3642,10 +3697,18 @@ def seletor_insumo(linha, folhas_estimadas=1):
     item = mapa[escolhido].copy()
     item["qtd"] = qtd
     item["total"] = item["custo_unitario"] * qtd
+    if c4 is not None:
+        st.caption("")
+        if c4.button("🗑️", key=f"del_mat_{linha}", help="Remover este material"):
+            linhas = list(st.session_state.get("prof_material_linhas", []))
+            if len(linhas) > 1 and linha in linhas:
+                linhas.remove(linha)
+                st.session_state["prof_material_linhas"] = linhas
+                st.rerun()
     return item
 
 
-def seletor_laminacao_precificacao(linha, folhas_estimadas, c2=None, c3=None):
+def seletor_laminacao_precificacao(linha, folhas_estimadas, c2=None, c3=None, c4=None):
     """Seleciona qualquer BOPP/laminação cadastrada e calcula o custo real por folha A4."""
     registros = []
     try:
@@ -16212,7 +16275,9 @@ def tela_precificacao_profissional():
         laminacoes_usadas = []
 
         for linha in list(st.session_state["prof_material_linhas"]):
-            item = seletor_insumo(linha, folhas_estimadas)
+            # A linha continua igual aos demais materiais; a quarta coluna é apenas o
+            # botão opcional de remover, sem alterar os três campos existentes.
+            item = seletor_insumo(linha, folhas_estimadas, c4=True)
             if item:
                 receita.append(item)
                 if str(item.get("categoria", "")).strip().lower() == "laminação":
@@ -16221,11 +16286,21 @@ def tela_precificacao_profissional():
                 else:
                     custo_insumos_total += n(item.get("total", 0))
 
-        if st.button("＋ Adicionar material", key="prof_adicionar_material", use_container_width=False):
-            existentes = st.session_state["prof_material_linhas"]
-            proxima = max(existentes, default=100) + 1
-            st.session_state["prof_material_linhas"].append(proxima)
-            st.rerun()
+        bmat1, bmat2 = st.columns([1, 1])
+        with bmat1:
+            if st.button("＋ Adicionar material", key="prof_adicionar_material", use_container_width=True):
+                existentes = st.session_state["prof_material_linhas"]
+                proxima = max(existentes, default=100) + 1
+                st.session_state["prof_material_linhas"].append(proxima)
+                st.rerun()
+        with bmat2:
+            if st.button("↺ Recomeçar materiais", key="prof_limpar_materiais", use_container_width=True):
+                st.session_state["prof_material_linhas"] = [101]
+                # Limpa as seleções antigas sem tocar nos cadastros.
+                for k in list(st.session_state.keys()):
+                    if str(k).startswith(("cat_ins_", "insumo_", "qtd_ins_", "lam_prec_", "lam_qtd_")):
+                        del st.session_state[k]
+                st.rerun()
 
 
         st.subheader("3. Tinta")
@@ -16241,12 +16316,26 @@ def tela_precificacao_profissional():
         embalagens_usadas = []
         usa_embalagem = st.checkbox("Incluir embalagem", value=False, key="prof_usa_emb")
         if usa_embalagem:
-            qtd_emb = st.number_input("Tipos de embalagem", min_value=1, max_value=5, value=1, step=1, key="prof_qtd_emb")
-            for linha in range(101, 101 + int(qtd_emb)):
+            if "prof_emb_linhas" not in st.session_state:
+                st.session_state["prof_emb_linhas"] = [101]
+            for linha in list(st.session_state["prof_emb_linhas"]):
                 emb = seletor_embalagem_precificacao(linha)
                 if emb:
                     embalagens_usadas.append(emb)
                     custo_embalagens_total += n(emb.get("total", 0))
+            eba, ebb = st.columns([1, 1])
+            with eba:
+                if st.button("＋ Adicionar embalagem", key="prof_adicionar_emb", use_container_width=True):
+                    existentes = st.session_state["prof_emb_linhas"]
+                    st.session_state["prof_emb_linhas"].append(max(existentes, default=100) + 1)
+                    st.rerun()
+            with ebb:
+                if st.button("↺ Recomeçar embalagens", key="prof_limpar_emb", use_container_width=True):
+                    st.session_state["prof_emb_linhas"] = [101]
+                    for k in list(st.session_state.keys()):
+                        if str(k).startswith(("emb_prec_", "emb_cat_", "emb_qtd_")):
+                            del st.session_state[k]
+                    st.rerun()
 
         st.subheader("5. Equipamentos e tempo")
         tempo_min = st.number_input("Tempo total de produção (minutos)", min_value=0.0, value=10.0, step=1.0, key="prof_tempo")
@@ -17456,7 +17545,255 @@ def tela_portal_cliente_admin():
 
 
 
+
+def garantir_calendario_comercial_profissional():
+    """Cria apenas tabelas novas do Calendário Comercial; não altera tabelas existentes."""
+    try:
+        executar("""
+        CREATE TABLE IF NOT EXISTS calendario_comercial_datas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            data TEXT,
+            categoria TEXT,
+            oportunidade TEXT DEFAULT 'Média',
+            quando_comecar INTEGER DEFAULT 30,
+            divulgacao_dias INTEGER DEFAULT 30,
+            encomendas_dias INTEGER DEFAULT 20,
+            ideias_produtos TEXT,
+            ideias_conteudo TEXT,
+            checklist TEXT,
+            ativo TEXT DEFAULT 'Sim'
+        )
+        """)
+        executar("""
+        CREATE TABLE IF NOT EXISTS calendario_comercial_campanhas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            data_evento TEXT,
+            inicio_planejamento TEXT,
+            inicio_divulgacao TEXT,
+            abertura_encomendas TEXT,
+            prazo_final TEXT,
+            meta REAL DEFAULT 0,
+            produtos TEXT,
+            status TEXT DEFAULT 'Planejada',
+            observacoes TEXT,
+            data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    except Exception:
+        pass
+
+
+def _datas_comerciais_sophi(ano):
+    """Catálogo interno de datas úteis para a Sophi. Datas móveis importantes são calculadas."""
+    # Páscoa: algoritmo de Meeus/Jones/Butcher
+    a = ano % 19
+    b = ano // 100
+    c = ano % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19*a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2*e + 2*i - h - k) % 7
+    m = (a + 11*h + 22*l) // 451
+    mes_p = (h + l - 7*m + 114) // 31
+    dia_p = ((h + l - 7*m + 114) % 31) + 1
+    pascoa = date(ano, mes_p, dia_p)
+
+    # 2º domingo de maio / 2º domingo de agosto
+    maio = date(ano,5,1)
+    dia_sem = maio.weekday()  # seg=0
+    primeiro_dom = 1 + ((6-dia_sem) % 7)
+    dia_maes = date(ano,5,primeiro_dom+7)
+
+    agosto = date(ano,8,1)
+    dia_sem = agosto.weekday()
+    primeiro_dom = 1 + ((6-dia_sem) % 7)
+    dia_pais = date(ano,8,primeiro_dom+7)
+
+    # 15 de outubro = Dia dos Professores no Brasil
+    datas = [
+        ("Volta às aulas","Escolar",date(ano,1,15),"Alta",45,
+         "Etiquetas escolares, cadernos, planners, tags, adesivos",
+         "Checklist de volta às aulas, kits, organização e bastidores"),
+        ("Carnaval","Sazonal",date(ano,2,1),"Média",30,
+         "Tags, kits de festa, lembrancinhas e personalizados",
+         "Inspirações de festa, cores, kits e encomendas"),
+        ("Dia Internacional da Mulher","Afetiva",date(ano,3,8),"Média",30,
+         "Cartões, lembranças, kits corporativos e mimos",
+         "Homenagens, presentes personalizados e kits"),
+        ("Páscoa","Afetiva / Presente",pascoa,"Alta",45,
+         "Caixas, tags, lembrancinhas, kits, embalagens e cartões",
+         "Contagem regressiva, kits, montagem e últimas encomendas"),
+        ("Dia das Mães","Presente",dia_maes,"Muito alta",60,
+         "Box presenteável, fotos, quadros, cartões, tags e kits",
+         "Ideias de presentes, bastidores, depoimentos e urgência"),
+        ("Dia dos Namorados","Presente / Romântica",date(ano,6,12),"Muito alta",45,
+         "Box romântico, fotos, cartões, quadros e kits",
+         "Reels de presentes, combinações, histórias e contagem regressiva"),
+        ("Festas Juninas","Sazonal",date(ano,6,24),"Média",30,
+         "Tags, toppers, convites, lembrancinhas e kits",
+         "Inspirações juninas, festas e encomendas"),
+        ("Dia dos Pais","Presente",dia_pais,"Alta",45,
+         "Box, cartões, fotos, quadros, kits e lembranças",
+         "Ideias para pais, kits, bastidores e últimas vagas"),
+        ("Dia das Crianças","Infantil",date(ano,10,12),"Alta",45,
+         "Lembrancinhas, tags, kits, toppers e personalizados",
+         "Ideias por faixa etária, kits e encomendas"),
+        ("Dia dos Professores","Escolar / Presente",date(ano,10,15),"Alta",45,
+         "Kits para professores, cartões, tags e lembranças",
+         "Kits prontos, personalizados e encomendas escolares"),
+        ("Halloween","Sazonal",date(ano,10,31),"Média",30,
+         "Tags, toppers, lembrancinhas, adesivos e kits",
+         "Inspirações temáticas e montagem de produtos"),
+        ("Black Friday","Comercial",date(ano,11,27) if ano==2026 else date(ano,11,27),"Muito alta",45,
+         "Combos, kits, ofertas de personalizados e condições especiais",
+         "Ofertas, antecipação, combos e escassez"),
+        ("Natal","Presente",date(ano,12,25),"Muito alta",60,
+         "Box, kits, cartões, tags, embalagens e presentes personalizados",
+         "Guia de presentes, kits, bastidores, prazos e últimas encomendas"),
+        ("Ano Novo","Festas",date(ano,12,31),"Média",30,
+         "Lembranças, papelaria de festa, tags e kits",
+         "Festas, retrospectiva e encomendas"),
+        ("Casamentos","Eventos",None,"Alta",60,
+         "Convites, menus, tags, lembranças, caixas e papelaria",
+         "Portfólio, antes/depois, detalhes e prova social"),
+        ("Aniversários","Eventos",None,"Alta",30,
+         "Convites, toppers, tags, lembrancinhas e kits",
+         "Temas, personalizados, bastidores e portfólio"),
+        ("Chá de bebê / revelação","Eventos",None,"Alta",45,
+         "Convites, tags, jogos, lembranças e papelaria",
+         "Temas, kits e detalhes personalizados"),
+    ]
+    return datas
+
+
 def tela_calendario_comercial():
+    garantir_calendario_comercial_profissional()
+    st.title("📅 Calendário Comercial")
+    st.caption("Planeje com antecedência as datas que a Sophi pode transformar em campanhas e vendas.")
+
+    ano = st.selectbox("Ano", list(range(datetime.now().year, datetime.now().year + 4)), key="cal_ano")
+    dados = _datas_comerciais_sophi(int(ano))
+    df = pd.DataFrame(dados, columns=[
+        "Data/campanha","Categoria","Data","Oportunidade","Começar antes (dias)",
+        "Ideias de produtos","Ideias de conteúdo"
+    ])
+    df["Data"] = df["Data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
+
+    st.markdown("### 🗓️ Datas para a Sophi participar")
+    filtro_cat = st.multiselect(
+        "Filtrar por categoria",
+        sorted(df["Categoria"].unique().tolist()),
+        default=[],
+        key="cal_filtro_cat",
+    )
+    filtro_opp = st.multiselect(
+        "Oportunidade",
+        ["Muito alta","Alta","Média","Baixa"],
+        default=[],
+        key="cal_filtro_opp",
+    )
+    exib = df.copy()
+    if filtro_cat:
+        exib = exib[exib["Categoria"].isin(filtro_cat)]
+    if filtro_opp:
+        exib = exib[exib["Oportunidade"].isin(filtro_opp)]
+    st.dataframe(
+        exib[["Data/campanha","Categoria","Data","Oportunidade","Começar antes (dias)"]],
+        use_container_width=True, hide_index=True
+    )
+
+    nomes = exib["Data/campanha"].tolist()
+    if nomes:
+        escolhido = st.selectbox("Abrir planejamento da data", nomes, key="cal_data_sel")
+        linha = next(x for x in dados if x[0] == escolhido)
+        nome, categoria, data_evento, oportunidade, dias_antes, produtos, conteudo = linha
+        st.markdown(f"## {nome}")
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Oportunidade", oportunidade)
+        c2.metric("Começar a pensar", f"{dias_antes} dias antes")
+        c3.metric("Divulgação", f"{max(dias_antes-15,7)} dias antes")
+        c4.metric("Encomendas", f"{max(dias_antes-25,7)} dias antes")
+        if data_evento:
+            inicio = data_evento - timedelta(days=dias_antes)
+            divulg = data_evento - timedelta(days=max(dias_antes-15,7))
+            encom = data_evento - timedelta(days=max(dias_antes-25,7))
+            prazo = data_evento - timedelta(days=5)
+            st.info(
+                f"Evento: **{data_evento.strftime('%d/%m/%Y')}** · "
+                f"Começar planejamento: **{inicio.strftime('%d/%m/%Y')}** · "
+                f"Divulgação: **{divulg.strftime('%d/%m/%Y')}** · "
+                f"Abrir encomendas: **{encom.strftime('%d/%m/%Y')}** · "
+                f"Prazo recomendado: **{prazo.strftime('%d/%m/%Y')}**"
+            )
+        st.markdown("### 💡 Ideias de produtos")
+        st.write(produtos)
+        st.markdown("### 📱 Ideias de conteúdo")
+        st.write(conteudo)
+        st.markdown("### ✅ Checklist da campanha")
+        checklist = [
+            "Definir produtos e preços",
+            "Conferir estoque e materiais",
+            "Comprar o que faltar",
+            "Criar/fotografar artes e produtos",
+            "Preparar posts e stories",
+            "Abrir encomendas",
+            "Intensificar divulgação",
+            "Controlar produção e prazos",
+            "Organizar entregas/envios",
+            "Pedir avaliação e registrar resultado",
+        ]
+        for idx, item in enumerate(checklist):
+            st.checkbox(item, key=f"cal_check_{ano}_{escolhido}_{idx}")
+
+        st.markdown("### 🎯 Criar minha campanha")
+        with st.form(f"form_campanha_{ano}_{escolhido}"):
+            meta = st.number_input("Meta de vendas (R$)", min_value=0.0, value=0.0, step=50.0)
+            produtos_camp = st.text_area("Produtos que vou oferecer", value=produtos)
+            observ = st.text_area("Observações / estratégia", placeholder="Ex.: começar divulgação com 30 dias e fechar encomendas 5 dias antes.")
+            salvar = st.form_submit_button("Salvar campanha")
+            if salvar:
+                data_str = data_evento.isoformat() if data_evento else ""
+                inicio_str = (data_evento - timedelta(days=dias_antes)).isoformat() if data_evento else ""
+                divulg_str = (data_evento - timedelta(days=max(dias_antes-15,7))).isoformat() if data_evento else ""
+                encom_str = (data_evento - timedelta(days=max(dias_antes-25,7))).isoformat() if data_evento else ""
+                prazo_str = (data_evento - timedelta(days=5)).isoformat() if data_evento else ""
+                executar("""
+                    INSERT INTO calendario_comercial_campanhas
+                    (nome,data_evento,inicio_planejamento,inicio_divulgacao,abertura_encomendas,prazo_final,meta,produtos,status,observacoes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (nome,data_str,inicio_str,divulg_str,encom_str,prazo_str,meta,produtos_camp,"Planejada",observ))
+                st.success("Campanha salva no planejamento.")
+                st.rerun()
+
+    st.divider()
+    st.subheader("🚀 Minhas campanhas")
+    try:
+        campanhas = consultar("SELECT * FROM calendario_comercial_campanhas ORDER BY COALESCE(data_evento,'9999-12-31'), id DESC LIMIT 100")
+    except Exception:
+        campanhas = pd.DataFrame()
+    if campanhas.empty:
+        st.info("Nenhuma campanha salva ainda.")
+    else:
+        ex = campanhas.copy()
+        for col in ["data_evento","inicio_planejamento","inicio_divulgacao","abertura_encomendas","prazo_final"]:
+            if col in ex.columns:
+                ex[col] = ex[col].apply(data_br)
+        ex = ex.rename(columns={
+            "nome":"Campanha","data_evento":"Data","inicio_planejamento":"Começar",
+            "inicio_divulgacao":"Divulgação","abertura_encomendas":"Encomendas",
+            "prazo_final":"Prazo","meta":"Meta","status":"Status"
+        })
+        cols=[c for c in ["Campanha","Data","Começar","Divulgação","Encomendas","Prazo","Meta","Status"] if c in ex.columns]
+        st.dataframe(formatar_valores_tabela(ex[cols]), use_container_width=True, hide_index=True)
+        st.caption("As campanhas salvas ficam separadas do calendário e não alteram pedidos, produtos, estoque ou financeiro.")
+
+
     st.title("📅 Calendário Comercial")
     st.caption("Planejamento de datas e campanhas para papelaria personalizada e artesanato.")
     datas=[
