@@ -5298,12 +5298,16 @@ def aplicar_visual_publico_limpo():
     }
     a[href^="#"] {display: none !important;}
     /* Portal do cliente: botões SEMPRE visíveis, inclusive no celular. */
-    .stButton > button,
+    /* PORTAL DO CLIENTE — botões com contraste fixo, inclusive no celular.
+       Estes seletores são mais específicos que os estilos gerais do ERP,
+       portanto o preto/branco não depende de hover. */
     [data-testid="stButton"] button,
     [data-testid="stButton"] button[kind="primary"],
+    [data-testid="stButton"] button[kind="secondary"],
     [data-testid="stLinkButton"] a {
-        background-color:#000000 !important;
         background:#000000 !important;
+        background-color:#000000 !important;
+        background-image:none !important;
         color:#ffffff !important;
         border:2px solid #000000 !important;
         border-radius:12px !important;
@@ -5315,22 +5319,22 @@ def aplicar_visual_publico_limpo():
         -webkit-appearance:none !important;
         appearance:none !important;
     }
-    .stButton > button:hover,
-    .stButton > button:focus,
-    .stButton > button:active,
     [data-testid="stButton"] button:hover,
     [data-testid="stButton"] button:focus,
+    [data-testid="stButton"] button:focus-visible,
     [data-testid="stButton"] button:active,
+    [data-testid="stButton"] button[kind="primary"]:hover,
+    [data-testid="stButton"] button[kind="secondary"]:hover,
     [data-testid="stLinkButton"] a:hover,
     [data-testid="stLinkButton"] a:focus,
     [data-testid="stLinkButton"] a:active {
-        background-color:#000000 !important;
         background:#000000 !important;
+        background-color:#000000 !important;
+        background-image:none !important;
         color:#ffffff !important;
         border-color:#000000 !important;
         opacity:1 !important;
     }
-    .stButton > button *,
     [data-testid="stButton"] button *,
     [data-testid="stLinkButton"] a * {
         color:#ffffff !important;
@@ -17446,30 +17450,44 @@ def tela_portal_cliente_publico():
             st.success("Pedido aprovado! A Sophi recebeu a confirmação.")
             st.rerun()
 
-    # Produção e entrega
+    # Produção e entrega — somente datas/status; nenhuma arte/foto é duplicada aqui.
     st.subheader("🏭 Produção e entrega")
 
     op = consultar("SELECT * FROM ordens_producao WHERE orcamento_id=? AND ativo='Sim' ORDER BY id DESC LIMIT 1", (oid,))
-    if op.empty:
-        st.info("A produção ainda não foi iniciada.")
-    else:
+    data_producao = "A definir"
+    data_prevista = data_br_segura(o.get("data_prevista_entrega")) or "A definir"
+    hora_prevista = str(o.get("hora_prevista_entrega") or "").strip()
+
+    if not op.empty:
         r = op.iloc[0]
-        st.write(f"**Ordem de produção:** {codigo_op_seguro(r['id'])}")
-        st.write(f"**Etapa:** {r.get('status','-')}")
-        data_prev=data_br_segura(r.get("data_entrega") or o.get("data_prevista_entrega")) or "A definir"
-        hora_prev=str(r.get("hora_entrega") or o.get("hora_prevista_entrega") or "").strip()
-        st.write(f"**Previsão:** {data_prev}{(' às '+hora_prev) if hora_prev else ''}")
+        # A data de criação da OP é a única data disponível para indicar quando
+        # a produção foi registrada. Não criamos/alteramos datas inexistentes.
+        data_producao = data_br_segura(r.get("data_criacao")) or "A definir"
+        data_prevista = data_br_segura(r.get("data_entrega") or o.get("data_prevista_entrega")) or "A definir"
+        hora_prevista = str(r.get("hora_entrega") or o.get("hora_prevista_entrega") or "").strip()
+
+    if hora_prevista:
         try:
-            chk = json.loads(r.get("checklist_json") or "{}")
-            if chk:
-                for n,v in chk.items(): st.write(("✅ " if v else "⬜ ")+str(n))
-        except Exception: pass
+            hora_dt = pd.to_datetime(hora_prevista, errors="coerce")
+            hora_prevista = hora_dt.strftime("%H:%M") if pd.notna(hora_dt) else hora_prevista[:5]
+        except Exception:
+            hora_prevista = hora_prevista[:5]
+
+    d1, d2 = st.columns(2)
+    with d1:
+        st.metric("Produção", data_producao)
+    with d2:
+        st.metric("Data de entrega", f"{data_prevista}{(' às '+hora_prevista) if hora_prevista else ''}")
+
+    if not op.empty:
+        r = op.iloc[0]
+        st.caption(f"Status da produção: {r.get('status','Aguardando')}")
 
     ent = consultar("SELECT * FROM entregas WHERE referencia_tipo='OP' AND referencia_id IN (SELECT id FROM ordens_producao WHERE orcamento_id=?) AND ativo='Sim' ORDER BY id DESC LIMIT 1", (oid,))
     if not ent.empty:
         e=ent.iloc[0]
         data_ent=data_br_segura(e.get("data_entrega")) or "-"
-        st.write(f"**Entrega:** {e.get('tipo_entrega','-')} · {e.get('status','-')} · {data_ent}")
+        st.caption(f"Entrega: {e.get('tipo_entrega','-')} · {e.get('status','-')} · {data_ent}")
 
     st.subheader("📜 Histórico")
     hist = consultar("SELECT data,evento,descricao FROM portal_eventos WHERE orcamento_id=? ORDER BY id DESC LIMIT 100", (oid,))
