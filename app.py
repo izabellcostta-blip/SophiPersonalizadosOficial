@@ -2617,6 +2617,13 @@ def tela_tarefas_dia():
         else 0
     )
 
+    # Visão rápida para o dia a dia: vencidas, hoje e próximas, sem alterar o cadastro existente.
+    hoje_dt = agora_brasil().date()
+    vencidas = tarefas_pendentes[pd.to_datetime(tarefas_pendentes["data_tarefa"], errors="coerce").dt.date < hoje_dt] if not tarefas_pendentes.empty else tarefas_pendentes
+    c4, c5 = st.columns(2)
+    c4.metric("⚠️ Atrasadas", len(vencidas))
+    c5.metric("📅 Próximas", len(tarefas_pendentes) - len(tarefas_hoje) - len(vencidas))
+
     st.divider()
 
     st.subheader("Nova tarefa")
@@ -3852,6 +3859,18 @@ def seletor_laminacao_precificacao(linha, folhas_estimadas, c2=None, c3=None, c4
     item["qtd"] = qtd
     item["total"] = item["custo_unitario"] * qtd
 
+    # A laminação usa exatamente a mesma lógica de remoção dos demais materiais.
+    # A lixeira fica na própria linha, ao lado da quantidade.
+    if c4 is not None:
+        if c4.button("🗑️", key=f"del_mat_{linha}", help="Remover esta laminação/material"):
+            linhas = list(st.session_state.get("prof_material_linhas", []))
+            if len(linhas) > 1 and linha in linhas:
+                linhas.remove(linha)
+                st.session_state["prof_material_linhas"] = linhas
+                for k in [f"cat_ins_{linha}", f"insumo_{linha}", f"qtd_ins_{linha}", f"lam_prec_{linha}", f"lam_qtd_{linha}"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+
     st.caption(
         f"Custo da laminação: {real(item['custo_unitario'])} por folha A4 · "
         f"{real(item['custo_metro'])} por metro · "
@@ -4714,6 +4733,14 @@ def tela_orcamentos():
             "total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
         },
     )
+
+    # Resumo operacional dos orçamentos, para bater o olho e saber o que exige ação.
+    if not df_orc.empty:
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("📝 Orçamentos", len(df_orc))
+        b2.metric("⏳ Aguardando", int(df_orc["status"].astype(str).isin(["Em orçamento", "Aguardando pagamento"]).sum()))
+        b3.metric("✅ Aprovados/produção", int(df_orc["status"].astype(str).isin(["Aprovado", "Pago", "Produção", "Pronto"]).sum()))
+        b4.metric("💰 Valor", real(df_orc["total"].fillna(0).sum()))
 
     st.subheader("Ver itens / Gerar PDF")
     id_ver = st.number_input("ID do orçamento", min_value=0, step=1, key="id_ver_orcamento")
@@ -5728,6 +5755,23 @@ def garantir_tabela_producao():
 
 
 def tela_producao():
+    # Painel operacional: produção pendente, em andamento e atrasada.
+    try:
+        df_op_resumo = consultar("SELECT status, data_entrega FROM ordens_producao WHERE ativo='Sim'")
+        if not df_op_resumo.empty:
+            hoje = agora_brasil().date()
+            datas_op = pd.to_datetime(df_op_resumo["data_entrega"], errors="coerce").dt.date
+            atrasadas = int(((datas_op < hoje) & (~df_op_resumo["status"].astype(str).isin(["Concluída", "Entregue"]))).sum())
+            aguardando = int(df_op_resumo["status"].astype(str).isin(["Aguardando", "Pendente"]).sum())
+            andamento = int(df_op_resumo["status"].astype(str).isin(["Em andamento", "Produção", "Em produção"]).sum())
+            cpa, cpb, cpc, cpd = st.columns(4)
+            cpa.metric("🏭 OPs", len(df_op_resumo))
+            cpb.metric("⏳ Aguardando", aguardando)
+            cpc.metric("⚙️ Em produção", andamento)
+            cpd.metric("🚨 Atrasadas", atrasadas)
+    except Exception:
+        pass
+
     garantir_tabela_producao()
     st.title("Produção")
     st.write("Central de produção com Ordem de Produção, checklist, prioridade, prazos e ficha para impressão.")
@@ -10726,6 +10770,22 @@ def tela_agenda_entregas():
                     st.rerun()
 
         st.divider()
+        # Resumo da agenda para facilitar a organização diária.
+        try:
+            agenda_res = consultar("SELECT status, data, hora FROM agenda_tarefas WHERE ativo='Sim'")
+            if not agenda_res.empty:
+                hoje = agora_brasil().date()
+                datas_ag = pd.to_datetime(agenda_res["data"], errors="coerce").dt.date
+                atras = int(((datas_ag < hoje) & (~agenda_res["status"].astype(str).eq("Concluída"))).sum())
+                ag_hoje = int(datas_ag.eq(hoje).sum())
+                ag_pend = int((~agenda_res["status"].astype(str).eq("Concluída")).sum())
+                aa, ab, ac = st.columns(3)
+                aa.metric("📅 Hoje", ag_hoje)
+                ab.metric("⏳ Pendentes", ag_pend)
+                ac.metric("🚨 Atrasadas", atras)
+        except Exception:
+            pass
+
         st.subheader("Tarefas cadastradas")
 
         df = consultar("""
@@ -16163,7 +16223,7 @@ def botao_recebemos_pedido_catalogo(p, codigo, itens_texto, total_pedido):
 def botao_sair():
     st.sidebar.divider()
     st.sidebar.caption(f"Usuário: {st.session_state.get('usuario_logado', '')}")
-    if st.sidebar.button("Sair"):
+    if st.sidebar.button("🚪 Sair do sistema", type="secondary", use_container_width=True):
         st.session_state["autenticado"] = False
         st.session_state["usuario_logado"] = ""
         try:
@@ -17585,238 +17645,177 @@ def garantir_calendario_comercial_profissional():
         pass
 
 
+def _pascoa(ano):
+    """Páscoa pelo algoritmo de Meeus/Jones/Butcher."""
+    a = ano % 19; b = ano // 100; c = ano % 100; d = b // 4; e = b % 4
+    f = (b + 8) // 25; g = (b - f + 1) // 3
+    h = (19*a + b - d - g + 15) % 30; i = c // 4; k = c % 4
+    l = (32 + 2*e + 2*i - h - k) % 7; m = (a + 11*h + 22*l) // 451
+    mes = (h + l - 7*m + 114) // 31; dia = ((h + l - 7*m + 114) % 31) + 1
+    return date(ano, mes, dia)
+
+
+def _domingo_do_mes(ano, mes, numero=2):
+    primeiro = date(ano, mes, 1)
+    primeiro_dom = 1 + ((6 - primeiro.weekday()) % 7)
+    return date(ano, mes, primeiro_dom + 7*(numero-1))
+
+
+def _sexta_da_black_friday(ano):
+    """Black Friday = 4ª sexta-feira de novembro."""
+    nov1 = date(ano, 11, 1)
+    primeira_sexta = 1 + ((4 - nov1.weekday()) % 7)
+    return date(ano, 11, primeira_sexta + 21)
+
+
 def _datas_comerciais_sophi(ano):
-    """Catálogo interno de datas úteis para a Sophi. Datas móveis importantes são calculadas."""
-    # Páscoa: algoritmo de Meeus/Jones/Butcher
-    a = ano % 19
-    b = ano // 100
-    c = ano % 100
-    d = b // 4
-    e = b % 4
-    f = (b + 8) // 25
-    g = (b - f + 1) // 3
-    h = (19*a + b - d - g + 15) % 30
-    i = c // 4
-    k = c % 4
-    l = (32 + 2*e + 2*i - h - k) % 7
-    m = (a + 11*h + 22*l) // 451
-    mes_p = (h + l - 7*m + 114) // 31
-    dia_p = ((h + l - 7*m + 114) % 31) + 1
-    pascoa = date(ano, mes_p, dia_p)
+    """Calendário comercial calculado para o ano escolhido, com datas brasileiras atualizadas."""
+    pascoa = _pascoa(ano)
+    carnaval = pascoa - timedelta(days=47)
+    corpus = pascoa + timedelta(days=60)
+    dia_maes = _domingo_do_mes(ano, 5, 2)
+    dia_pais = _domingo_do_mes(ano, 8, 2)
+    black = _sexta_da_black_friday(ano)
 
-    # 2º domingo de maio / 2º domingo de agosto
-    maio = date(ano,5,1)
-    dia_sem = maio.weekday()  # seg=0
-    primeiro_dom = 1 + ((6-dia_sem) % 7)
-    dia_maes = date(ano,5,primeiro_dom+7)
+    def item(nome, categoria, data_evento, oportunidade, pensar, produtos, conteudo, prazo=5):
+        return {
+            "nome": nome, "categoria": categoria, "data": data_evento,
+            "oportunidade": oportunidade, "pensar": pensar,
+            "produtos": produtos, "conteudo": conteudo, "prazo": prazo,
+        }
 
-    agosto = date(ano,8,1)
-    dia_sem = agosto.weekday()
-    primeiro_dom = 1 + ((6-dia_sem) % 7)
-    dia_pais = date(ano,8,primeiro_dom+7)
-
-    # 15 de outubro = Dia dos Professores no Brasil
-    datas = [
-        ("Volta às aulas","Escolar",date(ano,1,15),"Alta",45,
-         "Etiquetas escolares, cadernos, planners, tags, adesivos",
-         "Checklist de volta às aulas, kits, organização e bastidores"),
-        ("Carnaval","Sazonal",date(ano,2,1),"Média",30,
-         "Tags, kits de festa, lembrancinhas e personalizados",
-         "Inspirações de festa, cores, kits e encomendas"),
-        ("Dia Internacional da Mulher","Afetiva",date(ano,3,8),"Média",30,
-         "Cartões, lembranças, kits corporativos e mimos",
-         "Homenagens, presentes personalizados e kits"),
-        ("Páscoa","Afetiva / Presente",pascoa,"Alta",45,
-         "Caixas, tags, lembrancinhas, kits, embalagens e cartões",
-         "Contagem regressiva, kits, montagem e últimas encomendas"),
-        ("Dia das Mães","Presente",dia_maes,"Muito alta",60,
-         "Box presenteável, fotos, quadros, cartões, tags e kits",
-         "Ideias de presentes, bastidores, depoimentos e urgência"),
-        ("Dia dos Namorados","Presente / Romântica",date(ano,6,12),"Muito alta",45,
-         "Box romântico, fotos, cartões, quadros e kits",
-         "Reels de presentes, combinações, histórias e contagem regressiva"),
-        ("Festas Juninas","Sazonal",date(ano,6,24),"Média",30,
-         "Tags, toppers, convites, lembrancinhas e kits",
-         "Inspirações juninas, festas e encomendas"),
-        ("Dia dos Pais","Presente",dia_pais,"Alta",45,
-         "Box, cartões, fotos, quadros, kits e lembranças",
-         "Ideias para pais, kits, bastidores e últimas vagas"),
-        ("Dia das Crianças","Infantil",date(ano,10,12),"Alta",45,
-         "Lembrancinhas, tags, kits, toppers e personalizados",
-         "Ideias por faixa etária, kits e encomendas"),
-        ("Dia dos Professores","Escolar / Presente",date(ano,10,15),"Alta",45,
-         "Kits para professores, cartões, tags e lembranças",
-         "Kits prontos, personalizados e encomendas escolares"),
-        ("Halloween","Sazonal",date(ano,10,31),"Média",30,
-         "Tags, toppers, lembrancinhas, adesivos e kits",
-         "Inspirações temáticas e montagem de produtos"),
-        ("Black Friday","Comercial",date(ano,11,27) if ano==2026 else date(ano,11,27),"Muito alta",45,
-         "Combos, kits, ofertas de personalizados e condições especiais",
-         "Ofertas, antecipação, combos e escassez"),
-        ("Natal","Presente",date(ano,12,25),"Muito alta",60,
-         "Box, kits, cartões, tags, embalagens e presentes personalizados",
-         "Guia de presentes, kits, bastidores, prazos e últimas encomendas"),
-        ("Ano Novo","Festas",date(ano,12,31),"Média",30,
-         "Lembranças, papelaria de festa, tags e kits",
-         "Festas, retrospectiva e encomendas"),
-        ("Casamentos","Eventos",None,"Alta",60,
-         "Convites, menus, tags, lembranças, caixas e papelaria",
-         "Portfólio, antes/depois, detalhes e prova social"),
-        ("Aniversários","Eventos",None,"Alta",30,
-         "Convites, toppers, tags, lembrancinhas e kits",
-         "Temas, personalizados, bastidores e portfólio"),
-        ("Chá de bebê / revelação","Eventos",None,"Alta",45,
-         "Convites, tags, jogos, lembranças e papelaria",
-         "Temas, kits e detalhes personalizados"),
+    return [
+        item("Ano Novo", "Festas / Presente", date(ano,1,1), "Média", 30, "Tags, lembranças, papelaria de festa e kits", "Retrospectiva, novidades e inspirações para festas"),
+        item("Volta às aulas", "Escolar", date(ano,2,1), "Alta", 45, "Etiquetas escolares, adesivos, planners, cadernos e tags", "Kits escolares, organização e demonstração dos produtos"),
+        item("Carnaval", "Sazonal", carnaval, "Média", 30, "Tags, toppers, lembrancinhas, kits e papelaria de festa", "Inspirações de festa, bastidores e últimas vagas"),
+        item("Dia Internacional da Mulher", "Afetiva / Presente", date(ano,3,8), "Média", 30, "Cartões, mimos, kits corporativos, tags e lembranças", "Sugestões de presentes e kits personalizados"),
+        item("Dia do Consumidor", "Comercial", date(ano,3,15), "Alta", 30, "Combos, descontos estratégicos e kits", "Oferta especial, prova social e chamada para pedidos"),
+        item("Páscoa", "Afetiva / Presente", pascoa, "Muito alta", 60, "Boxes, caixas, tags, lembrancinhas, kits e embalagens", "Contagem regressiva, montagem, preços e últimas encomendas"),
+        item("Dia das Mães", "Presente", dia_maes, "Muito alta", 60, "Box presenteável, fotos, quadros, cartões, tags e kits", "Guia de presentes, bastidores, depoimentos e urgência"),
+        item("Dia dos Namorados", "Presente / Romântica", date(ano,6,12), "Muito alta", 45, "Box romântico, fotos, cartões, quadros e kits", "Combinações de presentes, Reels e contagem regressiva"),
+        item("Festas Juninas / São João", "Sazonal", date(ano,6,24), "Alta", 30, "Tags, toppers, convites, lembrancinhas e kits", "Inspirações juninas e montagem dos pedidos"),
+        item("Dia do Amigo", "Afetiva", date(ano,7,20), "Média", 30, "Fotos, cartões, mini kits e lembranças", "Presentes para amigos e combos"),
+        item("Dia dos Avós", "Afetiva / Presente", date(ano,7,26), "Média", 30, "Fotos, quadros, cartões e lembranças", "Presentes afetivos e histórias de família"),
+        item("Dia dos Pais", "Presente", dia_pais, "Muito alta", 60, "Box, cartões, fotos, quadros, kits e lembranças", "Guia de presentes, bastidores, depoimentos e últimas vagas"),
+        item("Dia do Cliente", "Relacionamento / Comercial", date(ano,9,15), "Alta", 30, "Brindes, cartões, mimos, cupons e kits de agradecimento", "Agradecimento, fidelidade, cupom e prova social"),
+        item("Dia da Secretária", "Corporativo", date(ano,9,30), "Média", 30, "Kits corporativos, cartões, tags e mimos", "Prospecção de empresas e ideias de kits"),
+        item("Dia das Crianças", "Infantil", date(ano,10,12), "Alta", 45, "Lembrancinhas, tags, kits, toppers e personalizados", "Temas, kits por faixa etária e encomendas"),
+        item("Dia dos Professores", "Escolar / Presente", date(ano,10,15), "Muito alta", 45, "Kits para professores, cartões, tags e lembranças", "Kits prontos, personalizados e encomendas escolares"),
+        item("Halloween", "Sazonal", date(ano,10,31), "Média", 30, "Tags, toppers, lembrancinhas, adesivos e kits", "Inspirações temáticas e montagem de produtos"),
+        item("Black Friday", "Comercial", black, "Muito alta", 45, "Combos, kits, ofertas e condições especiais", "Antecipação, combos, ofertas e escassez"),
+        item("Consciência Negra", "Institucional / Cultural", date(ano,11,20), "Média", 30, "Papelaria temática, materiais educativos e projetos", "Conteúdo respeitoso e comunicação temática"),
+        item("Natal", "Presente", date(ano,12,25), "Muito alta", 60, "Box, kits, cartões, tags, embalagens e presentes", "Guia de presentes, kits, bastidores, prazos e últimas encomendas"),
+        item("Ano Novo / Réveillon", "Festas", date(ano,12,31), "Média", 30, "Lembranças, papelaria de festa, tags e kits", "Festas, retrospectiva e encomendas"),
+        item("Corpus Christi", "Festas / Religioso", corpus, "Média", 30, "Lembranças, papelaria e itens para eventos", "Conteúdo conforme o público e eventos locais"),
+        item("Casamentos", "Eventos", None, "Muito alta", 60, "Convites, menus, tags, lembranças, caixas e papelaria", "Portfólio, detalhes, antes/depois e prova social"),
+        item("Aniversários", "Eventos", None, "Alta", 30, "Convites, toppers, tags, lembrancinhas e kits", "Temas, personalizados, bastidores e portfólio"),
+        item("Chá de bebê / revelação", "Eventos", None, "Alta", 45, "Convites, tags, jogos, lembranças e papelaria", "Temas, kits e detalhes personalizados"),
     ]
-    return datas
 
 
 def tela_calendario_comercial():
     garantir_calendario_comercial_profissional()
+    agora = agora_brasil()
     st.title("📅 Calendário Comercial")
-    st.caption("Planeje com antecedência as datas que a Sophi pode transformar em campanhas e vendas.")
+    st.caption("Um planejamento profissional para você saber quando pensar, comprar, produzir, divulgar e fechar encomendas.")
 
-    ano = st.selectbox("Ano", list(range(datetime.now().year, datetime.now().year + 4)), key="cal_ano")
+    anos = list(range(2026, 2031))
+    ano = st.selectbox("Ano do calendário", anos, index=anos.index(agora.year) if agora.year in anos else 0, key="cal_ano")
     dados = _datas_comerciais_sophi(int(ano))
-    df = pd.DataFrame(dados, columns=[
-        "Data/campanha","Categoria","Data","Oportunidade","Começar antes (dias)",
-        "Ideias de produtos","Ideias de conteúdo"
-    ])
-    df["Data"] = df["Data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
+    linhas=[]
+    for d in dados:
+        data_evento=d["data"]
+        pensar=(data_evento-timedelta(days=d["pensar"])) if data_evento else None
+        divulg=(data_evento-timedelta(days=max(d["pensar"]-20,10))) if data_evento else None
+        encom=(data_evento-timedelta(days=max(d["pensar"]-30,7))) if data_evento else None
+        prazo=(data_evento-timedelta(days=d["prazo"])) if data_evento else None
+        linhas.append({**d,"pensar_data":pensar,"divulg_data":divulg,"encom_data":encom,"prazo_data":prazo})
 
-    st.markdown("### 🗓️ Datas para a Sophi participar")
-    filtro_cat = st.multiselect(
-        "Filtrar por categoria",
-        sorted(df["Categoria"].unique().tolist()),
-        default=[],
-        key="cal_filtro_cat",
-    )
-    filtro_opp = st.multiselect(
-        "Oportunidade",
-        ["Muito alta","Alta","Média","Baixa"],
-        default=[],
-        key="cal_filtro_opp",
-    )
-    exib = df.copy()
-    if filtro_cat:
-        exib = exib[exib["Categoria"].isin(filtro_cat)]
-    if filtro_opp:
-        exib = exib[exib["Oportunidade"].isin(filtro_opp)]
-    st.dataframe(
-        exib[["Data/campanha","Categoria","Data","Oportunidade","Começar antes (dias)"]],
-        use_container_width=True, hide_index=True
-    )
+    df=pd.DataFrame(linhas)
+    df["Data"] = df["data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
+    df["Começar"] = df["pensar_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir conforme evento")
+    df["Divulgação"] = df["divulg_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
+    df["Encomendas"] = df["encom_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
+    df["Prazo"] = df["prazo_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
 
-    nomes = exib["Data/campanha"].tolist()
+    # Filtros simples e úteis.
+    f1,f2,f3=st.columns(3)
+    cats=f1.multiselect("Categoria",sorted(df["categoria"].unique()),key="cal_cats")
+    opps=f2.multiselect("Oportunidade",["Muito alta","Alta","Média","Baixa"],key="cal_opps")
+    periodo=f3.selectbox("Mostrar",["Todas","Próximas campanhas","Apenas com data"],key="cal_periodo")
+    exib=df.copy()
+    if cats: exib=exib[exib["categoria"].isin(cats)]
+    if opps: exib=exib[exib["oportunidade"].isin(opps)]
+    if periodo=="Apenas com data": exib=exib[exib["data"].notna()]
+    if periodo=="Próximas campanhas": exib=exib[(exib["data"].notna()) & (exib["data"]>=agora.date())]
+
+    st.markdown("### 🗓️ Visão anual")
+    st.dataframe(exib[["nome","categoria","Data","oportunidade","Começar","Divulgação","Encomendas","Prazo"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade"}),use_container_width=True,hide_index=True)
+
+    nomes=exib["nome"].tolist()
     if nomes:
-        escolhido = st.selectbox("Abrir planejamento da data", nomes, key="cal_data_sel")
-        linha = next(x for x in dados if x[0] == escolhido)
-        nome, categoria, data_evento, oportunidade, dias_antes, produtos, conteudo = linha
-        st.markdown(f"## {nome}")
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Oportunidade", oportunidade)
-        c2.metric("Começar a pensar", f"{dias_antes} dias antes")
-        c3.metric("Divulgação", f"{max(dias_antes-15,7)} dias antes")
-        c4.metric("Encomendas", f"{max(dias_antes-25,7)} dias antes")
-        if data_evento:
-            inicio = data_evento - timedelta(days=dias_antes)
-            divulg = data_evento - timedelta(days=max(dias_antes-15,7))
-            encom = data_evento - timedelta(days=max(dias_antes-25,7))
-            prazo = data_evento - timedelta(days=5)
-            st.info(
-                f"Evento: **{data_evento.strftime('%d/%m/%Y')}** · "
-                f"Começar planejamento: **{inicio.strftime('%d/%m/%Y')}** · "
-                f"Divulgação: **{divulg.strftime('%d/%m/%Y')}** · "
-                f"Abrir encomendas: **{encom.strftime('%d/%m/%Y')}** · "
-                f"Prazo recomendado: **{prazo.strftime('%d/%m/%Y')}**"
-            )
-        st.markdown("### 💡 Ideias de produtos")
-        st.write(produtos)
-        st.markdown("### 📱 Ideias de conteúdo")
-        st.write(conteudo)
-        st.markdown("### ✅ Checklist da campanha")
-        checklist = [
-            "Definir produtos e preços",
-            "Conferir estoque e materiais",
-            "Comprar o que faltar",
-            "Criar/fotografar artes e produtos",
-            "Preparar posts e stories",
-            "Abrir encomendas",
-            "Intensificar divulgação",
-            "Controlar produção e prazos",
-            "Organizar entregas/envios",
-            "Pedir avaliação e registrar resultado",
-        ]
-        for idx, item in enumerate(checklist):
-            st.checkbox(item, key=f"cal_check_{ano}_{escolhido}_{idx}")
+        escolhido=st.selectbox("Abrir planejamento",nomes,key="cal_data_sel")
+        linha=next(x for x in linhas if x["nome"]==escolhido)
+        evento=linha["data"]
+        st.markdown(f"## {linha['nome']}")
+        a,b,c,d=st.columns(4)
+        a.metric("Oportunidade",linha["oportunidade"])
+        b.metric("Pensar antes",f"{linha['pensar']} dias")
+        c.metric("Data do evento",evento.strftime("%d/%m/%Y") if evento else "Variável")
+        if evento:
+            dias_restantes=(evento-agora.date()).days
+            d.metric("Contagem",f"{dias_restantes} dias" if dias_restantes>=0 else f"{abs(dias_restantes)} dias atrás")
+            st.success(f"📌 Comece a planejar em **{linha['pensar_data'].strftime('%d/%m/%Y')}**. Divulgação: **{linha['divulg_data'].strftime('%d/%m/%Y')}** · Encomendas: **{linha['encom_data'].strftime('%d/%m/%Y')}** · Prazo recomendado: **{linha['prazo_data'].strftime('%d/%m/%Y')}**.")
+        else:
+            st.info("Essa é uma campanha contínua/variável. Defina a data assim que o cliente ou evento confirmar.")
 
-        st.markdown("### 🎯 Criar minha campanha")
-        with st.form(f"form_campanha_{ano}_{escolhido}"):
-            meta = st.number_input("Meta de vendas (R$)", min_value=0.0, value=0.0, step=50.0)
-            produtos_camp = st.text_area("Produtos que vou oferecer", value=produtos)
-            observ = st.text_area("Observações / estratégia", placeholder="Ex.: começar divulgação com 30 dias e fechar encomendas 5 dias antes.")
-            salvar = st.form_submit_button("Salvar campanha")
-            if salvar:
-                data_str = data_evento.isoformat() if data_evento else ""
-                inicio_str = (data_evento - timedelta(days=dias_antes)).isoformat() if data_evento else ""
-                divulg_str = (data_evento - timedelta(days=max(dias_antes-15,7))).isoformat() if data_evento else ""
-                encom_str = (data_evento - timedelta(days=max(dias_antes-25,7))).isoformat() if data_evento else ""
-                prazo_str = (data_evento - timedelta(days=5)).isoformat() if data_evento else ""
-                executar("""
-                    INSERT INTO calendario_comercial_campanhas
-                    (nome,data_evento,inicio_planejamento,inicio_divulgacao,abertura_encomendas,prazo_final,meta,produtos,status,observacoes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                """, (nome,data_str,inicio_str,divulg_str,encom_str,prazo_str,meta,produtos_camp,"Planejada",observ))
-                st.success("Campanha salva no planejamento.")
+        st.markdown("### 💡 Ideias para vender")
+        st.write(linha["produtos"])
+        st.markdown("### 📱 Ideias de conteúdo")
+        st.write(linha["conteudo"])
+        st.markdown("### 🧠 Roteiro de campanha")
+        roteiro=[
+            "Definir produtos, preços e margem",
+            "Conferir estoque de papel, tinta, laminação e embalagens",
+            "Comprar o que faltar com antecedência",
+            "Criar/fotografar os produtos e montar portfólio",
+            "Preparar posts, stories e status do WhatsApp",
+            "Abrir encomendas e registrar prazos",
+            "Fazer reforço de divulgação e prova social",
+            "Separar produção por ordem de entrega",
+            "Conferir embalagem, etiqueta e envio/retirada",
+            "Registrar vendas, lucro e o que funcionou para o próximo ano",
+        ]
+        for i,item in enumerate(roteiro): st.checkbox(item,key=f"cal_roteiro_{ano}_{linha['nome']}_{i}")
+
+        st.markdown("### 🚀 Minha campanha")
+        with st.form(f"form_campanha_{ano}_{linha['nome']}"):
+            meta=st.number_input("Meta de vendas (R$)",min_value=0.0,value=0.0,step=50.0)
+            produtos_camp=st.text_area("Produtos que vou oferecer",value=linha["produtos"])
+            observ=st.text_area("Estratégia / observações",placeholder="Ex.: começar 45 dias antes, abrir encomendas 20 dias antes e encerrar 5 dias antes.")
+            status=st.selectbox("Status da campanha",["Planejada","Em preparação","Divulgando","Encomendas abertas","Encerrada"])
+            if st.form_submit_button("Salvar campanha"):
+                data_str=evento.isoformat() if evento else ""
+                inicio_str=linha["pensar_data"].isoformat() if evento else ""
+                divulg_str=linha["divulg_data"].isoformat() if evento else ""
+                encom_str=linha["encom_data"].isoformat() if evento else ""
+                prazo_str=linha["prazo_data"].isoformat() if evento else ""
+                executar("INSERT INTO calendario_comercial_campanhas(nome,data_evento,inicio_planejamento,inicio_divulgacao,abertura_encomendas,prazo_final,meta,produtos,status,observacoes) VALUES(?,?,?,?,?,?,?,?,?,?)",(linha["nome"],data_str,inicio_str,divulg_str,encom_str,prazo_str,meta,produtos_camp,status,observ))
+                st.success("Campanha salva.")
                 st.rerun()
 
     st.divider()
-    st.subheader("🚀 Minhas campanhas")
-    try:
-        campanhas = consultar("SELECT * FROM calendario_comercial_campanhas ORDER BY COALESCE(data_evento,'9999-12-31'), id DESC LIMIT 100")
-    except Exception:
-        campanhas = pd.DataFrame()
-    if campanhas.empty:
-        st.info("Nenhuma campanha salva ainda.")
+    st.subheader("🚀 Minhas campanhas salvas")
+    try: campanhas=consultar("SELECT * FROM calendario_comercial_campanhas ORDER BY COALESCE(data_evento,'9999-12-31'), id DESC LIMIT 100")
+    except Exception: campanhas=pd.DataFrame()
+    if campanhas.empty: st.info("Nenhuma campanha salva ainda.")
     else:
-        ex = campanhas.copy()
+        ex=campanhas.copy()
         for col in ["data_evento","inicio_planejamento","inicio_divulgacao","abertura_encomendas","prazo_final"]:
-            if col in ex.columns:
-                ex[col] = ex[col].apply(data_br)
-        ex = ex.rename(columns={
-            "nome":"Campanha","data_evento":"Data","inicio_planejamento":"Começar",
-            "inicio_divulgacao":"Divulgação","abertura_encomendas":"Encomendas",
-            "prazo_final":"Prazo","meta":"Meta","status":"Status"
-        })
+            if col in ex.columns: ex[col]=ex[col].apply(data_br)
+        ex=ex.rename(columns={"nome":"Campanha","data_evento":"Data","inicio_planejamento":"Começar","inicio_divulgacao":"Divulgação","abertura_encomendas":"Encomendas","prazo_final":"Prazo","meta":"Meta","status":"Status"})
         cols=[c for c in ["Campanha","Data","Começar","Divulgação","Encomendas","Prazo","Meta","Status"] if c in ex.columns]
-        st.dataframe(formatar_valores_tabela(ex[cols]), use_container_width=True, hide_index=True)
-        st.caption("As campanhas salvas ficam separadas do calendário e não alteram pedidos, produtos, estoque ou financeiro.")
-
-
-    st.title("📅 Calendário Comercial")
-    st.caption("Planejamento de datas e campanhas para papelaria personalizada e artesanato.")
-    datas=[
-        ("Páscoa","Kits, tags, caixas, lembrancinhas"),("Dia das Mães","Cartões, caixas, kits, lembranças"),
-        ("Dia dos Namorados","Kits românticos, fotos, cartões"),("Dia dos Pais","Kits, cartões, canecas e lembranças"),
-        ("Dia das Crianças","Lembrancinhas, tags, toppers"),("Dia dos Professores","Kits, cartões, mimos"),
-        ("Halloween","Tags, toppers, lembrancinhas"),("Black Friday","Ofertas e kits"),("Natal","Kits, tags, embalagens, cartões"),
-        ("Ano Novo","Lembranças e papelaria de festa"),("Volta às aulas","Etiquetas, planners, materiais personalizados"),
-        ("Casamentos","Convites, menus, tags, lembranças"),("Aniversários","Convites, toppers, tags, lembrancinhas"),
-        ("Chá de bebê / revelação","Convites, tags, jogos, lembranças"),
-    ]
-    df=pd.DataFrame(datas,columns=["Data/campanha","Ideias de produtos"])
-    st.dataframe(df,use_container_width=True,hide_index=True)
-    st.subheader("Planejar campanha")
-    c1,c2=st.columns(2)
-    nome=c1.text_input("Nome da campanha")
-    inicio=c2.date_input("Começar divulgação",value=date.today())
-    produtos=st.text_area("Produtos que serão oferecidos")
-    if st.button("Salvar planejamento"):
-        garantir_automacoes_erp()
-        executar("CREATE TABLE IF NOT EXISTS campanhas_comerciais(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,inicio TEXT,produtos TEXT,status TEXT DEFAULT 'Planejada')")
-        executar("INSERT INTO campanhas_comerciais(nome,inicio,produtos) VALUES(?,?,?)",(nome,inicio.isoformat(),produtos))
-        st.success("Campanha salva.")
+        st.dataframe(formatar_valores_tabela(ex[cols]),use_container_width=True,hide_index=True)
 
 
 def _html_etiqueta_correios_pedido(orcamento_id,destinatario,endereco,cep,cidade,uf,remetente,endereco_remetente,cep_remetente,codigo_rastreio=""):
