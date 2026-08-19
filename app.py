@@ -17808,28 +17808,28 @@ def _datas_comerciais_sophi(ano):
         }
 
     return [
-        item("Ano Novo", "Festas / Presente", date(ano,1,1), "Média", 30, "Tags, lembranças, papelaria de festa e kits", "Retrospectiva, novidades e inspirações para festas"),
-        item("Volta às aulas", "Escolar", date(ano,2,1), "Alta", 45, "Etiquetas escolares, adesivos, planners, cadernos e tags", "Kits escolares, organização e demonstração dos produtos"),
-        item("Carnaval", "Sazonal", carnaval, "Média", 30, "Tags, toppers, lembrancinhas, kits e papelaria de festa", "Inspirações de festa, bastidores e últimas vagas"),
-        item("Dia Internacional da Mulher", "Afetiva / Presente", date(ano,3,8), "Média", 30, "Cartões, mimos, kits corporativos, tags e lembranças", "Sugestões de presentes e kits personalizados"),
-        item("Dia do Consumidor", "Comercial", date(ano,3,15), "Alta", 30, "Combos, descontos estratégicos e kits", "Oferta especial, prova social e chamada para pedidos"),
-        item("Páscoa", "Afetiva / Presente", pascoa, "Muito alta", 60, "Boxes, caixas, tags, lembrancinhas, kits e embalagens", "Contagem regressiva, montagem, preços e últimas encomendas"),
-        item("Dia das Mães", "Presente", dia_maes, "Muito alta", 60, "Box presenteável, fotos, quadros, cartões, tags e kits", "Guia de presentes, bastidores, depoimentos e urgência"),
-        item("Dia dos Namorados", "Presente / Romântica", date(ano,6,12), "Muito alta", 45, "Box romântico, fotos, cartões, quadros e kits", "Combinações de presentes, Reels e contagem regressiva"),
-        item("Festas Juninas / São João", "Sazonal", date(ano,6,24), "Alta", 30, "Tags, toppers, convites, lembrancinhas e kits", "Inspirações juninas e montagem dos pedidos"),
-        item("Dia do Amigo", "Afetiva", date(ano,7,20), "Média", 30, "Fotos, cartões, mini kits e lembranças", "Presentes para amigos e combos"),
-        item("Dia dos Avós", "Afetiva / Presente", date(ano,7,26), "Média", 30, "Fotos, quadros, cartões e lembranças", "Presentes afetivos e histórias de família"),
-        item("Dia dos Pais", "Presente", dia_pais, "Muito alta", 60, "Box, cartões, fotos, quadros, kits e lembranças", "Guia de presentes, bastidores, depoimentos e últimas vagas"),
-        item("Dia do Cliente", "Relacionamento / Comercial", date(ano,9,15), "Alta", 30, "Brindes, cartões, mimos, cupons e kits de agradecimento", "Agradecimento, fidelidade, cupom e prova social"),
-        item("Dia da Secretária", "Corporativo", date(ano,9,30), "Média", 30, "Kits corporativos, cartões, tags e mimos", "Prospecção de empresas e ideias de kits"),
-        item("Dia das Crianças", "Infantil", date(ano,10,12), "Alta", 45, "Lembrancinhas, tags, kits, toppers e personalizados", "Temas, kits por faixa etária e encomendas"),
-        item("Dia dos Professores", "Escolar / Presente", date(ano,10,15), "Muito alta", 45, "Kits para professores, cartões, tags e lembranças", "Kits prontos, personalizados e encomendas escolares"),
-        item("Halloween", "Sazonal", date(ano,10,31), "Média", 30, "Tags, toppers, lembrancinhas, adesivos e kits", "Inspirações temáticas e montagem de produtos"),
-        item("Black Friday", "Comercial", black, "Muito alta", 45, "Combos, kits, ofertas e condições especiais", "Antecipação, combos, ofertas e escassez"),
-        item("Consciência Negra", "Institucional / Cultural", date(ano,11,20), "Média", 30, "Papelaria temática, materiais educativos e projetos", "Conteúdo respeitoso e comunicação temática"),
-        item("Natal", "Presente", date(ano,12,25), "Muito alta", 60, "Box, kits, cartões, tags, embalagens e presentes", "Guia de presentes, kits, bastidores, prazos e últimas encomendas"),
-        item("Ano Novo / Réveillon", "Festas", date(ano,12,31), "Média", 30, "Lembranças, papelaria de festa, tags e kits", "Festas, retrospectiva e encomendas"),
-        item("Corpus Christi", "Festas / Religioso", corpus, "Média", 30, "Lembranças, papelaria e itens para eventos", "Conteúdo conforme o público e eventos locais"),
+        item("Ano Novo", "Festas / Presente", date(ano,1,1), "Média", 30, "Tags para taças e lembranças, cartões de boas-vindas, plaquinhas de mesa, toppers e papelaria personalizada para Réveillon", "Posts com sugestões de decoração, retrospectiva dos produtos, catálogo de Ano Novo e chamada antecipada para encomendas"),
+        item("Volta às aulas", "Escolar", date(ano,2,1), "Alta", 45, "Etiquetas com nome para cadernos e materiais, adesivos para lápis e canetas, capas personalizadas, planners escolares e marcadores de página", "Mostrar antes/depois dos materiais, opções de nomes e temas, montagem dos pedidos e aviso de encerramento das encomendas"),
+        item("Carnaval", "Sazonal", carnaval, "Média", 30, "Toppers para doces, tags para lembrancinhas, adesivos para copos, plaquinhas de fotos e convites para festas", "Mostrar combinações de cores e temas, montagem de mesa, personalizados para blocos e festas e últimas vagas"),
+        item("Dia Internacional da Mulher", "Afetiva / Presente", date(ano,3,8), "Média", 30, "Cartão personalizado com mensagem, foto polaroid, porta-retrato, marcador de página, caneca personalizada se disponível e lembrança com nome", "Publicar sugestões por faixa de preço, mensagens prontas, combinações de foto + cartão e prazo final para encomendas"),
+        item("Dia do Consumidor", "Comercial", date(ano,3,15), "Alta", 30, "Cartão de agradecimento, cupom de próxima compra, mimo personalizado para clientes fiéis, marcador e mini lembrança com a identidade da Sophi", "Criar campanha de agradecimento, condição especial, cupom para próxima compra e prova social de clientes"),
+        item("Páscoa", "Afetiva / Presente", pascoa, "Muito alta", 60, "Caixinhas para bombons, tags para chocolates, adesivos para embalagens, cartões de Páscoa, toppers e lembrancinhas personalizadas", "Mostrar montagem das caixinhas, sugestões de chocolates para cada modelo, tabela de opções, encomendas por quantidade e contagem regressiva"),
+        item("Dia das Mães", "Presente", dia_maes, "Muito alta", 60, "Quadro com foto e mensagem, álbum ou conjunto de fotos, cartão personalizado, porta-retrato, caixa decorada com itens escolhidos e lembrança com nome", "Criar guia de presentes por orçamento, mostrar cada opção pronta, vídeos de montagem, depoimentos e aviso de última data para encomendar"),
+        item("Dia dos Namorados", "Presente / Romântica", date(ano,6,12), "Muito alta", 45, "Quadro com foto do casal, sequência de polaroids, cartão com declaração, caixa personalizada, porta-retrato, vale-presente e lembrança com data do casal", "Mostrar presentes para diferentes orçamentos, frases românticas, montagem de pedidos, combinações de foto + mensagem e contagem regressiva"),
+        item("Festas Juninas / São João", "Sazonal", date(ano,6,24), "Alta", 30, "Toppers de doces, tags para lembrancinhas, bandeirolas personalizadas, convites, plaquinhas e adesivos para embalagens", "Mostrar decoração pronta, temas juninos, montagem dos personalizados e exemplos para festas infantis e adultas"),
+        item("Dia do Amigo", "Afetiva", date(ano,7,20), "Média", 30, "Foto polaroid com mensagem, cartão personalizado, marcador de página, mini álbum de fotos, porta-retrato e lembrança com nome", "Criar sugestões de presente para melhor amigo, dupla de amigos e grupos, usando fotos e mensagens personalizadas"),
+        item("Dia dos Avós", "Afetiva / Presente", date(ano,7,26), "Média", 30, "Quadro com foto dos netos, porta-retrato, cartão com mensagem, álbum de fotos, sequência de polaroids e lembrança com nomes dos netos", "Focar no valor afetivo, mostrar fotos antigas e atuais, mensagens para avós e sugestões de presentes personalizados"),
+        item("Dia dos Pais", "Presente", dia_pais, "Muito alta", 60, "Quadro com foto e frase, porta-retrato, cartão personalizado, álbum de fotos, caixa personalizada com itens escolhidos e lembrança com nome", "Criar guia de presentes por perfil de pai, mostrar opções de preço, bastidores, depoimentos e última data para encomendas"),
+        item("Dia do Cliente", "Relacionamento / Comercial", date(ano,9,15), "Alta", 30, "Cartão de agradecimento, marcador, mimo com nome da empresa, cupom personalizado, adesivo e pequena lembrança para clientes", "Campanha de fidelização, agradecimento individual, cupom de retorno e conteúdo mostrando o cuidado com cada cliente"),
+        item("Dia da Secretária", "Corporativo", date(ano,9,30), "Média", 30, "Cartão personalizado, bloco ou marcador, tags com nome, lembrança de mesa, porta-caneta personalizado e embalagem corporativa", "Criar catálogo corporativo, apresentar opções para empresas por quantidade e mostrar personalização com nome e logo"),
+        item("Dia das Crianças", "Infantil", date(ano,10,12), "Alta", 45, "Caixinhas para doces, toppers, tags com nome, adesivos, lembrancinhas de aniversário, convites e itens personalizados com personagens", "Separar sugestões por idade e tema, mostrar montagem, apresentar opções econômicas e divulgar prazo de encomenda"),
+        item("Dia dos Professores", "Escolar / Presente", date(ano,10,15), "Muito alta", 45, "Cartão de agradecimento, marcador de página com nome, porta-caneta, bloco personalizado, tag para presente e lembrança de mesa", "Montar catálogo para pais e alunos, mostrar opções por orçamento e oferecer personalização individual ou para turma"),
+        item("Halloween", "Sazonal", date(ano,10,31), "Média", 30, "Toppers temáticos, adesivos, tags, plaquinhas, convites, embalagens para doces e lembrancinhas personalizadas", "Mostrar temas e combinações, montagem de doces personalizados e ideias para festas"),
+        item("Black Friday", "Comercial", black, "Muito alta", 45, "Combos de produtos personalizados, descontos por quantidade, kits de papelaria, cartões, tags e produtos de pronta-entrega", "Planejar ofertas com margem protegida, divulgar condições com antecedência, criar contagem regressiva e limitar quantidades"),
+        item("Consciência Negra", "Institucional / Cultural", date(ano,11,20), "Média", 30, "Papelaria temática, cartões, materiais educativos, marcadores, pôsteres e projetos personalizados com referências culturais", "Criar conteúdo educativo e respeitoso, valorizar referências negras e apresentar produtos sem estereótipos"),
+        item("Natal", "Presente", date(ano,12,25), "Muito alta", 60, "Quadro com foto da família, calendário personalizado, cartões de Natal, tags para presentes, caixas decoradas, porta-retratos e sequência de fotos", "Montar guia de presentes por orçamento, mostrar opções prontas, divulgar prazos de produção e criar contagem regressiva para encomendas"),
+        item("Ano Novo / Réveillon", "Festas", date(ano,12,31), "Média", 30, "Tags para taças, toppers, plaquinhas, adesivos para copos, cartões de agradecimento e papelaria personalizada para festas", "Mostrar ideias para mesas e confraternizações, combinações de personalizados e prazo para pedidos"),
+        item("Corpus Christi", "Festas / Religioso", corpus, "Média", 30, "Lembranças para eventos religiosos, cartões, tags, convites, marcadores e papelaria para celebrações", "Mostrar aplicações para comunidades, famílias e eventos, respeitando o perfil de cada público"),
         item("Casamentos", "Eventos", None, "Muito alta", 60, "Convites, menus, tags, lembranças, caixas e papelaria", "Portfólio, detalhes, antes/depois e prova social"),
         item("Aniversários", "Eventos", None, "Alta", 30, "Convites, toppers, tags, lembrancinhas e kits", "Temas, personalizados, bastidores e portfólio"),
         item("Chá de bebê / revelação", "Eventos", None, "Alta", 45, "Convites, tags, jogos, lembranças e papelaria", "Temas, kits e detalhes personalizados"),
@@ -17840,7 +17840,7 @@ def tela_calendario_comercial():
     garantir_calendario_comercial_profissional()
     agora = agora_brasil()
     st.title("📅 Calendário Comercial")
-    st.caption("Um planejamento profissional para você saber quando pensar, comprar, produzir, divulgar e fechar encomendas.")
+    st.caption("Um planejamento profissional para você saber quando pensar, comprar, produzir, divulgar e fechar encomendas. Datas já passadas são ocultadas automaticamente com base na data brasileira atual.")
 
     anos = list(range(2026, 2031))
     ano = st.selectbox("Ano do calendário", anos, index=anos.index(agora.year) if agora.year in anos else 0, key="cal_ano")
@@ -17869,7 +17869,9 @@ def tela_calendario_comercial():
     cats=f1.multiselect("Categoria",sorted(df["categoria"].unique()),key="cal_cats")
     opps=f2.multiselect("Oportunidade",["Muito alta","Alta","Média","Baixa"],key="cal_opps")
     periodo=f3.selectbox("Mostrar",["Todas","Próximas campanhas","Apenas com data"],key="cal_periodo")
-    exib=df.copy()
+    # O calendário é sempre atualizado pela data brasileira atual:
+    # campanhas com data já passada deixam de aparecer na visão anual.
+    exib=df[(df["data"].isna()) | (df["data"] >= agora.date())].copy()
     if cats: exib=exib[exib["categoria"].isin(cats)]
     if opps: exib=exib[exib["oportunidade"].isin(opps)]
     if periodo=="Apenas com data": exib=exib[exib["data"].notna()]
