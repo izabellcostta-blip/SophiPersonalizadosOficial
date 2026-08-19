@@ -5310,6 +5310,18 @@ def aplicar_visual_publico_limpo():
         color:#ffffff !important; font-weight:800 !important;
     }
     [data-testid="stDownloadButton"] { display:none !important; }
+    /* Botão exclusivo de saída: branco com texto preto para leitura clara. */
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        background:#ffffff !important; color:#111111 !important; border:1px solid #d8d8d8 !important;
+        box-shadow:0 4px 12px rgba(0,0,0,.10) !important; text-shadow:none !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] p,
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] span {
+        color:#111111 !important; font-weight:800 !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+        background:#f2f2f2 !important; color:#111111 !important; border-color:#bdbdbd !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -16223,7 +16235,8 @@ def botao_recebemos_pedido_catalogo(p, codigo, itens_texto, total_pedido):
 def botao_sair():
     st.sidebar.divider()
     st.sidebar.caption(f"Usuário: {st.session_state.get('usuario_logado', '')}")
-    if st.sidebar.button("🚪 Sair do sistema", type="secondary", use_container_width=True):
+    if st.sidebar.button("🚪 Sair do sistema", type="primary", use_container_width=True, key="botao_sair_sistema"):
+
         st.session_state["autenticado"] = False
         st.session_state["usuario_logado"] = ""
         try:
@@ -17726,8 +17739,11 @@ def tela_calendario_comercial():
     for d in dados:
         data_evento=d["data"]
         pensar=(data_evento-timedelta(days=d["pensar"])) if data_evento else None
-        divulg=(data_evento-timedelta(days=max(d["pensar"]-20,10))) if data_evento else None
-        encom=(data_evento-timedelta(days=max(d["pensar"]-30,7))) if data_evento else None
+        # Divulgação começa no mesmo dia do início do planejamento.
+        divulg=pensar if data_evento else None
+        # Aceite de encomendas até uma semana antes do evento.
+        encom=(data_evento-timedelta(days=7)) if data_evento else None
+        # Prazo de produção permanece conforme a regra já definida para cada campanha.
         prazo=(data_evento-timedelta(days=d["prazo"])) if data_evento else None
         linhas.append({**d,"pensar_data":pensar,"divulg_data":divulg,"encom_data":encom,"prazo_data":prazo})
 
@@ -17735,7 +17751,7 @@ def tela_calendario_comercial():
     df["Data"] = df["data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
     df["Começar"] = df["pensar_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir conforme evento")
     df["Divulgação"] = df["divulg_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
-    df["Encomendas"] = df["encom_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
+    df["Encomendas até"] = df["encom_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
     df["Prazo"] = df["prazo_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir")
 
     # Filtros simples e úteis.
@@ -17750,7 +17766,7 @@ def tela_calendario_comercial():
     if periodo=="Próximas campanhas": exib=exib[(exib["data"].notna()) & (exib["data"]>=agora.date())]
 
     st.markdown("### 🗓️ Visão anual")
-    st.dataframe(exib[["nome","categoria","Data","oportunidade","Começar","Divulgação","Encomendas","Prazo"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade"}),use_container_width=True,hide_index=True)
+    st.dataframe(exib[["nome","categoria","oportunidade","Começar","Divulgação","Encomendas até","Prazo","Data"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade","Data":"Data do evento"}),use_container_width=True,hide_index=True)
 
     nomes=exib["nome"].tolist()
     if nomes:
@@ -17765,7 +17781,7 @@ def tela_calendario_comercial():
         if evento:
             dias_restantes=(evento-agora.date()).days
             d.metric("Contagem",f"{dias_restantes} dias" if dias_restantes>=0 else f"{abs(dias_restantes)} dias atrás")
-            st.success(f"📌 Comece a planejar em **{linha['pensar_data'].strftime('%d/%m/%Y')}**. Divulgação: **{linha['divulg_data'].strftime('%d/%m/%Y')}** · Encomendas: **{linha['encom_data'].strftime('%d/%m/%Y')}** · Prazo recomendado: **{linha['prazo_data'].strftime('%d/%m/%Y')}**.")
+            st.success(f"📌 Comece a planejar em **{linha['pensar_data'].strftime('%d/%m/%Y')}**. Divulgação começa no mesmo dia. Encomendas até **{linha['encom_data'].strftime('%d/%m/%Y')}** · Prazo recomendado: **{linha['prazo_data'].strftime('%d/%m/%Y')}** · Evento: **{evento.strftime('%d/%m/%Y')}**.")
         else:
             st.info("Essa é uma campanha contínua/variável. Defina a data assim que o cliente ou evento confirmar.")
 
@@ -17813,8 +17829,8 @@ def tela_calendario_comercial():
         ex=campanhas.copy()
         for col in ["data_evento","inicio_planejamento","inicio_divulgacao","abertura_encomendas","prazo_final"]:
             if col in ex.columns: ex[col]=ex[col].apply(data_br)
-        ex=ex.rename(columns={"nome":"Campanha","data_evento":"Data","inicio_planejamento":"Começar","inicio_divulgacao":"Divulgação","abertura_encomendas":"Encomendas","prazo_final":"Prazo","meta":"Meta","status":"Status"})
-        cols=[c for c in ["Campanha","Data","Começar","Divulgação","Encomendas","Prazo","Meta","Status"] if c in ex.columns]
+        ex=ex.rename(columns={"nome":"Campanha","data_evento":"Data do evento","inicio_planejamento":"Começar","inicio_divulgacao":"Divulgação","abertura_encomendas":"Encomendas até","prazo_final":"Prazo","meta":"Meta","status":"Status"})
+        cols=[c for c in ["Campanha","Começar","Divulgação","Encomendas até","Prazo","Data do evento","Meta","Status"] if c in ex.columns]
         st.dataframe(formatar_valores_tabela(ex[cols]),use_container_width=True,hide_index=True)
 
 
