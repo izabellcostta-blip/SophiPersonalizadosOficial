@@ -8,6 +8,7 @@ import sqlite3
 import shutil
 import html
 import os
+import re
 import urllib.request
 import urllib.error
 from datetime import date, datetime, timedelta
@@ -12833,6 +12834,600 @@ def tela_biblioteca_artes():
 def tela_catalogo_publico():
     tela_catalogo()
 
+
+# ============================================================
+# MÓDULO — GERADOR PROFISSIONAL DE MOLDES PARA BOTTONS
+# ============================================================
+
+BOTTON_MOLDES = {
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0},
+    "44 mm": {"shape": "circle", "diameter_mm": 44.0},
+    "58 mm": {"shape": "circle", "diameter_mm": 58.0},
+    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0},
+}
+
+def _botton_svg_text_path_id(shape_key):
+    return f"botton_text_path_{shape_key.replace(' ', '_').replace('×', 'x')}"
+
+def _svg_escape(value):
+    return html.escape(str(value or ""), quote=True)
+
+def _botton_layout_mm(shape, size_mm, bleed_mm, gap_mm, margin_mm, a4_w=210.0, a4_h=297.0):
+    """Calcula quantos moldes cabem em uma A4 mantendo medidas físicas."""
+    if shape == "circle":
+        w = h = size_mm + 2.0 * bleed_mm
+    else:
+        w = size_mm + 2.0 * bleed_mm
+        h = size_mm + 2.0 * bleed_mm
+
+    usable_w = max(a4_w - 2.0 * margin_mm, 1.0)
+    usable_h = max(a4_h - 2.0 * margin_mm, 1.0)
+
+    cols = max(int((usable_w + gap_mm) // (w + gap_mm)), 0)
+    rows = max(int((usable_h + gap_mm) // (h + gap_mm)), 0)
+
+    total = cols * rows
+    return {
+        "w": w,
+        "h": h,
+        "cols": cols,
+        "rows": rows,
+        "total": total,
+        "usable_w": usable_w,
+        "usable_h": usable_h,
+    }
+
+def _botton_svg_preview(
+    molde_key,
+    quantidade,
+    border_mode,
+    border_color,
+    border_width_mm,
+    bleed_mm,
+    gap_mm,
+    margin_mm,
+    text,
+    text_color,
+    text_size_mm,
+    text_offset_mm,
+    show_cut,
+    show_bleed,
+):
+    """Gera uma prévia vetorial A4 no próprio navegador."""
+    spec = BOTTON_MOLDES[molde_key]
+    shape = spec["shape"]
+    size = spec.get("diameter_mm", spec.get("width_mm", 50.0))
+    layout = _botton_layout_mm(shape, size, bleed_mm, gap_mm, margin_mm)
+    a4_w, a4_h = 210.0, 297.0
+
+    scale = 2.55  # aproximadamente px por mm
+    W = int(a4_w * scale)
+    H = int(a4_h * scale)
+
+    border_dash = "stroke-dasharray='1.8 1.2'" if border_mode == "Pontilhada" else ""
+    border_opacity = "0.95" if border_mode != "Sem borda" else "0"
+    border = border_color if border_mode != "Sem borda" else "none"
+
+    qty = max(int(quantidade), 1)
+    max_n = min(qty, layout["total"])
+
+    svg = [
+        f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' "
+        f"style='width:100%;height:auto;display:block;background:#fff;border-radius:16px;'>",
+        "<defs>",
+    ]
+
+    # Gradiente visual sutil apenas para a interface, sem alterar o PDF.
+    svg.append("<filter id='softShadow' x='-20%' y='-20%' width='140%' height='140%'><feDropShadow dx='0' dy='1.5' stdDeviation='1.5' flood-opacity='.12'/></filter>")
+
+    if shape == "circle" and text.strip():
+        # Um caminho por célula será desenhado dinamicamente; o texto usa caminho local.
+        pass
+
+    svg.append("</defs>")
+    svg.append(f"<rect x='0' y='0' width='{W}' height='{H}' rx='12' fill='#ffffff'/>")
+
+    # Margens A4 e cabeçalho visual.
+    mx = margin_mm * scale
+    my = margin_mm * scale
+    svg.append(
+        f"<rect x='{mx}' y='{my}' width='{a4_w*scale-2*mx}' height='{a4_h*scale-2*my}' "
+        "fill='none' stroke='#e5e7eb' stroke-width='1'/>"
+    )
+
+    placed = 0
+    for row in range(layout["rows"]):
+        for col in range(layout["cols"]):
+            if placed >= max_n:
+                break
+
+            cell_x_mm = margin_mm + col * (layout["w"] + gap_mm)
+            cell_y_mm = margin_mm + row * (layout["h"] + gap_mm)
+
+            # Centraliza cada molde dentro da célula.
+            x = (cell_x_mm + bleed_mm) * scale
+            y = (cell_y_mm + bleed_mm) * scale
+            s = size * scale
+            bleed = bleed_mm * scale
+
+            # Sangria visual.
+            if show_bleed and bleed_mm > 0:
+                if shape == "circle":
+                    svg.append(
+                        f"<circle cx='{x+s/2:.2f}' cy='{y+s/2:.2f}' r='{(s/2+bleed):.2f}' "
+                        "fill='none' stroke='#d1d5db' stroke-width='1' stroke-dasharray='3 3'/>"
+                    )
+                else:
+                    svg.append(
+                        f"<rect x='{x-bleed:.2f}' y='{y-bleed:.2f}' width='{s+2*bleed:.2f}' height='{s+2*bleed:.2f}' "
+                        "fill='none' stroke='#d1d5db' stroke-width='1' stroke-dasharray='3 3'/>"
+                    )
+
+            if shape == "circle":
+                cx, cy = x + s/2, y + s/2
+                svg.append(
+                    f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{s/2:.2f}' fill='#ffffff' "
+                    f"stroke='{border}' stroke-width='{border_width_mm*scale:.2f}' opacity='{border_opacity}' {border_dash}/>"
+                )
+                if show_cut:
+                    svg.append(
+                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{s/2:.2f}' fill='none' "
+                        "stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2' opacity='.75'/>"
+                    )
+
+                if text.strip():
+                    path_id = f"p{placed}"
+                    rtxt = max(1.0, s/2 - (max(text_size_mm, 1.5)*scale) - text_offset_mm*scale)
+                    svg.append(
+                        f"<path id='{path_id}' d='M {cx-rtxt:.2f},{cy:.2f} "
+                        f"A {rtxt:.2f},{rtxt:.2f} 0 0,1 {cx+rtxt:.2f},{cy:.2f}' fill='none' stroke='none'/>"
+                    )
+                    svg.append(
+                        f"<text fill='{text_color}' font-family='Arial, sans-serif' font-size='{text_size_mm*scale:.2f}' "
+                        "font-weight='700' letter-spacing='.3' text-anchor='middle'>"
+                        f"<textPath href='#{path_id}' startOffset='50%'>{_svg_escape(text)}</textPath></text>"
+                    )
+            else:
+                svg.append(
+                    f"<rect x='{x:.2f}' y='{y:.2f}' width='{s:.2f}' height='{s:.2f}' fill='#ffffff' "
+                    f"stroke='{border}' stroke-width='{border_width_mm*scale:.2f}' opacity='{border_opacity}' {border_dash}/>"
+                )
+                if show_cut:
+                    svg.append(
+                        f"<rect x='{x:.2f}' y='{y:.2f}' width='{s:.2f}' height='{s:.2f}' fill='none' "
+                        "stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2' opacity='.75'/>"
+                    )
+                if text.strip():
+                    svg.append(
+                        f"<text x='{x+s/2:.2f}' y='{y+s/2+text_size_mm*scale/3:.2f}' "
+                        f"fill='{text_color}' font-family='Arial, sans-serif' font-size='{text_size_mm*scale:.2f}' "
+                        "font-weight='700' text-anchor='middle'>"
+                        f"{_svg_escape(text)}</text>"
+                    )
+
+            placed += 1
+        if placed >= max_n:
+            break
+
+    svg.append("</svg>")
+    return "".join(svg), layout, placed
+
+def _draw_pdf_text_along_circle(canvas, text, cx, cy, radius, font_name, font_size, color):
+    """Texto vetorial acompanhando a borda circular, sem rasterizar o PDF."""
+    if not text:
+        return
+    from math import cos, sin, radians
+
+    canvas.saveState()
+    canvas.setFillColor(color)
+    canvas.setFont(font_name, font_size)
+
+    # Distribui os caracteres no arco superior, mantendo leitura natural.
+    chars = list(str(text))
+    if not chars:
+        canvas.restoreState()
+        return
+
+    widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
+    total = sum(widths)
+    circumference = 2 * 3.141592653589793 * radius
+    usable = min(total, circumference * 0.72)
+    if total > usable and total > 0:
+        fator = usable / total
+        font_size = max(4.0, font_size * fator)
+        canvas.setFont(font_name, font_size)
+        widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
+        total = sum(widths)
+
+    # Arco de aproximadamente 140°, centralizado no topo.
+    angle_span = 140.0
+    if total > 0:
+        angle_span = min(150.0, max(55.0, (total / radius) * 180.0 / 3.141592653589793))
+    start_angle = 90.0 + angle_span/2
+    step_angle = angle_span / max(len(chars)-1, 1)
+
+    for i, ch in enumerate(chars):
+        ang = start_angle - i * step_angle
+        x = cx + radius * cos(radians(ang))
+        y = cy + radius * sin(radians(ang))
+        canvas.saveState()
+        canvas.translate(x, y)
+        canvas.rotate(ang - 90)
+        canvas.drawCentredString(0, -font_size * 0.35, ch)
+        canvas.restoreState()
+
+    canvas.restoreState()
+
+def _gerar_pdf_moldes_bottons(
+    molde_key,
+    quantidade,
+    border_mode,
+    border_color,
+    border_width_mm,
+    bleed_mm,
+    gap_mm,
+    margin_mm,
+    text,
+    text_color,
+    text_size_mm,
+    text_offset_mm,
+    show_cut,
+    show_bleed,
+):
+    """PDF A4 vetorial em tamanho real, pronto para impressão."""
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+
+    spec = BOTTON_MOLDES[molde_key]
+    shape = spec["shape"]
+    size = spec.get("diameter_mm", spec.get("width_mm", 50.0))
+    layout = _botton_layout_mm(shape, size, bleed_mm, gap_mm, margin_mm)
+
+    total = max(int(quantidade), 1)
+    if layout["total"] <= 0:
+        raise ValueError("A configuração atual não permite colocar nenhum molde na folha A4.")
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
+
+    a4_w, a4_h = A4
+    border_rgb = colors.HexColor(border_color)
+    text_rgb = colors.HexColor(text_color)
+
+    # O PDF usa mm reais: 1 unidade = 1 ponto, convertido com mm.
+    cell_w = layout["w"] * mm
+    cell_h = layout["h"] * mm
+    gap = gap_mm * mm
+    margin = margin_mm * mm
+    bleed = bleed_mm * mm
+    item_w = size * mm
+    item_h = size * mm
+
+    idx = 0
+    while idx < total:
+        for row in range(layout["rows"]):
+            for col in range(layout["cols"]):
+                if idx >= total:
+                    break
+
+                x_cell = margin + col * (cell_w + gap)
+                y_top = a4_h - margin - row * (cell_h + gap)
+                x = x_cell + bleed
+                y = y_top - cell_h + bleed
+
+                if show_bleed and bleed_mm > 0:
+                    c.saveState()
+                    c.setStrokeColor(colors.HexColor("#b8bec7"))
+                    c.setDash(2, 2)
+                    if shape == "circle":
+                        c.circle(x + item_w/2, y + item_h/2, item_w/2 + bleed, stroke=1, fill=0)
+                    else:
+                        c.rect(x-bleed, y-bleed, item_w+2*bleed, item_h+2*bleed, stroke=1, fill=0)
+                    c.restoreState()
+
+                if shape == "circle":
+                    cx, cy = x + item_w/2, y + item_h/2
+                    if border_mode != "Sem borda":
+                        c.saveState()
+                        c.setStrokeColor(border_rgb)
+                        c.setLineWidth(max(0.15, border_width_mm * mm))
+                        if border_mode == "Pontilhada":
+                            c.setDash(2, 2)
+                        c.circle(cx, cy, item_w/2, stroke=1, fill=0)
+                        c.restoreState()
+
+                    if show_cut:
+                        c.saveState()
+                        c.setStrokeColor(colors.HexColor("#111827"))
+                        c.setLineWidth(0.25 * mm)
+                        c.setDash(1.5, 1.5)
+                        c.circle(cx, cy, item_w/2, stroke=1, fill=0)
+                        c.restoreState()
+
+                    if text.strip():
+                        _draw_pdf_text_along_circle(
+                            c, text.strip(), cx, cy,
+                            max(2*mm, item_w/2 - text_offset_mm*mm),
+                            "Helvetica-Bold", max(4.0, text_size_mm*mm), text_rgb
+                        )
+                else:
+                    if border_mode != "Sem borda":
+                        c.saveState()
+                        c.setStrokeColor(border_rgb)
+                        c.setLineWidth(max(0.15, border_width_mm * mm))
+                        if border_mode == "Pontilhada":
+                            c.setDash(2, 2)
+                        c.rect(x, y, item_w, item_h, stroke=1, fill=0)
+                        c.restoreState()
+
+                    if show_cut:
+                        c.saveState()
+                        c.setStrokeColor(colors.HexColor("#111827"))
+                        c.setLineWidth(0.25 * mm)
+                        c.setDash(1.5, 1.5)
+                        c.rect(x, y, item_w, item_h, stroke=1, fill=0)
+                        c.restoreState()
+
+                    if text.strip():
+                        c.saveState()
+                        c.setFillColor(text_rgb)
+                        c.setFont("Helvetica-Bold", max(4.0, text_size_mm*mm))
+                        c.drawCentredString(x + item_w/2, y + item_h/2 - (text_size_mm*mm)/3, text.strip())
+                        c.restoreState()
+
+                idx += 1
+
+        if idx < total:
+            c.showPage()
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, idx
+
+def tela_gerador_moldes_bottons():
+    st.title("Gerador de Moldes para Bottons")
+    st.caption("Crie moldes vetoriais, organize automaticamente na folha A4 e gere um PDF em tamanho real para impressão.")
+
+    # CSS específico da nova aba; não interfere nas telas existentes.
+    st.markdown("""
+    <style>
+      .sophi-molde-hero {
+        background: linear-gradient(135deg,#111827 0%,#252525 55%,#3b3b3b 100%);
+        color:#fff;border-radius:18px;padding:22px 24px;margin-bottom:18px;
+        box-shadow:0 8px 28px rgba(0,0,0,.10);
+      }
+      .sophi-molde-hero h2 {margin:0 0 6px 0;font-size:26px;}
+      .sophi-molde-hero p {margin:0;color:#e5e7eb;}
+      .sophi-molde-chip {
+        display:inline-block;border:1px solid rgba(255,255,255,.25);
+        border-radius:999px;padding:5px 10px;margin-top:12px;margin-right:6px;
+        font-size:12px;color:#f9fafb;
+      }
+    </style>
+    <div class="sophi-molde-hero">
+      <h2>✂️ Gerador profissional de moldes</h2>
+      <p>Monte o molde do seu botton, personalize a borda e o texto e veja a folha A4 sendo preenchida automaticamente.</p>
+      <span class="sophi-molde-chip">32 mm</span>
+      <span class="sophi-molde-chip">44 mm</span>
+      <span class="sophi-molde-chip">58 mm</span>
+      <span class="sophi-molde-chip">50 × 50 mm</span>
+      <span class="sophi-molde-chip">PDF A4 em tamanho real</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    left, right = st.columns([0.95, 1.65], gap="large")
+
+    with left:
+        st.subheader("1. Configuração do molde")
+
+        molde_key = st.selectbox(
+            "Tamanho do botton",
+            list(BOTTON_MOLDES.keys()),
+            key="gm_molde_tamanho",
+        )
+        quantidade = st.number_input(
+            "Quantidade de moldes",
+            min_value=1,
+            value=12,
+            step=1,
+            key="gm_quantidade",
+        )
+
+        st.markdown("**Borda**")
+        border_mode = st.selectbox(
+            "Tipo da borda",
+            ["Sem borda", "Contínua", "Pontilhada"],
+            index=1,
+            key="gm_border_mode",
+        )
+        border_color = st.color_picker(
+            "Cor da borda",
+            "#000000",
+            key="gm_border_color",
+        )
+        border_width_mm = st.number_input(
+            "Espessura da borda (mm)",
+            min_value=0.10,
+            max_value=5.00,
+            value=0.50,
+            step=0.10,
+            key="gm_border_width",
+        )
+
+        st.markdown("**Texto na borda / dentro do molde**")
+        usar_texto = st.checkbox(
+            "Adicionar texto",
+            value=False,
+            key="gm_usar_texto",
+        )
+        text = ""
+        text_color = "#000000"
+        text_size_mm = 2.5
+        text_offset_mm = 2.0
+
+        if usar_texto:
+            text = st.text_input(
+                "Texto",
+                placeholder="Ex.: SOPHI PERSONALIZADOS",
+                key="gm_texto",
+            )
+            text_color = st.color_picker(
+                "Cor do texto",
+                "#000000",
+                key="gm_text_color",
+            )
+            text_size_mm = st.number_input(
+                "Tamanho do texto (mm)",
+                min_value=1.0,
+                max_value=8.0,
+                value=2.5,
+                step=0.5,
+                key="gm_text_size",
+            )
+            text_offset_mm = st.number_input(
+                "Distância do texto da borda (mm)",
+                min_value=0.5,
+                max_value=10.0,
+                value=2.0,
+                step=0.5,
+                key="gm_text_offset",
+            )
+            if BOTTON_MOLDES[molde_key]["shape"] == "circle":
+                st.caption("Nos bottons redondos, o texto acompanha a curvatura da borda.")
+            else:
+                st.caption("No molde 50 × 50 mm, o texto fica centralizado.")
+
+        st.markdown("**Folha A4**")
+        bleed_mm = st.number_input(
+            "Sangria do molde (mm)",
+            min_value=0.0,
+            max_value=10.0,
+            value=1.0,
+            step=0.5,
+            key="gm_bleed",
+        )
+        gap_mm = st.number_input(
+            "Espaço entre moldes (mm)",
+            min_value=0.0,
+            max_value=20.0,
+            value=3.0,
+            step=0.5,
+            key="gm_gap",
+        )
+        margin_mm = st.number_input(
+            "Margem da folha A4 (mm)",
+            min_value=0.0,
+            max_value=20.0,
+            value=5.0,
+            step=0.5,
+            key="gm_margin",
+        )
+        show_cut = st.checkbox(
+            "Mostrar linha de corte",
+            value=True,
+            key="gm_show_cut",
+        )
+        show_bleed = st.checkbox(
+            "Mostrar sangria na prévia",
+            value=True,
+            key="gm_show_bleed",
+        )
+
+    svg, layout, placed = _botton_svg_preview(
+        molde_key,
+        quantidade,
+        border_mode,
+        border_color,
+        border_width_mm,
+        bleed_mm,
+        gap_mm,
+        margin_mm,
+        text if usar_texto else "",
+        text_color,
+        text_size_mm,
+        text_offset_mm,
+        show_cut,
+        show_bleed,
+    )
+
+    with right:
+        st.subheader("2. Pré-visualização da folha A4")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Moldes por A4", layout["total"])
+        c2.metric("Colunas", layout["cols"])
+        c3.metric("Linhas", layout["rows"])
+
+        if int(quantidade) > layout["total"]:
+            st.warning(
+                f"A configuração atual comporta {layout['total']} moldes por A4. "
+                f"O PDF criará folhas adicionais automaticamente para completar {int(quantidade)} moldes."
+            )
+
+        st.components.v1.html(svg, height=760, scrolling=True)
+
+        st.markdown(
+            f"**Configuração:** {molde_key} · {int(quantidade)} molde(s) · "
+            f"preenchimento automático da A4 · medidas físicas preservadas no PDF."
+        )
+
+        try:
+            pdf_bytes, pdf_layout, _ = _gerar_pdf_moldes_bottons(
+                molde_key,
+                quantidade,
+                border_mode,
+                border_color,
+                border_width_mm,
+                bleed_mm,
+                gap_mm,
+                margin_mm,
+                text if usar_texto else "",
+                text_color,
+                text_size_mm,
+                text_offset_mm,
+                show_cut,
+                show_bleed,
+            )
+            nome_pdf = (
+                f"moldes_bottons_{molde_key.replace(' ', '_').replace('×','x').replace('mm','mm')}_"
+                f"{int(quantidade)}un.pdf"
+            )
+            st.download_button(
+                "⬇️ Baixar PDF A4 para impressão",
+                data=pdf_bytes,
+                file_name=nome_pdf,
+                mime="application/pdf",
+                use_container_width=True,
+                key="gm_download_pdf",
+            )
+            st.caption(
+                "PDF vetorial em A4, com as medidas do molde em milímetros. "
+                "Ao imprimir, use escala 100% / tamanho real e desative 'ajustar à página'."
+            )
+        except Exception as exc:
+            st.error(f"Não foi possível gerar o PDF: {exc}")
+
+    st.divider()
+    st.subheader("3. Conferência rápida")
+    resumo = _botton_layout_mm(
+        BOTTON_MOLDES[molde_key]["shape"],
+        BOTTON_MOLDES[molde_key].get("diameter_mm", BOTTON_MOLDES[molde_key].get("width_mm", 50.0)),
+        bleed_mm, gap_mm, margin_mm
+    )
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Tamanho", molde_key)
+    r2.metric("Por folha", resumo["total"])
+    r3.metric("Folhas necessárias", max(1, (int(quantidade)+max(resumo["total"],1)-1)//max(resumo["total"],1)))
+    r4.metric("Total de moldes", int(quantidade))
+
+    st.info(
+        "Dica de impressão: imprima o PDF em 100% / tamanho real. "
+        "Não use 'ajustar' ou 'encolher para caber', porque isso altera a medida física do molde."
+    )
+
 # ============================================================
 # MENU ORGANIZADO — TELAS AGRUPADAS
 # ============================================================
@@ -18041,6 +18636,7 @@ menu = st.sidebar.radio(
         "💬 Mensagens WhatsApp",
         "🌐 Portal do Cliente",
         "🖨️ Impressão / Etiquetas",
+        "✂️ Gerador de Moldes",
         "📅 Calendário Comercial",
         "⚡ Central de Automação",
         "🎨 Biblioteca de Artes",
@@ -18055,7 +18651,7 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "📅 ", "🎨 "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "✂️ ", "📅 ", "🎨 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -18068,7 +18664,7 @@ try:
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
-        "Calendário Comercial":"📅", "Central de Automação":"⚡",
+        "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Central de Automação":"⚡",
         "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
@@ -18115,6 +18711,8 @@ elif menu_limpo == "Portal do Cliente":
     tela_portal_cliente_admin()
 elif menu_limpo == "Impressão / Etiquetas":
     tela_impressao_etiquetas()
+elif menu_limpo == "Gerador de Moldes":
+    tela_gerador_moldes_bottons()
 elif menu_limpo == "Calendário Comercial":
     tela_calendario_comercial()
 elif menu_limpo == "Central de Automação":
