@@ -12835,15 +12835,31 @@ def tela_catalogo_publico():
     tela_catalogo()
 
 
+
 # ============================================================
 # MÓDULO — GERADOR PROFISSIONAL DE MOLDES PARA BOTTONS
 # ============================================================
 
+# Medidas do molde visual definidas a partir do modelo da Sophi no Canva.
+# "externa" = bloco completo (foto de fundo/borda + linha de corte)
+# "interna" = foto principal que fica sobre a borda.
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0},
-    "44 mm": {"shape": "circle", "diameter_mm": 44.0},
-    "58 mm": {"shape": "circle", "diameter_mm": 58.0},
-    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0},
+    "32 mm": {
+        "shape": "circle", "diameter_mm": 32.0,
+        "externa_mm": 35.10, "interna_mm": 26.10,
+    },
+    "44 mm": {
+        "shape": "circle", "diameter_mm": 44.0,
+        "externa_mm": 55.00, "interna_mm": 44.00,
+    },
+    "58 mm": {
+        "shape": "circle", "diameter_mm": 58.0,
+        "externa_mm": 70.00, "interna_mm": 58.00,
+    },
+    "50 × 50 mm": {
+        "shape": "square", "width_mm": 50.0, "height_mm": 50.0,
+        "externa_mm": 61.04, "interna_mm": 52.07,
+    },
 }
 
 def _botton_svg_text_path_id(shape_key):
@@ -12852,30 +12868,51 @@ def _botton_svg_text_path_id(shape_key):
 def _svg_escape(value):
     return html.escape(str(value or ""), quote=True)
 
+def _botton_spec(molde_key):
+    spec = BOTTON_MOLDES[molde_key]
+    return spec["shape"], float(spec["externa_mm"]), float(spec["interna_mm"])
+
 def _botton_layout_mm(shape, size_mm, bleed_mm, gap_mm, margin_mm, a4_w=210.0, a4_h=297.0):
-    """Calcula quantos moldes cabem em uma A4 mantendo medidas físicas."""
-    if shape == "circle":
-        w = h = size_mm + 2.0 * bleed_mm
-    else:
-        w = size_mm + 2.0 * bleed_mm
-        h = size_mm + 2.0 * bleed_mm
+    """Calcula o grid físico usando o bloco EXTERNO e centraliza o grid na A4."""
+    w = float(size_mm) + 2.0 * max(float(bleed_mm), 0.0)
+    h = w if shape == "circle" else float(size_mm) + 2.0 * max(float(bleed_mm), 0.0)
+
+    gap_mm = max(float(gap_mm), 0.0)
+    margin_mm = max(float(margin_mm), 0.0)
 
     usable_w = max(a4_w - 2.0 * margin_mm, 1.0)
     usable_h = max(a4_h - 2.0 * margin_mm, 1.0)
 
     cols = max(int((usable_w + gap_mm) // (w + gap_mm)), 0)
     rows = max(int((usable_h + gap_mm) // (h + gap_mm)), 0)
-
     total = cols * rows
+
+    grid_w = cols * w + max(cols - 1, 0) * gap_mm
+    grid_h = rows * h + max(rows - 1, 0) * gap_mm
+
+    # Centralização real do conjunto na folha, sem deixar tudo encostado em um lado.
+    offset_x = max((a4_w - grid_w) / 2.0, margin_mm)
+    offset_y = max((a4_h - grid_h) / 2.0, margin_mm)
+
     return {
-        "w": w,
-        "h": h,
-        "cols": cols,
-        "rows": rows,
-        "total": total,
-        "usable_w": usable_w,
-        "usable_h": usable_h,
+        "w": w, "h": h, "cols": cols, "rows": rows, "total": total,
+        "usable_w": usable_w, "usable_h": usable_h,
+        "grid_w": grid_w, "grid_h": grid_h,
+        "offset_x": offset_x, "offset_y": offset_y,
     }
+
+def _botton_img_data_uri(image_bytes, mime="image/jpeg"):
+    if not image_bytes:
+        return ""
+    try:
+        return f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    except Exception:
+        return ""
+
+def _svg_rect_or_circle(shape, cx, cy, x, y, s, rx=0):
+    if shape == "circle":
+        return f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{s/2:.2f}'/>"
+    return f"<rect x='{x:.2f}' y='{y:.2f}' width='{s:.2f}' height='{s:.2f}' rx='{rx:.2f}'/>"
 
 def _botton_svg_preview(
     molde_key,
@@ -12892,142 +12929,225 @@ def _botton_svg_preview(
     text_offset_mm,
     show_cut,
     show_bleed,
+    image_bytes=None,
+    image_mime="image/jpeg",
+    background_image_bytes=None,
+    background_image_mime="image/jpeg",
+    border_fill_mode="Mesma foto",
+    corner_radius_mm=3.0,
 ):
-    """Gera uma prévia vetorial A4 no próprio navegador."""
-    spec = BOTTON_MOLDES[molde_key]
-    shape = spec["shape"]
-    size = spec.get("diameter_mm", spec.get("width_mm", 50.0))
-    layout = _botton_layout_mm(shape, size, bleed_mm, gap_mm, margin_mm)
+    """Prévia A4: moldes centralizados, foto principal + foto/fundo da borda + linha de corte."""
+    shape, outer_base, inner_size = _botton_spec(molde_key)
+    layout = _botton_layout_mm(shape, outer_base, bleed_mm, gap_mm, margin_mm)
     a4_w, a4_h = 210.0, 297.0
-
-    scale = 2.55  # aproximadamente px por mm
-    W = int(a4_w * scale)
-    H = int(a4_h * scale)
-
-    border_dash = "stroke-dasharray='1.8 1.2'" if border_mode == "Pontilhada" else ""
-    border_opacity = "0.95" if border_mode != "Sem borda" else "0"
-    border = border_color if border_mode != "Sem borda" else "none"
+    scale = 2.55
+    W, H = int(a4_w * scale), int(a4_h * scale)
 
     qty = max(int(quantidade), 1)
     max_n = min(qty, layout["total"])
+    outer = outer_base * scale
+    inner = inner_size * scale
+    extra = max((outer - inner) / 2.0, 0.0)
+
+    border_dash = "stroke-dasharray='1.8 1.2'" if border_mode == "Pontilhada" else ""
+    border_visible = "none" if border_mode == "Sem borda" else border_color
+    img_uri = _botton_img_data_uri(image_bytes, image_mime)
+    bg_uri = _botton_img_data_uri(background_image_bytes, background_image_mime) or img_uri
 
     svg = [
         f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' "
-        f"style='width:100%;height:auto;display:block;background:#fff;border-radius:16px;'>",
+        "style='width:100%;height:auto;display:block;background:#fff;border-radius:16px;'>",
         "<defs>",
     ]
+    svg.append(
+        "<filter id='softShadow' x='-20%' y='-20%' width='140%' height='140%'>"
+        "<feDropShadow dx='0' dy='1.5' stdDeviation='1.5' flood-opacity='.12'/></filter>"
+    )
 
-    # Gradiente visual sutil apenas para a interface, sem alterar o PDF.
-    svg.append("<filter id='softShadow' x='-20%' y='-20%' width='140%' height='140%'><feDropShadow dx='0' dy='1.5' stdDeviation='1.5' flood-opacity='.12'/></filter>")
-
-    if shape == "circle" and text.strip():
-        # Um caminho por célula será desenhado dinamicamente; o texto usa caminho local.
-        pass
+    # Um clip diferente para cada molde.
+    for i in range(max_n):
+        if shape == "circle":
+            svg.append(f"<clipPath id='bgclip{i}'><circle cx='0' cy='0' r='{outer/2:.2f}'/></clipPath>")
+            svg.append(f"<clipPath id='imgclip{i}'><circle cx='0' cy='0' r='{inner/2:.2f}'/></clipPath>")
+        else:
+            rx = max(corner_radius_mm * scale, 0)
+            svg.append(f"<clipPath id='bgclip{i}'><rect x='{-outer/2:.2f}' y='{-outer/2:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}'/></clipPath>")
+            svg.append(f"<clipPath id='imgclip{i}'><rect x='{-inner/2:.2f}' y='{-inner/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{max(rx-extra,0):.2f}'/></clipPath>")
 
     svg.append("</defs>")
-    svg.append(f"<rect x='0' y='0' width='{W}' height='{H}' rx='12' fill='#ffffff'/>")
+    svg.append(f"<rect x='0' y='0' width='{W}' height='{H}' fill='#ffffff'/>")
 
-    # Margens A4 e cabeçalho visual.
-    mx = margin_mm * scale
-    my = margin_mm * scale
+    # Moldura de referência da folha.
+    mx, my = margin_mm * scale, margin_mm * scale
     svg.append(
-        f"<rect x='{mx}' y='{my}' width='{a4_w*scale-2*mx}' height='{a4_h*scale-2*my}' "
-        "fill='none' stroke='#e5e7eb' stroke-width='1'/>"
+        f"<rect x='{mx:.2f}' y='{my:.2f}' width='{a4_w*scale-2*mx:.2f}' "
+        f"height='{a4_h*scale-2*my:.2f}' fill='none' stroke='#e5e7eb' stroke-width='1'/>"
     )
 
     placed = 0
     for row in range(layout["rows"]):
-        for col in range(layout["cols"]):
-            if placed >= max_n:
-                break
+        # Centraliza também a última linha quando ela não estiver completa.
+        remaining = max_n - row * layout["cols"]
+        if remaining <= 0:
+            break
+        items_this_row = min(layout["cols"], remaining)
+        row_grid_w = items_this_row * layout["w"] + max(items_this_row - 1, 0) * gap_mm
+        row_start_x = max((a4_w - row_grid_w) / 2.0, margin_mm)
 
-            cell_x_mm = margin_mm + col * (layout["w"] + gap_mm)
-            cell_y_mm = margin_mm + row * (layout["h"] + gap_mm)
+        for col in range(items_this_row):
+            cell_x_mm = row_start_x + col * (layout["w"] + gap_mm)
+            cell_y_mm = layout["offset_y"] + row * (layout["h"] + gap_mm)
 
-            # Centraliza cada molde dentro da célula.
             x = (cell_x_mm + bleed_mm) * scale
             y = (cell_y_mm + bleed_mm) * scale
-            s = size * scale
-            bleed = bleed_mm * scale
+            cx = x + outer / 2.0
+            cy = y + outer / 2.0
+            inner_x = cx - inner / 2.0
+            inner_y = cy - inner / 2.0
+            rx = max(corner_radius_mm * scale, 0)
 
-            # Sangria visual.
+            # Sangria extra opcional, sempre fora do bloco.
             if show_bleed and bleed_mm > 0:
                 if shape == "circle":
                     svg.append(
-                        f"<circle cx='{x+s/2:.2f}' cy='{y+s/2:.2f}' r='{(s/2+bleed):.2f}' "
-                        "fill='none' stroke='#d1d5db' stroke-width='1' stroke-dasharray='3 3'/>"
+                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2+bleed_mm*scale:.2f}' "
+                        "fill='none' stroke='#b8bec7' stroke-width='1' stroke-dasharray='3 3'/>"
                     )
                 else:
                     svg.append(
-                        f"<rect x='{x-bleed:.2f}' y='{y-bleed:.2f}' width='{s+2*bleed:.2f}' height='{s+2*bleed:.2f}' "
-                        "fill='none' stroke='#d1d5db' stroke-width='1' stroke-dasharray='3 3'/>"
+                        f"<rect x='{x-bleed_mm*scale:.2f}' y='{y-bleed_mm*scale:.2f}' "
+                        f"width='{outer+2*bleed_mm*scale:.2f}' height='{outer+2*bleed_mm*scale:.2f}' "
+                        f"rx='{rx+bleed_mm*scale:.2f}' fill='none' stroke='#b8bec7' stroke-width='1' stroke-dasharray='3 3'/>"
                     )
 
+            # Fundo da borda: mesma foto, outra foto ou cor.
             if shape == "circle":
-                cx, cy = x + s/2, y + s/2
-                svg.append(
-                    f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{s/2:.2f}' fill='#ffffff' "
-                    f"stroke='{border}' stroke-width='{border_width_mm*scale:.2f}' opacity='{border_opacity}' {border_dash}/>"
-                )
-                if show_cut:
+                if border_fill_mode in ("Mesma foto", "Outra foto") and bg_uri:
                     svg.append(
-                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{s/2:.2f}' fill='none' "
-                        "stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2' opacity='.75'/>"
+                        f"<g transform='translate({cx:.2f},{cy:.2f})' filter='url(#softShadow)' "
+                        f"clip-path='url(#bgclip{placed})'>"
+                        f"<image href='{bg_uri}' x='{-outer/2:.2f}' y='{-outer/2:.2f}' "
+                        f"width='{outer:.2f}' height='{outer:.2f}' preserveAspectRatio='xMidYMid slice'/></g>"
+                    )
+                else:
+                    svg.append(
+                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='{border_color}' filter='url(#softShadow)'/>"
+                    )
+            else:
+                if border_fill_mode in ("Mesma foto", "Outra foto") and bg_uri:
+                    svg.append(
+                        f"<g transform='translate({cx:.2f},{cy:.2f})' filter='url(#softShadow)' "
+                        f"clip-path='url(#bgclip{placed})'>"
+                        f"<image href='{bg_uri}' x='{-outer/2:.2f}' y='{-outer/2:.2f}' "
+                        f"width='{outer:.2f}' height='{outer:.2f}' preserveAspectRatio='xMidYMid slice'/></g>"
+                    )
+                else:
+                    svg.append(
+                        f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' "
+                        f"rx='{rx:.2f}' fill='{border_color}' filter='url(#softShadow)'/>"
                     )
 
-                if text.strip():
-                    path_id = f"p{placed}"
-                    rtxt = max(1.0, s/2 - (max(text_size_mm, 1.5)*scale) - text_offset_mm*scale)
+            # Foto principal fica SEMPRE dentro da área interna, não na borda.
+            if img_uri:
+                if shape == "circle":
+                    svg.append(
+                        f"<g transform='translate({cx:.2f},{cy:.2f})' clip-path='url(#imgclip{placed})'>"
+                        f"<image href='{img_uri}' x='{-inner/2:.2f}' y='{-inner/2:.2f}' "
+                        f"width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice'/></g>"
+                    )
+                else:
+                    svg.append(
+                        f"<g transform='translate({cx:.2f},{cy:.2f})' clip-path='url(#imgclip{placed})'>"
+                        f"<image href='{img_uri}' x='{-inner/2:.2f}' y='{-inner/2:.2f}' "
+                        f"width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice'/></g>"
+                    )
+            else:
+                if shape == "circle":
+                    svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{inner/2:.2f}' fill='#ffffff'/>")
+                else:
+                    svg.append(
+                        f"<rect x='{inner_x:.2f}' y='{inner_y:.2f}' width='{inner:.2f}' height='{inner:.2f}' "
+                        f"rx='{max(rx-extra,0):.2f}' fill='#ffffff'/>"
+                    )
+
+            # Borda/contorno configurável do bloco externo.
+            if border_mode != "Sem borda":
+                if shape == "circle":
+                    svg.append(
+                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='none' "
+                        f"stroke='{border_visible}' stroke-width='{border_width_mm*scale:.2f}' {border_dash}/>"
+                    )
+                else:
+                    svg.append(
+                        f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' "
+                        f"rx='{rx:.2f}' fill='none' stroke='{border_visible}' "
+                        f"stroke-width='{border_width_mm*scale:.2f}' {border_dash}/>"
+                    )
+
+            # Linha de corte sempre acompanha o bloco externo.
+            if show_cut:
+                if shape == "circle":
+                    svg.append(
+                        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='none' "
+                        "stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2' opacity='.8'/>"
+                    )
+                else:
+                    svg.append(
+                        f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' "
+                        f"rx='{rx:.2f}' fill='none' stroke='#111827' stroke-width='0.8' "
+                        "stroke-dasharray='2 2' opacity='.8'/>"
+                    )
+
+            # Texto pertence à BORDA, nunca à foto interna.
+            if text.strip():
+                path_id = f"txt{placed}"
+                if shape == "circle":
+                    rtxt = max(2.0 * scale, outer/2.0 - max(text_size_mm, 1.5)*scale/2.0 - text_offset_mm*scale)
                     svg.append(
                         f"<path id='{path_id}' d='M {cx-rtxt:.2f},{cy:.2f} "
                         f"A {rtxt:.2f},{rtxt:.2f} 0 0,1 {cx+rtxt:.2f},{cy:.2f}' fill='none' stroke='none'/>"
                     )
                     svg.append(
-                        f"<text fill='{text_color}' font-family='Arial, sans-serif' font-size='{text_size_mm*scale:.2f}' "
-                        "font-weight='700' letter-spacing='.3' text-anchor='middle'>"
+                        f"<text fill='{text_color}' font-family='Arial, sans-serif' "
+                        f"font-size='{text_size_mm*scale:.2f}' font-weight='700' letter-spacing='.25' text-anchor='middle'>"
                         f"<textPath href='#{path_id}' startOffset='50%'>{_svg_escape(text)}</textPath></text>"
                     )
-            else:
-                svg.append(
-                    f"<rect x='{x:.2f}' y='{y:.2f}' width='{s:.2f}' height='{s:.2f}' fill='#ffffff' "
-                    f"stroke='{border}' stroke-width='{border_width_mm*scale:.2f}' opacity='{border_opacity}' {border_dash}/>"
-                )
-                if show_cut:
+                else:
+                    # Texto percorre o perímetro, respeitando os quatro cantos do quadrado.
+                    inset = max(text_offset_mm * scale, 1.0)
+                    xx = x + inset
+                    yy = y + inset
+                    ww = outer - 2*inset
+                    hh = outer - 2*inset
+                    perimeter = max(4*(ww+hh), 1.0)
+                    path_id = f"sqtxt{placed}"
                     svg.append(
-                        f"<rect x='{x:.2f}' y='{y:.2f}' width='{s:.2f}' height='{s:.2f}' fill='none' "
-                        "stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2' opacity='.75'/>"
+                        f"<path id='{path_id}' d='M {xx:.2f},{yy:.2f} "
+                        f"H {xx+ww:.2f} V {yy+hh:.2f} H {xx:.2f} Z' "
+                        "fill='none' stroke='none'/>"
                     )
-                if text.strip():
                     svg.append(
-                        f"<text x='{x+s/2:.2f}' y='{y+s/2+text_size_mm*scale/3:.2f}' "
-                        f"fill='{text_color}' font-family='Arial, sans-serif' font-size='{text_size_mm*scale:.2f}' "
-                        "font-weight='700' text-anchor='middle'>"
-                        f"{_svg_escape(text)}</text>"
+                        f"<text fill='{text_color}' font-family='Arial, sans-serif' "
+                        f"font-size='{text_size_mm*scale:.2f}' font-weight='700' "
+                        f"letter-spacing='.25' text-anchor='middle'>"
+                        f"<textPath href='#{path_id}' startOffset='50%'>{_svg_escape(text)}</textPath></text>"
                     )
 
             placed += 1
-        if placed >= max_n:
-            break
 
     svg.append("</svg>")
     return "".join(svg), layout, placed
 
 def _draw_pdf_text_along_circle(canvas, text, cx, cy, radius, font_name, font_size, color):
-    """Texto vetorial acompanhando a borda circular, sem rasterizar o PDF."""
+    """Texto vetorial acompanhando a borda circular."""
     if not text:
         return
     from math import cos, sin, radians
-
     canvas.saveState()
     canvas.setFillColor(color)
     canvas.setFont(font_name, font_size)
 
-    # Distribui os caracteres no arco superior, mantendo leitura natural.
     chars = list(str(text))
-    if not chars:
-        canvas.restoreState()
-        return
-
     widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
     total = sum(widths)
     circumference = 2 * 3.141592653589793 * radius
@@ -13039,10 +13159,9 @@ def _draw_pdf_text_along_circle(canvas, text, cx, cy, radius, font_name, font_si
         widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
         total = sum(widths)
 
-    # Arco de aproximadamente 140°, centralizado no topo.
-    angle_span = 140.0
+    angle_span = 150.0
     if total > 0:
-        angle_span = min(150.0, max(55.0, (total / radius) * 180.0 / 3.141592653589793))
+        angle_span = min(155.0, max(55.0, (total / radius) * 180.0 / 3.141592653589793))
     start_angle = 90.0 + angle_span/2
     step_angle = angle_span / max(len(chars)-1, 1)
 
@@ -13055,8 +13174,74 @@ def _draw_pdf_text_along_circle(canvas, text, cx, cy, radius, font_name, font_si
         canvas.rotate(ang - 90)
         canvas.drawCentredString(0, -font_size * 0.35, ch)
         canvas.restoreState()
-
     canvas.restoreState()
+
+def _draw_pdf_text_around_square(canvas, text, x, y, size, font_name, font_size, color, offset_mm=2.0):
+    """Texto vetorial contornando os quatro lados do quadrado."""
+    if not text:
+        return
+    from math import cos, sin, radians
+    canvas.saveState()
+    canvas.setFillColor(color)
+    canvas.setFont(font_name, font_size)
+
+    inset = max(offset_mm * mm, 1.0)
+    left, bottom = x + inset, y + inset
+    right, top = x + size - inset, y + size - inset
+    w, h = max(right-left, 1.0), max(top-bottom, 1.0)
+    perimeter = 2*w + 2*h
+
+    chars = list(str(text))
+    widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
+    total = sum(widths)
+    usable = perimeter * 0.72
+    if total > usable and total > 0:
+        fator = usable / total
+        font_size = max(4.0, font_size * fator)
+        canvas.setFont(font_name, font_size)
+
+    # Começa no topo e percorre direita -> baixo -> esquerda -> cima,
+    # permitindo que o texto atravesse os quatro cantos.
+    step = perimeter / max(len(chars), 1)
+    for i, ch in enumerate(chars):
+        d = (i + 0.5) * step
+        if d <= w:
+            px, py, ang = left + d, top, 0
+        elif d <= w + h:
+            q = d - w
+            px, py, ang = right, top - q, -90
+        elif d <= 2*w + h:
+            q = d - w - h
+            px, py, ang = right - q, bottom, 180
+        else:
+            q = d - 2*w - h
+            px, py, ang = left, bottom + q, 90
+
+        canvas.saveState()
+        canvas.translate(px, py)
+        canvas.rotate(ang)
+        canvas.drawCentredString(0, -font_size*0.35, ch)
+        canvas.restoreState()
+    canvas.restoreState()
+
+def _crop_image_for_reportlab(image_bytes, target_w_px=1200, target_h_px=1200):
+    """Converte a foto em PNG quadrado para uso previsível no PDF."""
+    if not image_bytes or Image is None:
+        return None
+    try:
+        from io import BytesIO
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+        lado = min(w, h)
+        left = (w - lado) // 2
+        top = (h - lado) // 2
+        img = img.crop((left, top, left + lado, top + lado))
+        img.thumbnail((target_w_px, target_h_px), Image.LANCZOS)
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=94)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
 
 def _gerar_pdf_moldes_bottons(
     molde_key,
@@ -13073,19 +13258,23 @@ def _gerar_pdf_moldes_bottons(
     text_offset_mm,
     show_cut,
     show_bleed,
+    image_bytes=None,
+    image_mime="image/jpeg",
+    background_image_bytes=None,
+    background_image_mime="image/jpeg",
+    border_fill_mode="Mesma foto",
+    corner_radius_mm=3.0,
 ):
-    """PDF A4 vetorial em tamanho real, pronto para impressão."""
+    """PDF A4 em tamanho real, com foto principal e borda configurável."""
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
 
-    spec = BOTTON_MOLDES[molde_key]
-    shape = spec["shape"]
-    size = spec.get("diameter_mm", spec.get("width_mm", 50.0))
-    layout = _botton_layout_mm(shape, size, bleed_mm, gap_mm, margin_mm)
-
+    shape, outer_base, inner_size = _botton_spec(molde_key)
+    layout = _botton_layout_mm(shape, outer_base, bleed_mm, gap_mm, margin_mm)
     total = max(int(quantidade), 1)
     if layout["total"] <= 0:
         raise ValueError("A configuração atual não permite colocar nenhum molde na folha A4.")
@@ -13098,86 +13287,135 @@ def _gerar_pdf_moldes_bottons(
     border_rgb = colors.HexColor(border_color)
     text_rgb = colors.HexColor(text_color)
 
-    # O PDF usa mm reais: 1 unidade = 1 ponto, convertido com mm.
-    cell_w = layout["w"] * mm
-    cell_h = layout["h"] * mm
+    outer = outer_base * mm
+    inner = inner_size * mm
+    bleed = max(bleed_mm, 0) * mm
     gap = gap_mm * mm
     margin = margin_mm * mm
-    bleed = bleed_mm * mm
-    item_w = size * mm
-    item_h = size * mm
+
+    # Prepara as fotos uma única vez.
+    main_img = _crop_image_for_reportlab(image_bytes)
+    bg_img = _crop_image_for_reportlab(background_image_bytes) if background_image_bytes else main_img
+    main_reader = ImageReader(BytesIO(main_img)) if main_img else None
+    bg_reader = ImageReader(BytesIO(bg_img)) if bg_img else None
 
     idx = 0
     while idx < total:
-        for row in range(layout["rows"]):
-            for col in range(layout["cols"]):
+        # Quantidade efetivamente colocada nesta página.
+        remaining = total - idx
+        rows_needed = min(layout["rows"], (remaining + layout["cols"] - 1) // layout["cols"])
+        for row in range(rows_needed):
+            items_this_row = min(layout["cols"], remaining - row * layout["cols"])
+            row_grid_w = items_this_row * layout["w"] * mm + max(items_this_row - 1, 0) * gap
+            row_start_x = max((a4_w - row_grid_w) / 2.0, margin)
+
+            cell_y_top = a4_h - layout["offset_y"] * mm - row * (layout["h"] * mm + gap)
+
+            for col in range(items_this_row):
                 if idx >= total:
                     break
 
-                x_cell = margin + col * (cell_w + gap)
-                y_top = a4_h - margin - row * (cell_h + gap)
-                x = x_cell + bleed
-                y = y_top - cell_h + bleed
+                cell_x = row_start_x + col * (layout["w"] * mm + gap)
+                cell_y = cell_y_top - layout["h"] * mm
+                x = cell_x + bleed
+                y = cell_y + bleed
+                cx, cy = x + outer/2, y + outer/2
+                radius_outer = outer/2
 
-                if show_bleed and bleed_mm > 0:
+                # Sangria adicional, fora do bloco externo.
+                if show_bleed and bleed > 0:
                     c.saveState()
                     c.setStrokeColor(colors.HexColor("#b8bec7"))
                     c.setDash(2, 2)
                     if shape == "circle":
-                        c.circle(x + item_w/2, y + item_h/2, item_w/2 + bleed, stroke=1, fill=0)
+                        c.circle(cx, cy, radius_outer + bleed, stroke=1, fill=0)
                     else:
-                        c.rect(x-bleed, y-bleed, item_w+2*bleed, item_h+2*bleed, stroke=1, fill=0)
+                        c.roundRect(
+                            x-bleed, y-bleed, outer+2*bleed, outer+2*bleed,
+                            max(corner_radius_mm*mm+bleed, 0), stroke=1, fill=0
+                        )
                     c.restoreState()
 
+                # Fundo da borda.
                 if shape == "circle":
-                    cx, cy = x + item_w/2, y + item_h/2
-                    if border_mode != "Sem borda":
+                    if border_fill_mode in ("Mesma foto", "Outra foto") and bg_reader:
                         c.saveState()
-                        c.setStrokeColor(border_rgb)
-                        c.setLineWidth(max(0.15, border_width_mm * mm))
-                        if border_mode == "Pontilhada":
-                            c.setDash(2, 2)
-                        c.circle(cx, cy, item_w/2, stroke=1, fill=0)
+                        p = c.beginPath()
+                        p.circle(cx, cy, radius_outer)
+                        c.clipPath(p, stroke=0, fill=0)
+                        c.drawImage(bg_reader, x, y, width=outer, height=outer, preserveAspectRatio=True, anchor='c', mask='auto')
                         c.restoreState()
-
-                    if show_cut:
+                    else:
+                        c.setFillColor(border_rgb)
+                        c.circle(cx, cy, radius_outer, stroke=0, fill=1)
+                else:
+                    rx = max(corner_radius_mm * mm, 0)
+                    if border_fill_mode in ("Mesma foto", "Outra foto") and bg_reader:
                         c.saveState()
-                        c.setStrokeColor(colors.HexColor("#111827"))
-                        c.setLineWidth(0.25 * mm)
-                        c.setDash(1.5, 1.5)
-                        c.circle(cx, cy, item_w/2, stroke=1, fill=0)
+                        p = c.beginPath()
+                        p.roundRect(x, y, outer, outer, rx)
+                        c.clipPath(p, stroke=0, fill=0)
+                        c.drawImage(bg_reader, x, y, width=outer, height=outer, preserveAspectRatio=True, anchor='c', mask='auto')
                         c.restoreState()
+                    else:
+                        c.setFillColor(border_rgb)
+                        c.roundRect(x, y, outer, outer, rx, stroke=0, fill=1)
 
-                    if text.strip():
+                # Foto principal — menor, centralizada e sem invadir a legenda/borda.
+                ix, iy = cx - inner/2, cy - inner/2
+                if main_reader:
+                    c.saveState()
+                    if shape == "circle":
+                        p = c.beginPath()
+                        p.circle(cx, cy, inner/2)
+                        c.clipPath(p, stroke=0, fill=0)
+                    else:
+                        rx_inner = max((corner_radius_mm - (outer_base-inner_size)/2) * mm, 0)
+                        p = c.beginPath()
+                        p.roundRect(ix, iy, inner, inner, rx_inner)
+                        c.clipPath(p, stroke=0, fill=0)
+                    c.drawImage(main_reader, ix, iy, width=inner, height=inner, preserveAspectRatio=True, anchor='c', mask='auto')
+                    c.restoreState()
+
+                # Contorno configurável.
+                if border_mode != "Sem borda":
+                    c.saveState()
+                    c.setStrokeColor(border_rgb)
+                    c.setLineWidth(max(0.15, border_width_mm * mm))
+                    if border_mode == "Pontilhada":
+                        c.setDash(2, 2)
+                    if shape == "circle":
+                        c.circle(cx, cy, radius_outer, stroke=1, fill=0)
+                    else:
+                        c.roundRect(x, y, outer, outer, max(corner_radius_mm*mm, 0), stroke=1, fill=0)
+                    c.restoreState()
+
+                # Linha de corte no limite externo.
+                if show_cut:
+                    c.saveState()
+                    c.setStrokeColor(colors.HexColor("#111827"))
+                    c.setLineWidth(0.25 * mm)
+                    c.setDash(1.5, 1.5)
+                    if shape == "circle":
+                        c.circle(cx, cy, radius_outer, stroke=1, fill=0)
+                    else:
+                        c.roundRect(x, y, outer, outer, max(corner_radius_mm*mm, 0), stroke=1, fill=0)
+                    c.restoreState()
+
+                # Texto sempre na borda.
+                if text.strip():
+                    if shape == "circle":
                         _draw_pdf_text_along_circle(
                             c, text.strip(), cx, cy,
-                            max(2*mm, item_w/2 - text_offset_mm*mm),
+                            max(2*mm, radius_outer - text_offset_mm*mm),
                             "Helvetica-Bold", max(4.0, text_size_mm*mm), text_rgb
                         )
-                else:
-                    if border_mode != "Sem borda":
-                        c.saveState()
-                        c.setStrokeColor(border_rgb)
-                        c.setLineWidth(max(0.15, border_width_mm * mm))
-                        if border_mode == "Pontilhada":
-                            c.setDash(2, 2)
-                        c.rect(x, y, item_w, item_h, stroke=1, fill=0)
-                        c.restoreState()
-
-                    if show_cut:
-                        c.saveState()
-                        c.setStrokeColor(colors.HexColor("#111827"))
-                        c.setLineWidth(0.25 * mm)
-                        c.setDash(1.5, 1.5)
-                        c.rect(x, y, item_w, item_h, stroke=1, fill=0)
-                        c.restoreState()
-
-                    if text.strip():
-                        c.saveState()
-                        c.setFillColor(text_rgb)
-                        c.setFont("Helvetica-Bold", max(4.0, text_size_mm*mm))
-                        c.drawCentredString(x + item_w/2, y + item_h/2 - (text_size_mm*mm)/3, text.strip())
-                        c.restoreState()
+                    else:
+                        _draw_pdf_text_around_square(
+                            c, text.strip(), x, y, outer,
+                            "Helvetica-Bold", max(4.0, text_size_mm*mm),
+                            text_rgb, text_offset_mm
+                        )
 
                 idx += 1
 
@@ -13190,9 +13428,8 @@ def _gerar_pdf_moldes_bottons(
 
 def tela_gerador_moldes_bottons():
     st.title("Gerador de Moldes para Bottons")
-    st.caption("Crie moldes vetoriais, organize automaticamente na folha A4 e gere um PDF em tamanho real para impressão.")
+    st.caption("Monte o molde, escolha a foto do computador, crie a borda com a mesma foto ou uma cor e veja a A4 centralizada antes de imprimir.")
 
-    # CSS específico da nova aba; não interfere nas telas existentes.
     st.markdown("""
     <style>
       .sophi-molde-hero {
@@ -13210,7 +13447,7 @@ def tela_gerador_moldes_bottons():
     </style>
     <div class="sophi-molde-hero">
       <h2>✂️ Gerador profissional de moldes</h2>
-      <p>Monte o molde do seu botton, personalize a borda e o texto e veja a folha A4 sendo preenchida automaticamente.</p>
+      <p>Escolha a foto, mantenha a foto principal dentro do molde e use a mesma imagem atrás para criar a borda visual.</p>
       <span class="sophi-molde-chip">32 mm</span>
       <span class="sophi-molde-chip">44 mm</span>
       <span class="sophi-molde-chip">58 mm</span>
@@ -13223,12 +13460,17 @@ def tela_gerador_moldes_bottons():
 
     with left:
         st.subheader("1. Configuração do molde")
-
         molde_key = st.selectbox(
             "Tamanho do botton",
             list(BOTTON_MOLDES.keys()),
             key="gm_molde_tamanho",
         )
+        spec = BOTTON_MOLDES[molde_key]
+        shape = spec["shape"]
+        outer_base = float(spec["externa_mm"])
+        inner_size = float(spec["interna_mm"])
+        border_default = round((outer_base - inner_size) / 2.0, 2)
+
         quantidade = st.number_input(
             "Quantidade de moldes",
             min_value=1,
@@ -13237,20 +13479,73 @@ def tela_gerador_moldes_bottons():
             key="gm_quantidade",
         )
 
-        st.markdown("**Borda**")
-        border_mode = st.selectbox(
-            "Tipo da borda",
-            ["Sem borda", "Contínua", "Pontilhada"],
-            index=1,
-            key="gm_border_mode",
+        st.markdown("**Foto do molde**")
+        foto_principal = st.file_uploader(
+            "Escolha a foto no seu computador",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="gm_foto_principal",
+            help="A foto será colocada somente na área interna do molde."
         )
+
+        image_bytes = foto_principal.getvalue() if foto_principal is not None else None
+        image_mime = "image/png" if foto_principal is not None and str(foto_principal.name).lower().endswith(".png") else "image/jpeg"
+
+        st.markdown("**Borda / fundo externo**")
+        border_fill_mode = st.radio(
+            "Como preencher a borda?",
+            ["Mesma foto", "Outra foto", "Cor sólida"],
+            index=0,
+            horizontal=True,
+            key="gm_border_fill_mode",
+        )
+
+        background_image_bytes = image_bytes
+        background_image_mime = image_mime
+        if border_fill_mode == "Outra foto":
+            foto_borda = st.file_uploader(
+                "Escolha a foto da borda",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="gm_foto_borda",
+            )
+            if foto_borda is not None:
+                background_image_bytes = foto_borda.getvalue()
+                background_image_mime = "image/png" if str(foto_borda.name).lower().endswith(".png") else "image/jpeg"
+            else:
+                background_image_bytes = image_bytes
+                background_image_mime = image_mime
+
         border_color = st.color_picker(
             "Cor da borda",
             "#000000",
             key="gm_border_color",
         )
+
+        st.caption(
+            f"Espessura visual recomendada para {molde_key}: **{border_default:.2f} mm por lado** "
+            f"(externo {outer_base:.2f} mm × interno {inner_size:.2f} mm)."
+        )
+        border_area_mm = st.number_input(
+            "Espessura da borda da arte (mm por lado)",
+            min_value=0.0,
+            max_value=15.0,
+            value=float(border_default),
+            step=0.1,
+            key="gm_border_area",
+            help="É a faixa entre a foto interna e o bloco externo. O padrão foi baseado nas medidas do seu modelo do Canva."
+        )
+
+        # Mantém a proporção externa do modelo, mas permite ajuste fino da borda.
+        inner_size = max(1.0, outer_base - 2.0 * float(border_area_mm))
+
+        st.markdown("**Contorno / linha da borda**")
+        border_mode = st.selectbox(
+            "Tipo do contorno",
+            ["Sem borda", "Contínua", "Pontilhada"],
+            index=1,
+            key="gm_border_mode",
+        )
         border_width_mm = st.number_input(
-            "Espessura da borda (mm)",
+            "Espessura do contorno (mm)",
             min_value=0.10,
             max_value=5.00,
             value=0.50,
@@ -13258,30 +13553,30 @@ def tela_gerador_moldes_bottons():
             key="gm_border_width",
         )
 
-        st.markdown("**Texto na borda / dentro do molde**")
+        st.markdown("**Legenda na borda**")
         usar_texto = st.checkbox(
-            "Adicionar texto",
+            "Adicionar legenda",
             value=False,
             key="gm_usar_texto",
         )
         text = ""
         text_color = "#000000"
         text_size_mm = 2.5
-        text_offset_mm = 2.0
+        text_offset_mm = max(1.0, float(border_area_mm) / 2.0)
 
         if usar_texto:
             text = st.text_input(
-                "Texto",
+                "Texto da legenda",
                 placeholder="Ex.: SOPHI PERSONALIZADOS",
                 key="gm_texto",
             )
             text_color = st.color_picker(
-                "Cor do texto",
+                "Cor da legenda",
                 "#000000",
                 key="gm_text_color",
             )
             text_size_mm = st.number_input(
-                "Tamanho do texto (mm)",
+                "Tamanho da legenda (mm)",
                 min_value=1.0,
                 max_value=8.0,
                 value=2.5,
@@ -13289,24 +13584,24 @@ def tela_gerador_moldes_bottons():
                 key="gm_text_size",
             )
             text_offset_mm = st.number_input(
-                "Distância do texto da borda (mm)",
+                "Distância da legenda da linha externa (mm)",
                 min_value=0.5,
                 max_value=10.0,
-                value=2.0,
+                value=float(max(1.0, min(3.0, border_area_mm/2.0))),
                 step=0.5,
                 key="gm_text_offset",
             )
-            if BOTTON_MOLDES[molde_key]["shape"] == "circle":
-                st.caption("Nos bottons redondos, o texto acompanha a curvatura da borda.")
+            if shape == "circle":
+                st.caption("✓ A legenda fica na borda e acompanha a curvatura do redondo.")
             else:
-                st.caption("No molde 50 × 50 mm, o texto fica centralizado.")
+                st.caption("✓ A legenda percorre o perímetro do quadrado e passa pelos quatro cantos.")
 
         st.markdown("**Folha A4**")
         bleed_mm = st.number_input(
-            "Sangria do molde (mm)",
+            "Sangria extra do molde (mm)",
             min_value=0.0,
             max_value=10.0,
-            value=1.0,
+            value=0.0,
             step=0.5,
             key="gm_bleed",
         )
@@ -13319,7 +13614,7 @@ def tela_gerador_moldes_bottons():
             key="gm_gap",
         )
         margin_mm = st.number_input(
-            "Margem da folha A4 (mm)",
+            "Margem de segurança da folha A4 (mm)",
             min_value=0.0,
             max_value=20.0,
             value=5.0,
@@ -13337,6 +13632,7 @@ def tela_gerador_moldes_bottons():
             key="gm_show_bleed",
         )
 
+    # O layout usa a medida externa do modelo, e não a medida da foto interna.
     svg, layout, placed = _botton_svg_preview(
         molde_key,
         quantidade,
@@ -13352,6 +13648,12 @@ def tela_gerador_moldes_bottons():
         text_offset_mm,
         show_cut,
         show_bleed,
+        image_bytes=image_bytes,
+        image_mime=image_mime,
+        background_image_bytes=background_image_bytes,
+        background_image_mime=background_image_mime,
+        border_fill_mode=border_fill_mode,
+        corner_radius_mm=3.0,
     )
 
     with right:
@@ -13360,6 +13662,12 @@ def tela_gerador_moldes_bottons():
         c1.metric("Moldes por A4", layout["total"])
         c2.metric("Colunas", layout["cols"])
         c3.metric("Linhas", layout["rows"])
+
+        st.info(
+            f"Centralização automática: os moldes são distribuídos no centro da A4. "
+            f"Bloco externo: {outer_base:.2f} mm · Foto interna: {inner_size:.2f} mm · "
+            f"Borda: {border_area_mm:.2f} mm por lado."
+        )
 
         if int(quantidade) > layout["total"]:
             st.warning(
@@ -13371,7 +13679,8 @@ def tela_gerador_moldes_bottons():
 
         st.markdown(
             f"**Configuração:** {molde_key} · {int(quantidade)} molde(s) · "
-            f"preenchimento automático da A4 · medidas físicas preservadas no PDF."
+            f"foto {'selecionada' if image_bytes else 'não selecionada'} · "
+            f"borda {border_fill_mode.lower()} · medidas físicas preservadas no PDF."
         )
 
         try:
@@ -13390,6 +13699,12 @@ def tela_gerador_moldes_bottons():
                 text_offset_mm,
                 show_cut,
                 show_bleed,
+                image_bytes=image_bytes,
+                image_mime=image_mime,
+                background_image_bytes=background_image_bytes,
+                background_image_mime=background_image_mime,
+                border_fill_mode=border_fill_mode,
+                corner_radius_mm=3.0,
             )
             nome_pdf = (
                 f"moldes_bottons_{molde_key.replace(' ', '_').replace('×','x').replace('mm','mm')}_"
@@ -13404,7 +13719,7 @@ def tela_gerador_moldes_bottons():
                 key="gm_download_pdf",
             )
             st.caption(
-                "PDF vetorial em A4, com as medidas do molde em milímetros. "
+                "PDF vetorial em A4, com fotos incorporadas e medidas em milímetros. "
                 "Ao imprimir, use escala 100% / tamanho real e desative 'ajustar à página'."
             )
         except Exception as exc:
@@ -13414,7 +13729,7 @@ def tela_gerador_moldes_bottons():
     st.subheader("3. Conferência rápida")
     resumo = _botton_layout_mm(
         BOTTON_MOLDES[molde_key]["shape"],
-        BOTTON_MOLDES[molde_key].get("diameter_mm", BOTTON_MOLDES[molde_key].get("width_mm", 50.0)),
+        BOTTON_MOLDES[molde_key]["externa_mm"],
         bleed_mm, gap_mm, margin_mm
     )
     r1, r2, r3, r4 = st.columns(4)
@@ -13430,6 +13745,7 @@ def tela_gerador_moldes_bottons():
 
 # ============================================================
 # MENU ORGANIZADO — TELAS AGRUPADAS
+
 # ============================================================
 
 def tela_clientes_crm():
