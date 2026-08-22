@@ -13012,9 +13012,14 @@ def _botton_svg_preview(
         if legenda_text.strip():
             font_size = legenda_size_mm * scale
             if shape == "circle":
-                # A marca circular fica no centro geométrico da faixa,
-                # preservando a área da foto e sem escapar para o papel.
-                radius = (inner/2.0 + outer/2.0) / 2.0
+                # A marca deve ficar totalmente DENTRO da faixa externa,
+                # encostada à borda externa do molde, sem invadir a foto
+                # e sem ultrapassar o contorno/linha de corte.
+                # O raio é calculado a partir da borda externa e limitado
+                # pela borda interna para funcionar nos 32/44/58 mm.
+                min_radius = inner / 2.0 + font_size * 0.58
+                max_radius = outer / 2.0 - font_size * 0.72
+                radius = min(max_radius, max(min_radius, (outer + inner) / 4.0))
                 for top in (True, False):
                     pid = f"legend_{i}_{'top' if top else 'bottom'}"
                     svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
@@ -13026,8 +13031,8 @@ def _botton_svg_preview(
                 # faixa começa, sem entrar na foto e sem sair para o papel branco.
                 top_y = y+band
                 bottom_y = y+outer-band
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{y+font_size*.90:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{y+outer-font_size*.10:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.12:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.78:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
 
         if show_cut:
             if shape == "circle":
@@ -13067,11 +13072,7 @@ def _draw_pdf_arc_text(canvas, text, cx, cy, radius, top, font_name, font_size, 
         canvas.saveState()
         canvas.translate(x,y)
         canvas.rotate(ang - 90 if top else ang + 90)
-        # A marca deve ficar DENTRO da faixa, nunca sobre a foto nem fora
-        # do contorno. No arco inferior a correção de sinal é essencial:
-        # o texto precisa ser deslocado para cima (em direção ao centro).
-        inward = -font_size*0.35 if top else font_size*0.35
-        canvas.drawCentredString(0, inward, ch)
+        canvas.drawCentredString(0, -font_size*0.35, ch)
         canvas.restoreState()
     canvas.restoreState()
 
@@ -13092,8 +13093,8 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     canvas.setFont(font_name, font_size)
     # Em ReportLab, y cresce para cima: top fica logo dentro da faixa e
     # bottom fica logo acima da borda inferior, ambos fora da foto.
-    canvas.drawCentredString((left+right)/2, y+font_size*0.90, text)
-    canvas.drawCentredString((left+right)/2, y+size-font_size*0.10, text)
+    canvas.drawCentredString((left+right)/2, top_y-font_size*0.18, text)
+    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
     canvas.restoreState()
 
 
@@ -13213,12 +13214,14 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    # Raio fixo no CENTRO da faixa externa. Assim a marca
-                    # respeita a mesma margem interna/externa no redondo e
-                    # permanece integralmente dentro da borda no PDF.
-                    radius=(inner/2 + outer/2)/2
-                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
-                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
+                    # Mesmo posicionamento da prévia: a marca fica dentro da
+                    # faixa, junto à borda externa, sem tocar a área da foto.
+                    circle_font_size = max(4, legenda_size_mm*mm)
+                    min_radius = inner/2 + circle_font_size*0.58
+                    max_radius = outer/2 - circle_font_size*0.72
+                    radius = min(max_radius, max(min_radius, (outer+inner)/4))
+                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",circle_font_size,legend_rgb)
+                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",circle_font_size,legend_rgb)
                 else:
                     _draw_pdf_square_legends(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
 
