@@ -13012,7 +13012,7 @@ def _botton_svg_preview(
         if legenda_text.strip():
             font_size = legenda_size_mm * scale
             if shape == "circle":
-                radius = (outer + inner) / 4.0
+                radius = max(inner/2.0 + font_size*0.55, outer/2.0 - font_size*0.55)
                 for top in (True, False):
                     pid = f"legend_{i}_{'top' if top else 'bottom'}"
                     svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
@@ -13024,8 +13024,8 @@ def _botton_svg_preview(
                 # faixa começa, sem entrar na foto e sem sair para o papel branco.
                 top_y = y+band
                 bottom_y = y+outer-band
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.12:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.78:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{y+font_size*.90:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{y+outer-font_size*.10:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
 
         if show_cut:
             if shape == "circle":
@@ -13086,8 +13086,8 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     canvas.setFont(font_name, font_size)
     # Em ReportLab, y cresce para cima: top fica logo dentro da faixa e
     # bottom fica logo acima da borda inferior, ambos fora da foto.
-    canvas.drawCentredString((left+right)/2, top_y-font_size*0.18, text)
-    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
+    canvas.drawCentredString((left+right)/2, y+font_size*0.90, text)
+    canvas.drawCentredString((left+right)/2, y+size-font_size*0.10, text)
     canvas.restoreState()
 
 
@@ -13207,7 +13207,7 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    radius=(outer+inner)/4
+                    radius=max(inner/2 + max(4,legenda_size_mm*mm)*0.55, outer/2 - max(4,legenda_size_mm*mm)*0.55)
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
                 else:
