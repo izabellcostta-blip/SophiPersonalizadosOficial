@@ -13287,8 +13287,184 @@ def _gerar_pdf_moldes_bottons(
     return buffer.getvalue(),layout,total
 
 
+
+def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
+    """Layout simples e determinístico para misturar tamanhos na mesma A4."""
+    gap_mm=max(float(gap_mm),0.0); margin_mm=max(float(margin_mm),0.0)
+    usable_w=a4_w-2*margin_mm; usable_h=a4_h-2*margin_mm
+    rows=[]; current=[]; current_w=0.0; current_h=0.0
+    for idx,item in enumerate(items):
+        size=float(item["externa_mm"])
+        need=size if not current else size+gap_mm
+        if current and current_w+need > usable_w+1e-9:
+            rows.append((current,current_w,current_h))
+            current=[]; current_w=0.0; current_h=0.0
+        current.append(idx)
+        current_w += size if len(current)==1 else size+gap_mm
+        current_h=max(current_h,size)
+    if current: rows.append((current,current_w,current_h))
+    total_h=sum(r[2] for r in rows)+max(len(rows)-1,0)*gap_mm
+    if total_h > usable_h+1e-9:
+        return None
+    placements=[]
+    y=margin_mm
+    for row, row_w, row_h in rows:
+        x=(a4_w-row_w)/2.0
+        for pos,idx in enumerate(row):
+            size=float(items[idx]["externa_mm"])
+            if pos: x += gap_mm
+            placements.append({"index":idx,"x":x,"y":y,"size":size})
+            x += size
+        y += row_h+gap_mm
+    return {"placements":placements,"rows":len(rows),"total":len(items),"grid_h":total_h}
+
+
+def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
+                              legenda_text="", legenda_color="#000000", legenda_size_mm=2.5,
+                              show_cut=True):
+    """Prévia A4 para vários tamanhos de botton na mesma folha."""
+    layout=_botton_mixed_layout(items,gap_mm,margin_mm)
+    if not layout: return "",None,0
+    scale=2.55; a4_w=210.0; a4_h=297.0; W=int(a4_w*scale); H=int(a4_h*scale)
+    svg=[f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' style='width:100%;height:auto;display:block;background:#fff;'><rect width='{W}' height='{H}' fill='#fff'/>"]
+    mx,my=margin_mm*scale,margin_mm*scale
+    svg.append(f"<rect x='{mx:.2f}' y='{my:.2f}' width='{a4_w*scale-2*mx:.2f}' height='{a4_h*scale-2*my:.2f}' fill='none' stroke='#edf0f3' stroke-width='1'/>")
+    for n,pl in enumerate(layout["placements"]):
+        i=pl["index"]; spec=items[i]; shape=spec["shape"]; outer=pl["size"]*scale; inner=float(spec["interna_mm"])*scale
+        x=pl["x"]*scale; y=(a4_h-pl["y"]-pl["size"])*scale; cx=x+outer/2; cy=y+outer/2
+        uri=_botton_img_data_uri(*fotos[i]) if i<len(fotos) else ""
+        if shape=="circle":
+            svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='{border_color}'/>")
+            if uri: svg.append(f"<g transform='translate({cx:.2f},{cy:.2f})'><clipPath id='mixc{i}'><circle cx='0' cy='0' r='{inner/2:.2f}'/></clipPath><image href='{uri}' x='{-inner/2:.2f}' y='{-inner/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixc{i})'/></g>")
+        else:
+            rx=3*scale; irx=max(rx-(outer-inner)/2,0)
+            svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}' fill='{border_color}'/>")
+            if uri: svg.append(f"<clipPath id='mixs{i}'><rect x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{irx:.2f}'/></clipPath><image href='{uri}' x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixs{i})'/>")
+        if legenda_text.strip():
+            band=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2,0.8)
+            font=max(1.0,min(float(legenda_size_mm),band*.48))*scale
+            if shape=="circle":
+                radius=inner/2+band*scale*.48; span=78.0
+                a1,a2=135,45
+                x1=cx+radius*__import__('math').cos(__import__('math').radians(a1)); y1=cy+radius*__import__('math').sin(__import__('math').radians(a1))
+                x2=cx+radius*__import__('math').cos(__import__('math').radians(a2)); y2=cy+radius*__import__('math').sin(__import__('math').radians(a2))
+                pid=f'mixleg{i}'
+                svg.append(f"<path id='{pid}' d='M{x1:.2f},{y1:.2f} A{radius:.2f},{radius:.2f} 0 0,0 {x2:.2f},{y2:.2f}' fill='none' stroke='none'/>")
+                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700'><textPath href='#{pid}' startOffset='50%' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</textPath></text>")
+            else:
+                baseline=y+(outer-inner)/2+font*.78
+                svg.append(f"<text x='{cx:.2f}' y='{baseline:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+        if show_cut:
+            if shape=="circle": svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
+            else: svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{3*scale:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
+    svg.append('</svg>'); return ''.join(svg),layout,len(items)
+
+
+def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm=3.0, margin_mm=5.0,
+                                     legenda_text="", legenda_color="#000000", legenda_size_mm=2.5, show_cut=True):
+    """Gera UMA A4 com tamanhos mistos, mantendo cada área interna e a marca conforme o molde."""
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    layout=_botton_mixed_layout(items,gap_mm,margin_mm)
+    if not layout: raise ValueError("A combinação escolhida não cabe em uma única folha A4. Reduza as quantidades.")
+    buf=BytesIO(); c=canvas.Canvas(buf,pagesize=A4); c.setTitle("Sophi Personalizados - Moldes mistos")
+    a4_w,a4_h=A4; border_rgb=colors.HexColor(border_color); legend_rgb=colors.HexColor(legenda_color)
+    for i,pl in enumerate(layout["placements"]):
+        spec=items[i]; shape=spec["shape"]; outer=pl["size"]*mm; inner=float(spec["interna_mm"])*mm
+        x=pl["x"]*mm; y=pl["y"]*mm; cx=x+outer/2; cy=y+outer/2
+        reader=None
+        if i<len(fotos):
+            cr=_crop_image_for_reportlab(fotos[i][0]); reader=ImageReader(BytesIO(cr)) if cr else None
+        if reader:
+            c.saveState(); p=c.beginPath();
+            if shape=="circle": p.circle(cx,cy,outer/2)
+            else: p.roundRect(x,y,outer,outer,3*mm)
+            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,x,y,width=outer,height=outer,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
+        else:
+            c.setFillColor(border_rgb)
+            if shape=="circle": c.circle(cx,cy,outer/2,stroke=0,fill=1)
+            else: c.roundRect(x,y,outer,outer,3*mm,stroke=0,fill=1)
+        if reader:
+            ix,iy=cx-inner/2,cy-inner/2; c.saveState(); p=c.beginPath()
+            if shape=="circle": p.circle(cx,cy,inner/2)
+            else: p.roundRect(ix,iy,inner,inner,max((3-(float(spec['externa_mm'])-float(spec['interna_mm']))/2)*mm,0))
+            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,ix,iy,width=inner,height=inner,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
+        if legenda_text.strip():
+            band=max((float(spec['externa_mm'])-float(spec['interna_mm']))/2,0.8); font_mm=max(1.0,min(float(legenda_size_mm),band*.48)); fs=font_mm*mm
+            if shape=='circle':
+                radius=inner/2+band*mm*.48
+                from reportlab.pdfbase.pdfmetrics import stringWidth
+                tw=stringWidth(legenda_text.strip(),'Helvetica-Bold',fs); span=max(50,min(82,(tw/max(radius,1))*180/3.141592653589793+10)); usable=2*3.141592653589793*radius*(span/360)*.82
+                if tw>usable and tw>0: fs=max(.9*mm,fs*usable/tw)
+                _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,'Helvetica-Bold',fs,legend_rgb)
+            else:
+                _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,'Helvetica-Bold',max(4,legenda_size_mm*mm),legend_rgb)
+        if show_cut:
+            c.saveState(); c.setStrokeColor(colors.HexColor('#111827')); c.setLineWidth(.25*mm); c.setDash(1.5,1.5)
+            if shape=='circle': c.circle(cx,cy,outer/2,stroke=1,fill=0)
+            else: c.roundRect(x,y,outer,outer,3*mm,stroke=1,fill=0)
+            c.restoreState()
+    c.save(); buf.seek(0); return buf.getvalue(),layout,len(items)
+
+
+
+def _tela_gerador_moldes_mistos():
+    st.caption("Escolha quantos moldes de cada tamanho quer testar. Todos podem sair juntos na mesma folha A4.")
+    cols=st.columns(4)
+    quantidades={}
+    keys=list(BOTTON_MOLDES.keys())
+    for col,key in zip(cols,keys):
+        with col:
+            quantidades[key]=st.number_input(key, min_value=0, max_value=20, value=1 if key in ["32 mm","44 mm","58 mm","50 × 50 mm"] else 0, step=1, key=f"gm_mix_q_{key}")
+    total=sum(int(v) for v in quantidades.values())
+    st.markdown(f"**Total de posições:** {total} molde(s) na mesma A4.")
+    uploaded=st.file_uploader("Fotos — uma foto por posição",type=["png","jpg","jpeg","webp"],accept_multiple_files=True,key="gm_mix_fotos_v1")
+    fotos=[]
+    for f in uploaded or []:
+        b=f.getvalue(); m="image/png" if f.name.lower().endswith(".png") else "image/jpeg"; fotos.append((b,m))
+    if total==0:
+        st.info("Escolha pelo menos 1 unidade de algum tamanho."); return
+    if len(fotos)<total:
+        st.warning(f"Você selecionou {len(fotos)} foto(s) para {total} posições. As posições sem foto ficam com a faixa na cor escolhida para conferência do molde.")
+    border_color=st.color_picker("Cor da faixa / área externa sem foto","#000000",key="gm_mix_border_color_v1")
+    add=st.checkbox("Adicionar minha marca somente embaixo",value=True,key="gm_mix_add_legend_v1")
+    legenda_text=st.text_input("Texto da marca","@sophipersonalizadosoficial",key="gm_mix_legend_text_v1") if add else ""
+    legenda_color=st.color_picker("Cor da marca","#000000",key="gm_mix_legend_color_v1") if add else "#000000"
+    legenda_size=st.number_input("Tamanho da marca (mm)",min_value=1.0,max_value=8.0,value=2.5,step=.5,key="gm_mix_legend_size_v1") if add else 2.5
+    gap=st.number_input("Espaço entre moldes (mm)",min_value=0.0,max_value=20.0,value=3.0,step=.5,key="gm_mix_gap_v1")
+    margin=st.number_input("Margem da folha A4 (mm)",min_value=0.0,max_value=20.0,value=5.0,step=.5,key="gm_mix_margin_v1")
+    show_cut=st.checkbox("Mostrar linha de corte",value=True,key="gm_mix_cut_v1")
+    items=[]
+    for key,q in quantidades.items():
+        for _ in range(int(q)):
+            spec=BOTTON_MOLDES[key].copy(); spec["key"]=key; items.append(spec)
+    layout=_botton_mixed_layout(items,gap,margin)
+    if not layout:
+        st.error("Essa combinação não cabe em uma única folha A4. Diminua as quantidades ou o espaço entre moldes."); return
+    svg,_,placed=_botton_mixed_svg_preview(items,fotos,border_color,gap,margin,legenda_text,legenda_color,legenda_size,show_cut)
+    st.success(f"A4 mista pronta: {placed} molde(s) em {layout['rows']} fileira(s).")
+    st.components.v1.html(svg,height=820,scrolling=True)
+    try:
+        pdf_bytes,_,_= _gerar_pdf_moldes_bottons_misto(items,fotos,border_color,gap,margin,legenda_text,legenda_color,legenda_size,show_cut)
+        st.download_button("⬇️ Baixar PDF A4 misto para impressão",data=pdf_bytes,file_name=f"moldes_bottons_mistos_{total}.pdf",mime="application/pdf",use_container_width=True,key="gm_mix_download_v1")
+        st.caption("PDF em A4 e tamanho real. Na impressão: 100% / tamanho real e desative 'ajustar à página'.")
+    except Exception as exc:
+        st.error(f"Não foi possível gerar o PDF misto: {exc}")
+    st.info("A ordem é 32 mm → 44 mm → 58 mm → 50 × 50 mm. Cada foto enviada ocupa uma posição nessa ordem.")
+
+
 def tela_gerador_moldes_bottons():
     st.title("Gerador de Moldes para Bottons")
+    # NOVO: permite combinar 32/44/58 mm e 50×50 mm na mesma A4.
+    # O modo antigo permanece intacto quando esta opção não é selecionada.
+    modo_folha = st.radio("Como montar a folha A4?", ["Um único tamanho (modo atual)", "Mesclar tamanhos na mesma A4"], horizontal=True, key="gm_modo_folha_v4")
+    if modo_folha == "Mesclar tamanhos na mesma A4":
+        _tela_gerador_moldes_mistos()
+        return
     st.caption("Cada foto enviada ocupa um molde diferente. A faixa e a legenda são configuradas separadamente.")
 
     st.markdown("""
