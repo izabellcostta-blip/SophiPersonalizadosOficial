@@ -13186,12 +13186,21 @@ def _gerar_pdf_moldes_bottons(
     try:
         import cairosvg
     except ImportError as exc:
-        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
+        raise RuntimeError("CairoSVG não está instalado no ambiente. Instale a dependência CairoSVG para exportar o PDF exatamente igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
-    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    # PDF: usa exatamente o mesmo SVG da prévia.
+    # IMPORTANTE: o CSS width:100%/height:auto da prévia é ótimo no navegador,
+    # mas o CairoSVG pode tratá-lo como viewport sem dimensões e gerar uma
+    # página transparente/preta. No PDF removemos SOMENTE esse estilo do
+    # elemento raiz; nenhuma coordenada, tamanho, foto ou posição é alterada.
+    svg_pdf = re.sub(
+        r'(<svg\b[^>]*?)\sstyle=[\'"]width:100%;height:auto;display:block;background:#fff;[\'"]',
+        r"\1",
+        svg,
+        count=1,
+    )
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
@@ -13309,11 +13318,19 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     try:
         import cairosvg
     except ImportError as exc:
-        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
+        raise RuntimeError("CairoSVG não está instalado no ambiente. Instale a dependência CairoSVG para exportar o PDF exatamente igual à prévia.") from exc
 
-    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    # PDF: usa exatamente o mesmo SVG da prévia.
+    # Removemos somente o CSS de dimensionamento do navegador antes do CairoSVG.
+    # Nenhuma coordenada, tamanho, foto, molde ou posição do @ é recalculada.
+    svg_pdf = re.sub(
+        r'(<svg\b[^>]*?)\sstyle=[\'"]width:100%;height:auto;display:block;background:#fff;[\'"]',
+        r"\1",
+        svg,
+        count=1,
+    )
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
