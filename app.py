@@ -13205,8 +13205,12 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
-    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só removemos o atributo
+    # CSS de apresentação do elemento <svg> antes da rasterização, porque
+    # o navegador da prévia aceita `width:100%; height:auto`, mas o CairoSVG
+    # pode interpretar esse CSS como uma área de renderização vazia.
+    # Nenhuma coordenada, tamanho, foto, faixa ou legenda é alterada.
+    svg = re.sub(r"\\sstyle='[^']*'", "", svg, count=1)
     png = cairosvg.svg2png(
         bytestring=svg.encode("utf-8"),
         output_width=2480,
@@ -13340,6 +13344,9 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
     # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    # Apenas removemos o CSS `width:100%;height:auto` do <svg>, que pode fazer
+    # o CairoSVG gerar uma página transparente mesmo com uma arte válida.
+    svg = re.sub(r"\\sstyle='[^']*'", "", svg, count=1)
     png = cairosvg.svg2png(
         bytestring=svg.encode("utf-8"),
         output_width=2480,
