@@ -13118,7 +13118,10 @@ def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, f
     from reportlab.pdfbase.pdfmetrics import stringWidth
     band = max((size-inner)/2.0, 0.8*2.83464567)
     left, right = x+band, x+size-band
-    bottom_y = y+size-band
+    # No PDF do quadrado, a origem do ReportLab fica no canto inferior esquerdo.
+    # Portanto, a marca inferior deve usar a faixa de baixo (y + band),
+    # e nunca a coordenada da faixa superior (y + size - band).
+    bottom_y = y+band
     available = max(size-2*band, 1)
     tw = stringWidth(text, font_name, font_size)
     if tw > available*0.80 and tw > 0:
