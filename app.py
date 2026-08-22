@@ -12845,7 +12845,7 @@ def tela_catalogo_publico():
 # As demais telas e funções do ERP permanecem intactas.
 
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 44.0, "interna_mm": 35.0},
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
     "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
@@ -13319,13 +13319,12 @@ def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.
     return {"placements":placements,"rows":len(rows),"total":len(items),"grid_h":total_h}
 
 
-def _botton_mixed_svg_preview(items, fotos, border_color="#000000", gap_mm=3.0, margin_mm=5.0,
+def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
                               legenda_text="", legenda_color="#000000", legenda_size_mm=2.5,
-                              show_cut=True, configs=None):
-    """Prévia A4 mista. Cada posição pode ter foto, mesma foto, outra foto ou cor na faixa."""
+                              show_cut=True):
+    """Prévia A4 para vários tamanhos de botton na mesma folha."""
     layout=_botton_mixed_layout(items,gap_mm,margin_mm)
     if not layout: return "",None,0
-    configs=configs or []
     scale=2.55; a4_w=210.0; a4_h=297.0; W=int(a4_w*scale); H=int(a4_h*scale)
     svg=[f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' style='width:100%;height:auto;display:block;background:#fff;'><rect width='{W}' height='{H}' fill='#fff'/>"]
     mx,my=margin_mm*scale,margin_mm*scale
@@ -13333,44 +13332,28 @@ def _botton_mixed_svg_preview(items, fotos, border_color="#000000", gap_mm=3.0, 
     for n,pl in enumerate(layout["placements"]):
         i=pl["index"]; spec=items[i]; shape=spec["shape"]; outer=pl["size"]*scale; inner=float(spec["interna_mm"])*scale
         x=pl["x"]*scale; y=(a4_h-pl["y"]-pl["size"])*scale; cx=x+outer/2; cy=y+outer/2
-        cfg=configs[i] if i<len(configs) else {}
-        main_uri=_botton_img_data_uri(*fotos[i]) if i<len(fotos) and fotos[i] else ""
-        border_uri=_botton_img_data_uri(*cfg.get("border_photo")) if cfg.get("border_photo") else (main_uri if cfg.get("border_mode","Mesma foto")=="Mesma foto" else "")
-        fill=cfg.get("border_color",border_color)
+        uri=_botton_img_data_uri(*fotos[i]) if i<len(fotos) else ""
         if shape=="circle":
-            svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='{fill}'/>")
-            if border_uri:
-                svg.append(f"<defs><clipPath id='mixouter{i}'><circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}'/></clipPath></defs>")
-                svg.append(f"<image href='{border_uri}' x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixouter{i})'/>")
-            if main_uri:
-                svg.append(f"<defs><clipPath id='mixinner{i}'><circle cx='{cx:.2f}' cy='{cy:.2f}' r='{inner/2:.2f}'/></clipPath></defs>")
-                svg.append(f"<image href='{main_uri}' x='{cx-inner/2:.2f}' y='{cy-inner/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixinner{i})'/>")
+            svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='{border_color}'/>")
+            if uri: svg.append(f"<g transform='translate({cx:.2f},{cy:.2f})'><clipPath id='mixc{i}'><circle cx='0' cy='0' r='{inner/2:.2f}'/></clipPath><image href='{uri}' x='{-inner/2:.2f}' y='{-inner/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixc{i})'/></g>")
         else:
-            rx=3*scale; irx=max(rx-(outer-inner)/2,0); ix=x+(outer-inner)/2; iy=y+(outer-inner)/2
-            svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}' fill='{fill}'/>")
-            if border_uri:
-                svg.append(f"<defs><clipPath id='mixouter{i}'><rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}'/></clipPath></defs>")
-                svg.append(f"<image href='{border_uri}' x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixouter{i})'/>")
-            if main_uri:
-                svg.append(f"<defs><clipPath id='mixinner{i}'><rect x='{ix:.2f}' y='{iy:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{irx:.2f}'/></clipPath></defs>")
-                svg.append(f"<image href='{main_uri}' x='{ix:.2f}' y='{iy:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixinner{i})'/>")
-        leg=cfg.get("legend_text", legenda_text)
-        if leg.strip():
+            rx=3*scale; irx=max(rx-(outer-inner)/2,0)
+            svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}' fill='{border_color}'/>")
+            if uri: svg.append(f"<clipPath id='mixs{i}'><rect x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{irx:.2f}'/></clipPath><image href='{uri}' x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixs{i})'/>")
+        if legenda_text.strip():
             band=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2,0.8)
-            font=max(0.8,min(float(cfg.get("legend_size_mm",legenda_size_mm)),band*.42))*scale
-            lcolor=cfg.get("legend_color",legenda_color)
+            font=max(1.0,min(float(legenda_size_mm),band*.48))*scale
             if shape=="circle":
-                # Arco INFERIOR, muito próximo do fim da foto, sem entrar na área visível.
-                radius=inner/2 + max(font*0.36,0.18*scale)
-                import math
-                a1,a2=135.0,45.0; pid=f'mixleg{i}'
-                x1=cx+radius*math.cos(math.radians(a1)); y1=cy+radius*math.sin(math.radians(a1))
-                x2=cx+radius*math.cos(math.radians(a2)); y2=cy+radius*math.sin(math.radians(a2))
+                radius=inner/2+max(font*0.62, 0.35*scale); span=78.0
+                a1,a2=135,45
+                x1=cx+radius*__import__('math').cos(__import__('math').radians(a1)); y1=cy+radius*__import__('math').sin(__import__('math').radians(a1))
+                x2=cx+radius*__import__('math').cos(__import__('math').radians(a2)); y2=cy+radius*__import__('math').sin(__import__('math').radians(a2))
+                pid=f'mixleg{i}'
                 svg.append(f"<path id='{pid}' d='M{x1:.2f},{y1:.2f} A{radius:.2f},{radius:.2f} 0 0,0 {x2:.2f},{y2:.2f}' fill='none' stroke='none'/>")
-                svg.append(f"<text fill='{_svg_escape(lcolor)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700'><textPath href='#{pid}' startOffset='50%' text-anchor='middle'>{_svg_escape(leg.strip())}</textPath></text>")
+                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700'><textPath href='#{pid}' startOffset='50%' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
                 baseline=y+(outer-inner)/2+font*.78
-                svg.append(f"<text x='{cx:.2f}' y='{baseline:.2f}' fill='{_svg_escape(lcolor)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(leg.strip())}</text>")
+                svg.append(f"<text x='{cx:.2f}' y='{baseline:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
         if show_cut:
             if shape=="circle": svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
             else: svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{3*scale:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
@@ -13378,8 +13361,8 @@ def _botton_mixed_svg_preview(items, fotos, border_color="#000000", gap_mm=3.0, 
 
 
 def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm=3.0, margin_mm=5.0,
-                                     legenda_text="", legenda_color="#000000", legenda_size_mm=2.5, show_cut=True, configs=None):
-    """Gera A4 mista; configurações de faixa/marca são independentes por molde."""
+                                     legenda_text="", legenda_color="#000000", legenda_size_mm=2.5, show_cut=True):
+    """Gera UMA A4 com tamanhos mistos, mantendo cada área interna e a marca conforme o molde."""
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
@@ -13388,94 +13371,153 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     from reportlab.lib.utils import ImageReader
     layout=_botton_mixed_layout(items,gap_mm,margin_mm)
     if not layout: raise ValueError("A combinação escolhida não cabe em uma única folha A4. Reduza as quantidades.")
-    configs=configs or []
     buf=BytesIO(); c=canvas.Canvas(buf,pagesize=A4); c.setTitle("Sophi Personalizados - Moldes mistos")
+    a4_w,a4_h=A4; border_rgb=colors.HexColor(border_color); legend_rgb=colors.HexColor(legenda_color)
     for i,pl in enumerate(layout["placements"]):
         spec=items[i]; shape=spec["shape"]; outer=pl["size"]*mm; inner=float(spec["interna_mm"])*mm
         x=pl["x"]*mm; y=pl["y"]*mm; cx=x+outer/2; cy=y+outer/2
-        cfg=configs[i] if i<len(configs) else {}
-        main_reader=None
-        if i<len(fotos) and fotos[i]:
-            cr=_crop_image_for_reportlab(fotos[i][0]); main_reader=ImageReader(BytesIO(cr)) if cr else None
-        border_data=cfg.get("border_photo") if cfg.get("border_photo") else (fotos[i] if i<len(fotos) and fotos[i] and cfg.get("border_mode","Mesma foto")=="Mesma foto" else None)
-        border_reader=None
-        if border_data:
-            cr=_crop_image_for_reportlab(border_data[0]); border_reader=ImageReader(BytesIO(cr)) if cr else None
-        fill=colors.HexColor(cfg.get("border_color",border_color))
-        if border_reader:
-            c.saveState(); p=c.beginPath(); p.circle(cx,cy,outer/2) if shape=="circle" else p.roundRect(x,y,outer,outer,3*mm); c.clipPath(p,stroke=0,fill=0); c.drawImage(border_reader,x,y,width=outer,height=outer,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
+        reader=None
+        if i<len(fotos):
+            cr=_crop_image_for_reportlab(fotos[i][0]); reader=ImageReader(BytesIO(cr)) if cr else None
+        if reader:
+            c.saveState(); p=c.beginPath();
+            if shape=="circle": p.circle(cx,cy,outer/2)
+            else: p.roundRect(x,y,outer,outer,3*mm)
+            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,x,y,width=outer,height=outer,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
         else:
-            c.setFillColor(fill); c.circle(cx,cy,outer/2,stroke=0,fill=1) if shape=="circle" else c.roundRect(x,y,outer,outer,3*mm,stroke=0,fill=1)
-        if main_reader:
-            ix,iy=cx-inner/2,cy-inner/2; c.saveState(); p=c.beginPath(); p.circle(cx,cy,inner/2) if shape=="circle" else p.roundRect(ix,iy,inner,inner,max((3-(float(spec['externa_mm'])-float(spec['interna_mm']))/2)*mm,0)); c.clipPath(p,stroke=0,fill=0); c.drawImage(main_reader,ix,iy,width=inner,height=inner,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
-        leg=cfg.get("legend_text",legenda_text)
-        if leg.strip():
-            band=max((float(spec['externa_mm'])-float(spec['interna_mm']))/2,0.8); fs=max(0.8,min(float(cfg.get('legend_size_mm',legenda_size_mm)),band*.42))*mm; lcolor=colors.HexColor(cfg.get('legend_color',legenda_color))
+            c.setFillColor(border_rgb)
+            if shape=="circle": c.circle(cx,cy,outer/2,stroke=0,fill=1)
+            else: c.roundRect(x,y,outer,outer,3*mm,stroke=0,fill=1)
+        if reader:
+            ix,iy=cx-inner/2,cy-inner/2; c.saveState(); p=c.beginPath()
+            if shape=="circle": p.circle(cx,cy,inner/2)
+            else: p.roundRect(ix,iy,inner,inner,max((3-(float(spec['externa_mm'])-float(spec['interna_mm']))/2)*mm,0))
+            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,ix,iy,width=inner,height=inner,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
+        if legenda_text.strip():
+            band=max((float(spec['externa_mm'])-float(spec['interna_mm']))/2,0.8); font_mm=max(1.0,min(float(legenda_size_mm),band*.48)); fs=font_mm*mm
             if shape=='circle':
-                # raio imediatamente após a foto, mantendo o texto todo dentro da faixa inferior
-                radius=inner/2 + max(fs*0.36,0.18*mm)
-                from reportlab.pdfbase.pdfmetrics import stringWidth
-                tw=stringWidth(leg.strip(),'Helvetica-Bold',fs); span=max(50,min(82,(tw/max(radius,1))*180/3.141592653589793+8)); usable=2*3.141592653589793*radius*(span/360)*.88
-                if tw>usable and tw>0: fs=max(.7*mm,fs*usable/tw)
-                _draw_pdf_arc_text(c,leg.strip(),cx,cy,radius,False,'Helvetica-Bold',fs,lcolor)
+                radius=inner/2+max(fs*0.62, 0.35*mm)
+                # O 44 mm já está correto e permanece exatamente como estava.
+                # Nos demais redondos, o PDF usa a mesma geometria da prévia SVG:
+                # arco inferior de 78°, começando imediatamente após a foto.
+                if float(spec.get('diameter_mm', 0.0)) == 44.0:
+                    from reportlab.pdfbase.pdfmetrics import stringWidth
+                    tw=stringWidth(legenda_text.strip(),'Helvetica-Bold',fs); span=max(50,min(82,(tw/max(radius,1))*180/3.141592653589793+10)); usable=2*3.141592653589793*radius*(span/360)*.82
+                    if tw>usable and tw>0: fs=max(.9*mm,fs*usable/tw)
+                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,'Helvetica-Bold',fs,legend_rgb)
+                else:
+                    import math
+                    span=78.0
+                    chars=list(legenda_text.strip())
+                    approx_width=max(len(chars)*fs*0.52,fs)
+                    arc_len=radius*math.radians(span)
+                    if approx_width>arc_len*0.82 and approx_width>0:
+                        fs=max(.9*mm,fs*(arc_len*0.82)/approx_width)
+                    c.saveState(); c.setFillColor(legend_rgb); c.setFont('Helvetica-Bold',fs)
+                    total_chars=max(len(chars)-1,1)
+                    step=span/total_chars
+                    # SVG usa 135° -> 45° em coordenadas Y-down.
+                    # No PDF isso corresponde a 225° -> 315° em Y-up.
+                    for j,ch in enumerate(chars):
+                        ang=225.0+j*step
+                        px=cx+radius*math.cos(math.radians(ang))
+                        py=cy+radius*math.sin(math.radians(ang))
+                        c.saveState(); c.translate(px,py); c.rotate(ang-90.0)
+                        c.drawCentredString(0,-fs*0.35,ch)
+                        c.restoreState()
+                    c.restoreState()
             else:
-                _draw_pdf_square_bottom_legend(c,leg.strip(),x,y,outer,inner,'Helvetica-Bold',fs,lcolor)
+                _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,'Helvetica-Bold',max(4,legenda_size_mm*mm),legend_rgb)
         if show_cut:
-            c.saveState(); c.setStrokeColor(colors.HexColor('#111827')); c.setLineWidth(.25*mm); c.setDash(1.5,1.5); c.circle(cx,cy,outer/2,stroke=1,fill=0) if shape=='circle' else c.roundRect(x,y,outer,outer,3*mm,stroke=1,fill=0); c.restoreState()
+            c.saveState(); c.setStrokeColor(colors.HexColor('#111827')); c.setLineWidth(.25*mm); c.setDash(1.5,1.5)
+            if shape=='circle': c.circle(cx,cy,outer/2,stroke=1,fill=0)
+            else: c.roundRect(x,y,outer,outer,3*mm,stroke=1,fill=0)
+            c.restoreState()
     c.save(); buf.seek(0); return buf.getvalue(),layout,len(items)
 
 
+
 def _tela_gerador_moldes_mistos():
-    """Montagem de uma A4 mista, com configuração independente para cada molde."""
+    """Montagem de uma única A4 com qualquer combinação dos quatro tamanhos."""
     st.markdown("### Mesclar tamanhos na mesma A4")
-    st.caption("Escolha quantos de cada tamanho e configure cada molde separadamente: foto principal, mesma foto na borda, outra foto ou cor na borda.")
-    cols=st.columns(4); quantidades={}
-    for col,key in zip(cols,BOTTON_MOLDES.keys()):
-        with col: quantidades[key]=st.number_input(f"Quantidade — {key}",min_value=0,max_value=100,value=0,step=1,key=f"gm_mix_q_v3_{key}")
-    total=sum(int(v) for v in quantidades.values())
-    if total==0: st.info("Escolha pelo menos 1 unidade de um ou mais tamanhos para montar a A4 mista."); return
-    items=[]
-    for key,q in quantidades.items():
+    st.caption("Escolha a quantidade de cada tamanho. Você pode misturar 32, 44, 58 mm e 50 × 50 mm na mesma folha e baixar tudo em um único PDF.")
+
+    cols = st.columns(4)
+    quantidades = {}
+    for col, key in zip(cols, BOTTON_MOLDES.keys()):
+        with col:
+            quantidades[key] = st.number_input(
+                f"Quantidade — {key}", min_value=0, max_value=100, value=0, step=1,
+                key=f"gm_mix_q_v2_{key}"
+            )
+
+    total = sum(int(v) for v in quantidades.values())
+    if total == 0:
+        st.info("Escolha pelo menos 1 unidade de um ou mais tamanhos para montar a A4 mista.")
+        return
+
+    items = []
+    for key, q in quantidades.items():
         for _ in range(int(q)):
-            spec=BOTTON_MOLDES[key].copy(); spec["key"]=key; items.append(spec)
-    gap=st.number_input("Espaço entre moldes (mm)",min_value=0.0,max_value=20.0,value=3.0,step=.5,key="gm_mix_gap_v3")
-    margin=st.number_input("Margem da folha A4 (mm)",min_value=0.0,max_value=20.0,value=5.0,step=.5,key="gm_mix_margin_v3")
-    show_cut=st.checkbox("Mostrar linha de corte",value=True,key="gm_mix_cut_v3")
-    layout=_botton_mixed_layout(items,gap,margin)
-    if not layout: st.error("Essa combinação não cabe em uma única folha A4. Diminua as quantidades ou o espaço entre moldes."); return
-    configs=[]; fotos=[]
-    st.markdown("### Configuração de cada molde")
-    for i,spec in enumerate(items):
-        key=spec["key"]
-        with st.expander(f"Molde {i+1} — {key}",expanded=(i==0)):
-            f=st.file_uploader("Foto principal do cliente",type=["png","jpg","jpeg","webp"],key=f"gm_mix_main_{i}")
-            main=None
-            if f:
-                b=f.getvalue(); main=(b,"image/png" if f.name.lower().endswith(".png") else "image/jpeg")
-            fotos.append(main)
-            mode=st.radio("Como preencher a borda?",["Mesma foto","Outra foto","Cor sólida"],horizontal=True,key=f"gm_mix_border_mode_{i}")
-            border_photo=None; color="#000000"
-            if mode=="Outra foto":
-                bf=st.file_uploader("Foto da borda",type=["png","jpg","jpeg","webp"],key=f"gm_mix_border_photo_{i}")
-                if bf:
-                    bb=bf.getvalue(); border_photo=(bb,"image/png" if bf.name.lower().endswith(".png") else "image/jpeg")
-            elif mode=="Cor sólida":
-                color=st.color_picker("Cor da borda", "#000000", key=f"gm_mix_border_color_{i}")
-            add=st.checkbox("Adicionar @ somente embaixo",value=True,key=f"gm_mix_add_{i}")
-            leg=st.text_input("Texto da marca", "@sophipersonalizadosoficial", key=f"gm_mix_leg_{i}") if add else ""
-            lcolor=st.color_picker("Cor da marca","#000000",key=f"gm_mix_leg_color_{i}") if add else "#000000"
-            lsize=st.number_input("Tamanho da marca (mm)",min_value=.7,max_value=5.0,value=1.5,step=.1,key=f"gm_mix_leg_size_{i}") if add else 1.5
-            configs.append({"border_mode":mode,"border_photo":border_photo,"border_color":color,"legend_text":leg,"legend_color":lcolor,"legend_size_mm":lsize})
-    if any(f is None for f in fotos): st.warning("Envie a foto principal de cada molde que quiser testar. Os demais serão gerados como molde vazio para conferência.")
-    resumo=" · ".join(f"{k}: {int(q)}" for k,q in quantidades.items() if int(q)>0)
+            spec = BOTTON_MOLDES[key].copy()
+            spec["key"] = key
+            items.append(spec)
+
+    gap = st.number_input("Espaço entre moldes (mm)", min_value=0.0, max_value=20.0, value=3.0, step=.5, key="gm_mix_gap_v2")
+    margin = st.number_input("Margem da folha A4 (mm)", min_value=0.0, max_value=20.0, value=5.0, step=.5, key="gm_mix_margin_v2")
+    show_cut = st.checkbox("Mostrar linha de corte", value=True, key="gm_mix_cut_v2")
+
+    layout = _botton_mixed_layout(items, gap, margin)
+    if not layout:
+        st.error("Essa combinação não cabe em uma única folha A4. Diminua as quantidades ou o espaço entre moldes.")
+        return
+
+    st.markdown("### Fotos")
+    st.caption("As fotos entram na ordem dos tamanhos escolhidos: 32 mm → 44 mm → 58 mm → 50 × 50 mm. Se houver menos fotos que posições, as posições restantes ficam sem foto para você conferir o molde.")
+    uploaded = st.file_uploader(
+        f"Selecione até {total} fotos — uma por posição",
+        type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True,
+        key="gm_mix_fotos_v2"
+    )
+    fotos = []
+    for f in uploaded or []:
+        b = f.getvalue()
+        m = "image/png" if f.name.lower().endswith(".png") else "image/jpeg"
+        fotos.append((b, m))
+    if len(fotos) > total:
+        fotos = fotos[:total]
+        st.warning(f"Foram usadas somente as primeiras {total} fotos, conforme o número de posições escolhidas.")
+
+    border_color = st.color_picker("Cor da faixa / área externa sem foto", "#000000", key="gm_mix_border_color_v2")
+    add = st.checkbox("Adicionar minha marca somente embaixo", value=True, key="gm_mix_add_legend_v2")
+    legenda_text = st.text_input("Texto da marca", "@sophipersonalizadosoficial", key="gm_mix_legend_text_v2") if add else ""
+    legenda_color = st.color_picker("Cor da marca", "#000000", key="gm_mix_legend_color_v2") if add else "#000000"
+    legenda_size = st.number_input("Tamanho da marca (mm)", min_value=1.0, max_value=8.0, value=2.5, step=.5, key="gm_mix_legend_size_v2") if add else 2.5
+
+    resumo = " · ".join(f"{k}: {int(q)}" for k, q in quantidades.items() if int(q) > 0)
     st.success(f"A4 mista: {resumo} · {total} molde(s) · {layout['rows']} fileira(s).")
-    svg,_,_= _botton_mixed_svg_preview(items,fotos,"#000000",gap,margin,"","#000000",1.5,show_cut,configs=configs)
-    st.components.v1.html(svg,height=820,scrolling=True)
+
+    svg, _, placed = _botton_mixed_svg_preview(
+        items, fotos, border_color, gap, margin,
+        legenda_text, legenda_color, legenda_size, show_cut
+    )
+    st.components.v1.html(svg, height=820, scrolling=True)
+
     try:
-        pdf_bytes,_,_=_gerar_pdf_moldes_bottons_misto(items,fotos,"#000000",gap,margin,"","#000000",1.5,show_cut,configs=configs)
-        st.download_button("⬇️ Baixar PDF A4 misto para impressão",data=pdf_bytes,file_name=f"moldes_bottons_mistos_{total}.pdf",mime="application/pdf",use_container_width=True,key="gm_mix_download_v3")
+        pdf_bytes, _, _ = _gerar_pdf_moldes_bottons_misto(
+            items, fotos, border_color, gap, margin,
+            legenda_text, legenda_color, legenda_size, show_cut
+        )
+        st.download_button(
+            "⬇️ Baixar PDF A4 misto para impressão",
+            data=pdf_bytes,
+            file_name=f"moldes_bottons_mistos_{total}.pdf",
+            mime="application/pdf", use_container_width=True,
+            key="gm_mix_download_v2"
+        )
         st.caption("PDF em A4 e tamanho real. Na impressão: 100% / tamanho real e desative 'ajustar à página'.")
-    except Exception as exc: st.error(f"Não foi possível gerar o PDF misto: {exc}")
+    except Exception as exc:
+        st.error(f"Não foi possível gerar o PDF misto: {exc}")
 
 
 def tela_gerador_moldes_bottons():
