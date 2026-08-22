@@ -12848,7 +12848,7 @@ BOTTON_MOLDES = {
     "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
-    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 56.04, "interna_mm": 47.07},
+    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
 }
 
 BOTTON_MODOS_FAIXA = ["Mesma foto", "Outra foto", "Cor sólida"]
@@ -13363,11 +13363,6 @@ def tela_gerador_moldes_bottons():
         st.caption(f"Medida do Canva: {border_default:.2f} mm por lado (externo {outer_base:.2f} mm × interno {original_inner:.2f} mm).")
         border_area_mm=st.number_input("Espessura da faixa (mm por lado)",min_value=0.0,max_value=15.0,value=float(border_default),step=.1,key="gm_border_area_v3")
         inner_size=max(1.0,outer_base-2*float(border_area_mm))
-        # SOMENTE NO QUADRADO: reduz a área da foto em 5 mm no total (0,5 cm),
-        # mantendo exatamente o mesmo tamanho externo da borda/molde.
-        # Nenhuma outra medida ou formato é alterado.
-        if molde_key == "50 × 50 mm":
-            inner_size=max(1.0,inner_size-5.0)
 
         st.markdown("### Folha A4")
         bleed_mm=st.number_input("Sangria extra do molde (mm)",min_value=0.0,max_value=10.0,value=0.0,step=.5,key="gm_bleed_v3")
