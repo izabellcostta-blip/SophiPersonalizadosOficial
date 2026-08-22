@@ -13116,10 +13116,11 @@ def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, f
     if tw > available * 0.80 and tw > 0:
         font_size = max(4.0, font_size * (available * 0.80) / tw)
 
-    # Coloca o texto no CENTRO VERTICAL da faixa inferior.
-    # Como o ReportLab cresce para cima, toda a posição é calculada a partir
-    # de y + band; não existe nenhuma coordenada relacionada à faixa superior.
-    baseline = y + (band - font_size) / 2.0 + font_size * 0.22
+    # Coloca o texto imediatamente abaixo da foto, no centro da faixa inferior.
+    # A faixa inferior começa exatamente em y e termina em y + band;
+    # a foto termina em y + band. Assim o arroba fica rente à foto,
+    # sem descer para perto da borda externa.
+    baseline = y + (band / 2.0) - (font_size * 0.35)
 
     canvas.saveState()
     canvas.setFillColor(color)
