@@ -13162,130 +13162,55 @@ def _gerar_pdf_moldes_bottons(
     background_image_mime="image/jpeg", border_fill_mode="Mesma foto",
     corner_radius_mm=3.0, inner_override_mm=None,
 ):
+    """Gera o PDF a partir da MESMA arte SVG usada na prévia.
+
+    Não redesenha o molde em ReportLab. A única fonte da arte é
+    ``_botton_svg_preview``; o SVG é rasterizado em 300 DPI e colocado
+    em uma página A4 de tamanho físico exato. Isso evita qualquer
+    recalculo/reposicionamento de foto, faixa ou @ durante a exportação.
+    """
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
 
-    shape, outer_base, inner_size = _botton_spec(molde_key)
-    if inner_override_mm is not None:
-        inner_size = max(1.0, float(inner_override_mm))
-    layout = _botton_layout_mm(shape, outer_base, bleed_mm, gap_mm, margin_mm)
-    total = len(fotos)
-    if not total:
+    svg, layout, qty = _botton_svg_preview(
+        molde_key, fotos, border_color, bleed_mm, gap_mm, margin_mm,
+        legenda_text, legenda_color, legenda_size_mm, show_cut, show_bleed,
+        background_image_bytes, background_image_mime, border_fill_mode,
+        corner_radius_mm, inner_override_mm,
+    )
+    if not svg or not layout or qty <= 0:
         raise ValueError("Adicione pelo menos uma foto para gerar os moldes.")
-    if layout["total"] <= 0:
-        raise ValueError("A configuração atual não permite colocar moldes na A4.")
+
+    try:
+        import cairosvg
+    except ImportError as exc:
+        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
+
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
+    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
+    )
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
-    a4_w,a4_h = A4
-    border_rgb = colors.HexColor(border_color)
-    legend_rgb = colors.HexColor(legenda_color)
-
-    main_readers = []
-    for b,_ in fotos:
-        cropped = _crop_image_for_reportlab(b)
-        main_readers.append(ImageReader(BytesIO(cropped)) if cropped else None)
-    bg_cropped = _crop_image_for_reportlab(background_image_bytes)
-    bg_reader = ImageReader(BytesIO(bg_cropped)) if bg_cropped else None
-
-    outer = outer_base*mm
-    inner = inner_size*mm
-    bleed = max(bleed_mm,0)*mm
-    gap = gap_mm*mm
-
-    idx=0
-    while idx < total:
-        page_items = min(layout["total"], total-idx)
-        for j in range(page_items):
-            row = j // layout["cols"]
-            col = j % layout["cols"]
-            items_this_row = min(layout["cols"], page_items-row*layout["cols"])
-            row_grid_w = items_this_row*layout["w"]*mm + max(items_this_row-1,0)*gap
-            row_start_x = (a4_w-row_grid_w)/2
-            cell_y_top = a4_h - layout["offset_y"]*mm - row*(layout["h"]*mm+gap)
-            cell_x = row_start_x + col*(layout["w"]*mm+gap)
-            cell_y = cell_y_top - layout["h"]*mm
-            x,y = cell_x+bleed,cell_y+bleed
-            cx,cy = x+outer/2,y+outer/2
-
-            if show_bleed and bleed>0:
-                c.saveState(); c.setStrokeColor(colors.HexColor("#b8bec7")); c.setDash(2,2)
-                if shape=="circle": c.circle(cx,cy,outer/2+bleed,stroke=1,fill=0)
-                else: c.roundRect(x-bleed,y-bleed,outer+2*bleed,outer+2*bleed,corner_radius_mm*mm+bleed,stroke=1,fill=0)
-                c.restoreState()
-
-            reader = main_readers[idx+j] if idx+j < len(main_readers) else None
-            if border_fill_mode=="Mesma foto":
-                bg = reader
-            else:
-                bg = bg_reader if border_fill_mode=="Outra foto" else None
-
-            if bg:
-                c.saveState()
-                p=c.beginPath()
-                if shape=="circle": p.circle(cx,cy,outer/2)
-                else: p.roundRect(x,y,outer,outer,corner_radius_mm*mm)
-                c.clipPath(p,stroke=0,fill=0)
-                c.drawImage(bg,x,y,width=outer,height=outer,preserveAspectRatio=True,anchor="c",mask="auto")
-                c.restoreState()
-            else:
-                c.setFillColor(border_rgb)
-                if shape=="circle": c.circle(cx,cy,outer/2,stroke=0,fill=1)
-                else: c.roundRect(x,y,outer,outer,corner_radius_mm*mm,stroke=0,fill=1)
-
-            ix,iy=cx-inner/2,cy-inner/2
-            if reader:
-                c.saveState()
-                p=c.beginPath()
-                if shape=="circle": p.circle(cx,cy,inner/2)
-                else: p.roundRect(ix,iy,inner,inner,max((corner_radius_mm-(outer_base-inner_size)/2)*mm,0))
-                c.clipPath(p,stroke=0,fill=0)
-                c.drawImage(reader,ix,iy,width=inner,height=inner,preserveAspectRatio=True,anchor="c",mask="auto")
-                c.restoreState()
-            else:
-                c.setFillColor(colors.white)
-                if shape=="circle": c.circle(cx,cy,inner/2,stroke=0,fill=1)
-                else: c.roundRect(ix,iy,inner,inner,max((corner_radius_mm-(outer_base-inner_size)/2)*mm,0),stroke=0,fill=1)
-
-            if legenda_text.strip():
-                if shape=="circle":
-                    # REDONDO: marca curvada somente embaixo, acompanhando o
-                    # contorno do redondo. O raio fica entre a foto e a borda,
-                    # deixando o texto pequeno e imediatamente próximo da foto.
-                    band_mm = max((outer_base - inner_size) / 2.0, 0.8)
-                    font_mm = max(1.0, min(float(legenda_size_mm), band_mm * 0.48))
-                    circle_font_size = font_mm * mm
-                    radius = inner/2.0 + band_mm * mm * 0.48
-                    # ReportLab: 270° é o centro do arco inferior.
-                    from reportlab.pdfbase.pdfmetrics import stringWidth
-                    max_span = 82.0
-                    min_span = 50.0
-                    tw = stringWidth(legenda_text.strip(), "Helvetica-Bold", circle_font_size)
-                    span = max(min_span, min(max_span, (tw / max(radius, 1.0)) * 180.0 / 3.141592653589793 + 10.0))
-                    usable = 2.0 * 3.141592653589793 * radius * (span / 360.0) * 0.82
-                    if tw > usable and tw > 0:
-                        circle_font_size = max(0.9*mm, circle_font_size * usable / tw)
-                    _draw_pdf_arc_text(c, legenda_text.strip(), cx, cy, radius, False, "Helvetica-Bold", circle_font_size, legend_rgb)
-                else:
-                    # No quadrado, somente a marca inferior, dentro da faixa.
-                    _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
-
-            if show_cut:
-                c.saveState(); c.setStrokeColor(colors.HexColor("#111827")); c.setLineWidth(.25*mm); c.setDash(1.5,1.5)
-                if shape=="circle": c.circle(cx,cy,outer/2,stroke=1,fill=0)
-                else: c.roundRect(x,y,outer,outer,corner_radius_mm*mm,stroke=1,fill=0)
-                c.restoreState()
-        idx += page_items
-        if idx < total: c.showPage()
-
-    c.save(); buffer.seek(0)
-    return buffer.getvalue(),layout,total
-
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
+    )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
@@ -13362,79 +13287,52 @@ def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
 
 def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm=3.0, margin_mm=5.0,
                                      legenda_text="", legenda_color="#000000", legenda_size_mm=2.5, show_cut=True):
-    """Gera UMA A4 com tamanhos mistos, mantendo cada área interna e a marca conforme o molde."""
+    """PDF-espelho da prévia mista: usa a própria arte SVG da tela.
+
+    A prévia é a única fonte de verdade. O PDF não redesenha, não calcula
+    posições e não reposiciona o @. A arte é rasterizada em 300 DPI e
+    colocada inteira em uma página A4 física, preservando exatamente a
+    composição que a usuária vê na prévia.
+    """
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
-    layout=_botton_mixed_layout(items,gap_mm,margin_mm)
-    if not layout: raise ValueError("A combinação escolhida não cabe em uma única folha A4. Reduza as quantidades.")
-    buf=BytesIO(); c=canvas.Canvas(buf,pagesize=A4); c.setTitle("Sophi Personalizados - Moldes mistos")
-    a4_w,a4_h=A4; border_rgb=colors.HexColor(border_color); legend_rgb=colors.HexColor(legenda_color)
-    for i,pl in enumerate(layout["placements"]):
-        spec=items[i]; shape=spec["shape"]; outer=pl["size"]*mm; inner=float(spec["interna_mm"])*mm
-        x=pl["x"]*mm; y=pl["y"]*mm; cx=x+outer/2; cy=y+outer/2
-        reader=None
-        if i<len(fotos):
-            cr=_crop_image_for_reportlab(fotos[i][0]); reader=ImageReader(BytesIO(cr)) if cr else None
-        if reader:
-            c.saveState(); p=c.beginPath();
-            if shape=="circle": p.circle(cx,cy,outer/2)
-            else: p.roundRect(x,y,outer,outer,3*mm)
-            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,x,y,width=outer,height=outer,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
-        else:
-            c.setFillColor(border_rgb)
-            if shape=="circle": c.circle(cx,cy,outer/2,stroke=0,fill=1)
-            else: c.roundRect(x,y,outer,outer,3*mm,stroke=0,fill=1)
-        if reader:
-            ix,iy=cx-inner/2,cy-inner/2; c.saveState(); p=c.beginPath()
-            if shape=="circle": p.circle(cx,cy,inner/2)
-            else: p.roundRect(ix,iy,inner,inner,max((3-(float(spec['externa_mm'])-float(spec['interna_mm']))/2)*mm,0))
-            c.clipPath(p,stroke=0,fill=0); c.drawImage(reader,ix,iy,width=inner,height=inner,preserveAspectRatio=True,anchor='c',mask='auto'); c.restoreState()
-        if legenda_text.strip():
-            band=max((float(spec['externa_mm'])-float(spec['interna_mm']))/2,0.8); font_mm=max(1.0,min(float(legenda_size_mm),band*.48)); fs=font_mm*mm
-            if shape=='circle':
-                radius=inner/2+max(fs*0.62, 0.35*mm)
-                # O 44 mm já está correto e permanece exatamente como estava.
-                # Nos demais redondos, o PDF usa a mesma geometria da prévia SVG:
-                # arco inferior de 78°, começando imediatamente após a foto.
-                if float(spec.get('diameter_mm', 0.0)) == 44.0:
-                    from reportlab.pdfbase.pdfmetrics import stringWidth
-                    tw=stringWidth(legenda_text.strip(),'Helvetica-Bold',fs); span=max(50,min(82,(tw/max(radius,1))*180/3.141592653589793+10)); usable=2*3.141592653589793*radius*(span/360)*.82
-                    if tw>usable and tw>0: fs=max(.9*mm,fs*usable/tw)
-                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,'Helvetica-Bold',fs,legend_rgb)
-                else:
-                    import math
-                    span=78.0
-                    chars=list(legenda_text.strip())
-                    approx_width=max(len(chars)*fs*0.52,fs)
-                    arc_len=radius*math.radians(span)
-                    if approx_width>arc_len*0.82 and approx_width>0:
-                        fs=max(.9*mm,fs*(arc_len*0.82)/approx_width)
-                    c.saveState(); c.setFillColor(legend_rgb); c.setFont('Helvetica-Bold',fs)
-                    total_chars=max(len(chars)-1,1)
-                    step=span/total_chars
-                    # SVG usa 135° -> 45° em coordenadas Y-down.
-                    # No PDF isso corresponde a 225° -> 315° em Y-up.
-                    for j,ch in enumerate(chars):
-                        ang=225.0+j*step
-                        px=cx+radius*math.cos(math.radians(ang))
-                        py=cy+radius*math.sin(math.radians(ang))
-                        c.saveState(); c.translate(px,py); c.rotate(ang-90.0)
-                        c.drawCentredString(0,-fs*0.35,ch)
-                        c.restoreState()
-                    c.restoreState()
-            else:
-                _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,'Helvetica-Bold',max(4,legenda_size_mm*mm),legend_rgb)
-        if show_cut:
-            c.saveState(); c.setStrokeColor(colors.HexColor('#111827')); c.setLineWidth(.25*mm); c.setDash(1.5,1.5)
-            if shape=='circle': c.circle(cx,cy,outer/2,stroke=1,fill=0)
-            else: c.roundRect(x,y,outer,outer,3*mm,stroke=1,fill=0)
-            c.restoreState()
-    c.save(); buf.seek(0); return buf.getvalue(),layout,len(items)
 
+    svg, layout, qty = _botton_mixed_svg_preview(
+        items, fotos, border_color, gap_mm, margin_mm,
+        legenda_text, legenda_color, legenda_size_mm, show_cut
+    )
+    if not svg or not layout or qty <= 0:
+        raise ValueError("A combinação escolhida não cabe em uma única folha A4. Reduza as quantidades.")
+
+    try:
+        import cairosvg
+    except ImportError as exc:
+        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
+
+    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
+    )
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle("Sophi Personalizados - Moldes Mistos")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
+    )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _tela_gerador_moldes_mistos():
