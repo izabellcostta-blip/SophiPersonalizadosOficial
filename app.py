@@ -13018,21 +13018,27 @@ def _botton_svg_preview(
             font_mm_global = max(1.0, min(float(legenda_size_mm), band_mm_global * 0.60))
             font_size = font_mm_global * scale
             if shape == "circle":
-                # A marca ocupa EXCLUSIVAMENTE o centro da faixa inferior.
-                # Isso evita o problema anterior em que o texto encostava na foto,
-                # atravessava a faixa ou saía do contorno.
+                # REDONDO: mesma lógica visual do quadrado. A marca fica
+                # horizontal, imediatamente abaixo da foto, dentro da faixa
+                # inferior. Nenhuma letra pode entrar na área da foto.
                 band_mm = band_mm_global
                 font_mm = font_mm_global
-                radius_mm = inner_size / 2.0 + band_mm / 2.0
-                radius = radius_mm * scale
-                # Calcula um arco proporcional ao comprimento do texto, mas limita
-                # a abertura para manter toda a marca na faixa inferior.
-                approx_text_mm = max(len(legenda_text.strip()) * font_mm * 0.52, font_mm * 2.0)
-                circumference_mm = 2.0 * 3.141592653589793 * radius_mm
-                span = max(65.0, min(150.0, approx_text_mm / circumference_mm * 360.0 + 18.0))
-                pid = f"legend_{i}_bottom"
-                svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,False,span)}' fill='none' stroke='none'/>")
-                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'><textPath href='#{pid}' startOffset='50%'>{_svg_escape(legenda_text.strip())}</textPath></text>")
+                font_size = font_mm * scale
+                inner_bottom = cy + inner / 2.0
+                outer_bottom = cy + outer / 2.0
+                # Pequeno afastamento para não encostar na foto, mantendo a marca
+                # rente à borda inferior da área visível.
+                baseline = inner_bottom + min(0.65 * scale, max(0.0, (outer-inner)/2.0 - font_size))
+                # Limita a largura ao espaço disponível na faixa nesse ponto.
+                dy = baseline - cy
+                circle_half_width = max(1.0, ((outer/2.0)**2 - dy**2) ** 0.5)
+                available = max(1.0, 2.0 * circle_half_width - 1.2 * scale)
+                # Aproxima a largura e reduz a fonte se necessário.
+                approx_width = max(len(legenda_text.strip()) * font_size * 0.52, font_size * 2.0)
+                if approx_width > available and approx_width > 0:
+                    font_size = max(1.0 * scale, font_size * available / approx_width)
+                    baseline = inner_bottom + min(0.65 * scale, max(0.0, (outer-inner)/2.0 - font_size))
+                svg.append(f"<text x='{cx:.2f}' y='{baseline + font_size*.82:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
             else:
                 band = max((outer-inner)/2.0, 0.8*scale)
                 left, right = x+band, x+outer-band
@@ -13245,15 +13251,26 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    # Raio exatamente no meio da faixa: nem invade a foto nem encosta
-                    # no limite externo. O mesmo cálculo é usado no preview.
+                    # REDONDO: marca horizontal, imediatamente abaixo da foto,
+                    # dentro da faixa inferior. Não usa texto em arco.
                     band_mm = max((outer_base - inner_size) / 2.0, 0.8)
-                    font_mm = min(float(legenda_size_mm), band_mm * 0.46)
+                    font_mm = min(float(legenda_size_mm), band_mm * 0.60)
                     font_mm = max(1.0, font_mm)
                     circle_font_size = font_mm * mm
-                    radius_mm = inner_size / 2.0 + band_mm / 2.0
-                    radius = radius_mm * mm
-                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",circle_font_size,legend_rgb)
+                    inner_bottom = cy + inner/2.0
+                    outer_bottom = cy + outer/2.0
+                    baseline = inner_bottom + min(0.65*mm, max(0.0, (outer-inner)/2.0 - circle_font_size))
+                    from reportlab.pdfbase.pdfmetrics import stringWidth
+                    available = max(1.0*mm, outer - 1.2*mm)
+                    tw = stringWidth(legenda_text.strip(), "Helvetica-Bold", circle_font_size)
+                    if tw > available and tw > 0:
+                        circle_font_size = max(1.0*mm, circle_font_size * available / tw)
+                        baseline = inner_bottom + min(0.65*mm, max(0.0, (outer-inner)/2.0 - circle_font_size))
+                    c.saveState()
+                    c.setFillColor(legend_rgb)
+                    c.setFont("Helvetica-Bold", circle_font_size)
+                    c.drawCentredString(cx, baseline, legenda_text.strip())
+                    c.restoreState()
                 else:
                     # No quadrado, somente a marca inferior, dentro da faixa.
                     _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
