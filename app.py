@@ -13108,8 +13108,7 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     # Em ReportLab, y cresce para cima: top fica logo dentro da faixa e
     # bottom fica logo acima da borda inferior, ambos fora da foto.
     canvas.drawCentredString((left+right)/2, top_y-font_size*0.18, text)
-    baseline = bottom_y - font_size*0.35
-    canvas.drawCentredString((left+right)/2, baseline, text)
+    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
     canvas.restoreState()
 
 
@@ -13120,11 +13119,9 @@ def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, f
     band = max((size-inner)/2.0, 0.8*2.83464567)
     left, right = x+band, x+size-band
     # No PDF do quadrado, a origem do ReportLab fica no canto inferior esquerdo.
-    # A marca deve ficar DENTRO DA FAIXA INFERIOR, entre a borda externa e o
-    # início da foto. Portanto ela fica no meio da faixa, e não sobre a foto.
-    # (y + band) é justamente o limite inferior da foto; usar essa coordenada
-    # colocava a linha de texto em cima da arte.
-    bottom_y = y + (band / 2.0)
+    # Portanto, a marca inferior deve usar a faixa de baixo (y + band),
+    # e nunca a coordenada da faixa superior (y + size - band).
+    bottom_y = y+band
     available = max(size-2*band, 1)
     tw = stringWidth(text, font_name, font_size)
     if tw > available*0.80 and tw > 0:
@@ -13132,7 +13129,7 @@ def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, f
     canvas.saveState()
     canvas.setFillColor(color)
     canvas.setFont(font_name, font_size)
-    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
+    canvas.drawCentredString((left+right)/2, y + band/2.0 - font_size*0.35, text)
     canvas.restoreState()
 
 
