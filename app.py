@@ -12848,7 +12848,7 @@ BOTTON_MOLDES = {
     "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
-    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
+    "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 56.04, "interna_mm": 47.07},
 }
 
 BOTTON_MODOS_FAIXA = ["Mesma foto", "Outra foto", "Cor sólida"]
@@ -13015,7 +13015,7 @@ def _botton_svg_preview(
         if legenda_text.strip():
             # Fonte calculada a partir da espessura real da faixa para os dois formatos.
             band_mm_global = max((outer_base - inner_size) / 2.0, 0.8)
-            font_mm_global = max(1.0, min(float(legenda_size_mm), band_mm_global * 0.46))
+            font_mm_global = max(1.0, min(float(legenda_size_mm), band_mm_global * 0.60))
             font_size = font_mm_global * scale
             if shape == "circle":
                 # A marca ocupa EXCLUSIVAMENTE o centro da faixa inferior.
