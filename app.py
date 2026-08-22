@@ -13018,11 +13018,14 @@ def _botton_svg_preview(
                     svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
                     svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'><textPath href='#{pid}' startOffset='50%'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
-                band = max((outer-inner)/4.0, 0.8*scale)
+                band = max((outer-inner)/2.0, 0.8*scale)
                 left, right = x+band, x+outer-band
-                top_y, bottom_y = y+outer-band, y+band
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.15:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.85:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                # A legenda fica dentro da faixa externa, encostada à linha onde a
+                # faixa começa, sem entrar na foto e sem sair para o papel branco.
+                top_y = y+band
+                bottom_y = y+outer-band
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.12:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.78:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
 
         if show_cut:
             if shape == "circle":
@@ -13071,9 +13074,9 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     if not text:
         return
     from reportlab.pdfbase.pdfmetrics import stringWidth
-    band = max((size-inner)/4.0, 0.8*2.83464567)
+    band = max((size-inner)/2.0, 0.8*2.83464567)
     left, right = x+band, x+size-band
-    top_y, bottom_y = y+size-band, y+band
+    top_y, bottom_y = y+band, y+size-band
     available = max(size-2*band, 1)
     tw = stringWidth(text, font_name, font_size)
     if tw > available*0.80 and tw > 0:
@@ -13081,8 +13084,10 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     canvas.saveState()
     canvas.setFillColor(color)
     canvas.setFont(font_name, font_size)
-    canvas.drawCentredString((left+right)/2, top_y-font_size*0.35, text)
-    canvas.drawCentredString((left+right)/2, bottom_y-font_size*0.65, text)
+    # Em ReportLab, y cresce para cima: top fica logo dentro da faixa e
+    # bottom fica logo acima da borda inferior, ambos fora da foto.
+    canvas.drawCentredString((left+right)/2, top_y-font_size*0.18, text)
+    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
     canvas.restoreState()
 
 
