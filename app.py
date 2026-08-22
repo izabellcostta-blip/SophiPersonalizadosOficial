@@ -12845,7 +12845,7 @@ def tela_catalogo_publico():
 # As demais telas e funções do ERP permanecem intactas.
 
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 44.0, "interna_mm": 35.0},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
     "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
@@ -13188,35 +13188,21 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # PDF ESPELHO DA PRÉVIA:
-    # não rasteriza para PNG e não passa pelo ReportLab. O mesmo SVG da prévia
-    # é convertido diretamente para PDF em A4 físico. Isso evita que a etapa
-    # PNG/ReportLab altere, desloque ou faça desaparecer os elementos do SVG.
-    # A largura/altura físicas são definidas somente nesta etapa de exportação;
-    # a arte, posições, foto, faixa e @ continuam exatamente as da prévia.
-    svg_pdf = re.sub(
-        r"<svg\s+([^>]*?)viewBox='0 0 ([0-9.]+) ([0-9.]+)'",
-        r"<svg \1width='210mm' height='297mm' viewBox='0 0 535.5 757.35'",
-        svg,
-        count=1,
-    )
-    # O regex acima depende do viewBox gerado pelo módulo. Como garantia,
-    # normalizamos a abertura do SVG sem tocar no restante da arte.
-    if not svg_pdf.startswith("<svg"):
-        svg_pdf = svg
-    else:
-        svg_pdf = re.sub(r"<svg\b", "<svg width='210mm' height='297mm'", svg_pdf, count=1)
-        svg_pdf = svg_pdf.replace("<svg width='210mm' height='297mm' width='210mm' height='297mm'", "<svg width='210mm' height='297mm'", 1)
+    # Usa diretamente o MESMO SVG da prévia.
+    # Não redesenha, não recalcula posições e não altera o @.
+    try:
+        pdf_bytes = cairosvg.svg2pdf(
+            bytestring=svg.encode("utf-8"),
+            output_width="210mm",
+            output_height="297mm",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Não foi possível exportar a prévia para PDF: {exc}") from exc
 
-    pdf_buffer = BytesIO()
-    cairosvg.svg2pdf(
-        bytestring=svg_pdf.encode("utf-8"),
-        write_to=pdf_buffer,
-        output_width=210 * 96 / 25.4,
-        output_height=297 * 96 / 25.4,
-    )
-    pdf_buffer.seek(0)
-    return pdf_buffer.getvalue(), layout, qty
+    if not pdf_bytes:
+        raise RuntimeError("O PDF foi gerado vazio.")
+
+    return pdf_bytes, layout, qty
 
 
 def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
@@ -13317,18 +13303,21 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # PDF ESPELHO DA PRÉVIA MISTA: conversão direta do mesmo SVG para PDF.
-    # Nenhuma coordenada, tamanho ou posição do @ é recalculada no exportador.
-    svg_pdf = re.sub(r"<svg\b", "<svg width='210mm' height='297mm'", svg, count=1)
-    pdf_buffer = BytesIO()
-    cairosvg.svg2pdf(
-        bytestring=svg_pdf.encode("utf-8"),
-        write_to=pdf_buffer,
-        output_width=210 * 96 / 25.4,
-        output_height=297 * 96 / 25.4,
-    )
-    pdf_buffer.seek(0)
-    return pdf_buffer.getvalue(), layout, qty
+    # Usa diretamente o MESMO SVG da prévia.
+    # Não redesenha, não recalcula posições e não altera o @.
+    try:
+        pdf_bytes = cairosvg.svg2pdf(
+            bytestring=svg.encode("utf-8"),
+            output_width="210mm",
+            output_height="297mm",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Não foi possível exportar a prévia para PDF: {exc}") from exc
+
+    if not pdf_bytes:
+        raise RuntimeError("O PDF foi gerado vazio.")
+
+    return pdf_bytes, layout, qty
 
 
 def _tela_gerador_moldes_mistos():
