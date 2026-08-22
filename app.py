@@ -12899,17 +12899,14 @@ def _botton_img_data_uri(image_bytes, mime="image/jpeg"):
         return ""
 
 
-def _legend_arc_path(cx, cy, radius, top=True, span_deg=120):
+def _legend_arc_path(cx, cy, radius, top=False, span_deg=120):
     import math
-    # Arco centralizado na faixa: somente a parte inferior é usada atualmente.
-    # O raio fica no MEIO da faixa externa, evitando tanto a foto quanto a borda de corte.
-    span_deg = max(30.0, min(float(span_deg), 170.0))
-    if top:
-        center = 270.0
-        a1, a2, sweep = center - span_deg/2.0, center + span_deg/2.0, 1
-    else:
-        center = 90.0
-        a1, a2, sweep = center + span_deg/2.0, center - span_deg/2.0, 0
+    # A marca usada nesta versão é SOMENTE INFERIOR. O arco fica no centro
+    # geométrico da faixa externa: não invade a foto e não passa da linha de corte.
+    span_deg = max(30.0, min(float(span_deg), 150.0))
+    center = 270.0 if not top else 90.0
+    # Caminho SVG para texto legível: a parte inferior fica voltada para cima.
+    a1, a2, sweep = center - span_deg/2.0, center + span_deg/2.0, 1
     x1 = cx + radius * math.cos(math.radians(a1))
     y1 = cy + radius * math.sin(math.radians(a1))
     x2 = cx + radius * math.cos(math.radians(a2))
@@ -13016,14 +13013,16 @@ def _botton_svg_preview(
         # Marca da Sophi: SOMENTE na parte inferior da faixa externa.
         # Nunca entra na foto e nunca fica fora da linha de corte.
         if legenda_text.strip():
+            # Fonte calculada a partir da espessura real da faixa para os dois formatos.
+            band_mm_global = max((outer_base - inner_size) / 2.0, 0.8)
+            font_mm_global = max(1.0, min(float(legenda_size_mm), band_mm_global * 0.46))
+            font_size = font_mm_global * scale
             if shape == "circle":
                 # A marca ocupa EXCLUSIVAMENTE o centro da faixa inferior.
                 # Isso evita o problema anterior em que o texto encostava na foto,
                 # atravessava a faixa ou saía do contorno.
-                band_mm = max((outer_base - inner_size) / 2.0, 0.8)
-                font_mm = min(float(legenda_size_mm), band_mm * 0.46)
-                font_mm = max(1.0, font_mm)
-                font_size = font_mm * scale
+                band_mm = band_mm_global
+                font_mm = font_mm_global
                 radius_mm = inner_size / 2.0 + band_mm / 2.0
                 radius = radius_mm * scale
                 # Calcula um arco proporcional ao comprimento do texto, mas limita
@@ -13058,24 +13057,23 @@ def _draw_pdf_arc_text(canvas, text, cx, cy, radius, top, font_name, font_size, 
     chars = list(str(text))
     canvas.saveState()
     canvas.setFillColor(color)
-    # Mantém a marca dentro da faixa externa. O tamanho é reduzido somente se
-    # necessário para caber no arco do tamanho do botton.
+    # O texto precisa caber INTEIRO dentro da faixa. Primeiro calculamos o arco
+    # e depois reduzimos a fonte, se necessário.
     widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
     total = sum(widths)
     max_span = 150.0
     min_span = 65.0
     span = max(min_span, min(max_span, (total / max(radius, 1.0)) * 180.0 / pi + 18.0))
-    usable_arc = 2.0 * pi * radius * (span / 360.0) * 0.92
+    usable_arc = 2.0 * pi * radius * (span / 360.0) * 0.86
     if total > usable_arc and total > 0:
-        font_size = max(3.0, font_size * usable_arc / total)
-        canvas.setFont(font_name, font_size)
+        font_size = max(2.6, font_size * usable_arc / total)
         widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
         total = sum(widths)
-        span = max(min_span, min(max_span, (total / max(radius, 1.0)) * 180.0 / pi + 18.0))
-    center = 90.0 if not top else 270.0
-    direction = 1 if top else -1
-    # Em ReportLab, o eixo Y cresce para cima; para a parte inferior, o texto
-    # segue a curva de baixo mantendo a leitura normal.
+    canvas.setFont(font_name, font_size)
+    # Para a marca inferior, 270° é o centro do arco. Isso impede que o texto
+    # apareça na lateral/topo no PDF. A rotação mantém as letras legíveis.
+    center = 270.0 if not top else 90.0
+    direction = 1 if not top else -1
     start = center - span/2.0
     step = span / max(len(chars)-1, 1)
     for j, ch in enumerate(chars):
