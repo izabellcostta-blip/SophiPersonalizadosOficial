@@ -13022,7 +13022,7 @@ def _botton_svg_preview(
                 left, right = x+band, x+outer-band
                 top_y, bottom_y = y+outer-band, y+band
                 svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.15:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size:.85:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.85:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
 
         if show_cut:
             if shape == "circle":
