@@ -12899,18 +12899,23 @@ def _botton_img_data_uri(image_bytes, mime="image/jpeg"):
         return ""
 
 
-def _legend_arc_path(cx, cy, radius, top=True):
+def _legend_arc_path(cx, cy, radius, top=True, span_deg=120):
     import math
-    # Arco curto, no meio da faixa externa.
+    # Arco centralizado na faixa: somente a parte inferior é usada atualmente.
+    # O raio fica no MEIO da faixa externa, evitando tanto a foto quanto a borda de corte.
+    span_deg = max(30.0, min(float(span_deg), 170.0))
     if top:
-        a1, a2, sweep = 210, 330, 1
+        center = 270.0
+        a1, a2, sweep = center - span_deg/2.0, center + span_deg/2.0, 1
     else:
-        a1, a2, sweep = 150, 30, 0
+        center = 90.0
+        a1, a2, sweep = center + span_deg/2.0, center - span_deg/2.0, 0
     x1 = cx + radius * math.cos(math.radians(a1))
     y1 = cy + radius * math.sin(math.radians(a1))
     x2 = cx + radius * math.cos(math.radians(a2))
     y2 = cy + radius * math.sin(math.radians(a2))
-    return f"M {x1:.2f},{y1:.2f} A {radius:.2f},{radius:.2f} 0 0,{sweep} {x2:.2f},{y2:.2f}"
+    large = 1 if span_deg > 180 else 0
+    return f"M {x1:.2f},{y1:.2f} A {radius:.2f},{radius:.2f} 0 {large},{sweep} {x2:.2f},{y2:.2f}"
 
 
 def _botton_svg_preview(
@@ -13011,17 +13016,23 @@ def _botton_svg_preview(
         # Marca da Sophi: SOMENTE na parte inferior da faixa externa.
         # Nunca entra na foto e nunca fica fora da linha de corte.
         if legenda_text.strip():
-            font_size = legenda_size_mm * scale
             if shape == "circle":
-                band = max((outer - inner) / 2.0, 0.8 * scale)
-                # O texto fica na metade inferior da faixa, mais próximo da
-                # borda externa, mas com margem de segurança para não escapar.
-                safe = max(font_size * 0.62, 0.55 * scale)
-                radius = outer / 2.0 - safe
-                radius = min(radius, outer / 2.0 - 0.35 * scale)
-                radius = max(radius, inner / 2.0 + font_size * 0.70)
+                # A marca ocupa EXCLUSIVAMENTE o centro da faixa inferior.
+                # Isso evita o problema anterior em que o texto encostava na foto,
+                # atravessava a faixa ou saía do contorno.
+                band_mm = max((outer_base - inner_size) / 2.0, 0.8)
+                font_mm = min(float(legenda_size_mm), band_mm * 0.46)
+                font_mm = max(1.0, font_mm)
+                font_size = font_mm * scale
+                radius_mm = inner_size / 2.0 + band_mm / 2.0
+                radius = radius_mm * scale
+                # Calcula um arco proporcional ao comprimento do texto, mas limita
+                # a abertura para manter toda a marca na faixa inferior.
+                approx_text_mm = max(len(legenda_text.strip()) * font_mm * 0.52, font_mm * 2.0)
+                circumference_mm = 2.0 * 3.141592653589793 * radius_mm
+                span = max(65.0, min(150.0, approx_text_mm / circumference_mm * 360.0 + 18.0))
                 pid = f"legend_{i}_bottom"
-                svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,False)}' fill='none' stroke='none'/>")
+                svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,False,span)}' fill='none' stroke='none'/>")
                 svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'><textPath href='#{pid}' startOffset='50%'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
                 band = max((outer-inner)/2.0, 0.8*scale)
@@ -13047,28 +13058,37 @@ def _draw_pdf_arc_text(canvas, text, cx, cy, radius, top, font_name, font_size, 
     chars = list(str(text))
     canvas.saveState()
     canvas.setFillColor(color)
-    canvas.setFont(font_name, font_size)
+    # Mantém a marca dentro da faixa externa. O tamanho é reduzido somente se
+    # necessário para caber no arco do tamanho do botton.
     widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
     total = sum(widths)
-    usable = 2*pi*radius*0.38
-    if total > usable and total > 0:
-        font_size = max(4.0, font_size * usable/total)
+    max_span = 150.0
+    min_span = 65.0
+    span = max(min_span, min(max_span, (total / max(radius, 1.0)) * 180.0 / pi + 18.0))
+    usable_arc = 2.0 * pi * radius * (span / 360.0) * 0.92
+    if total > usable_arc and total > 0:
+        font_size = max(3.0, font_size * usable_arc / total)
         canvas.setFont(font_name, font_size)
         widths = [canvas.stringWidth(ch, font_name, font_size) for ch in chars]
         total = sum(widths)
-
-    span = min(105.0, max(38.0, total/max(radius,1.0)*180/pi))
-    start = 90.0 + span/2 if top else 270.0 - span/2
-    direction = -1 if top else 1
-    step = span/max(len(chars)-1,1)
-    for j,ch in enumerate(chars):
-        ang = start + direction*j*step
-        x = cx + radius*cos(radians(ang))
-        y = cy + radius*sin(radians(ang))
+        span = max(min_span, min(max_span, (total / max(radius, 1.0)) * 180.0 / pi + 18.0))
+    center = 90.0 if not top else 270.0
+    direction = 1 if top else -1
+    # Em ReportLab, o eixo Y cresce para cima; para a parte inferior, o texto
+    # segue a curva de baixo mantendo a leitura normal.
+    start = center - span/2.0
+    step = span / max(len(chars)-1, 1)
+    for j, ch in enumerate(chars):
+        ang = start + direction * j * step
+        x = cx + radius * cos(radians(ang))
+        y = cy + radius * sin(radians(ang))
         canvas.saveState()
-        canvas.translate(x,y)
-        canvas.rotate(ang - 90 if top else ang + 90)
-        canvas.drawCentredString(0, -font_size*0.35, ch)
+        canvas.translate(x, y)
+        if top:
+            canvas.rotate(ang - 90)
+        else:
+            canvas.rotate(ang + 90)
+        canvas.drawCentredString(0, -font_size * 0.35, ch)
         canvas.restoreState()
     canvas.restoreState()
 
@@ -13228,11 +13248,14 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    circle_font_size = max(4, legenda_size_mm*mm)
-                    safe = max(circle_font_size * 0.62, 0.55 * mm)
-                    radius = outer / 2.0 - safe
-                    radius = min(radius, outer / 2.0 - 0.35 * mm)
-                    radius = max(radius, inner / 2.0 + circle_font_size * 0.70)
+                    # Raio exatamente no meio da faixa: nem invade a foto nem encosta
+                    # no limite externo. O mesmo cálculo é usado no preview.
+                    band_mm = max((outer_base - inner_size) / 2.0, 0.8)
+                    font_mm = min(float(legenda_size_mm), band_mm * 0.46)
+                    font_mm = max(1.0, font_mm)
+                    circle_font_size = font_mm * mm
+                    radius_mm = inner_size / 2.0 + band_mm / 2.0
+                    radius = radius_mm * mm
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",circle_font_size,legend_rgb)
                 else:
                     # No quadrado, somente a marca inferior, dentro da faixa.
