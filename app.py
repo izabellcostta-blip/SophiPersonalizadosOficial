@@ -13017,9 +13017,15 @@ def _botton_svg_preview(
                 # e sem ultrapassar o contorno/linha de corte.
                 # O raio é calculado a partir da borda externa e limitado
                 # pela borda interna para funcionar nos 32/44/58 mm.
-                min_radius = inner / 2.0 + font_size * 0.58
-                max_radius = outer / 2.0 - font_size * 0.72
-                radius = min(max_radius, max(min_radius, (outer + inner) / 4.0))
+                # Para o redondo, a marca deve ocupar SOMENTE a faixa preta:
+                # - fica afastada da foto interna para nunca cobrir a arte do cliente;
+                # - fica afastada do lado externo para nunca sair do molde/papel;
+                # - usa o centro geométrico da faixa, com pequena correção para
+                #   deixar o texto visualmente encostado nas extremidades da faixa.
+                band = max((outer - inner) / 2.0, 0.8 * scale)
+                safe = min(font_size * 0.72, band * 0.34)
+                radius = (inner / 2.0) + (band / 2.0)
+                radius = min(outer / 2.0 - safe, max(inner / 2.0 + safe, radius))
                 for top in (True, False):
                     pid = f"legend_{i}_{'top' if top else 'bottom'}"
                     svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
@@ -13217,9 +13223,12 @@ def _gerar_pdf_moldes_bottons(
                     # Mesmo posicionamento da prévia: a marca fica dentro da
                     # faixa, junto à borda externa, sem tocar a área da foto.
                     circle_font_size = max(4, legenda_size_mm*mm)
-                    min_radius = inner/2 + circle_font_size*0.58
-                    max_radius = outer/2 - circle_font_size*0.72
-                    radius = min(max_radius, max(min_radius, (outer+inner)/4))
+                    # Mesmo cálculo da prévia: a marca fica centralizada na
+                    # faixa preta, sem invadir a foto e sem ultrapassar o corte.
+                    band = max((outer - inner) / 2.0, 0.8 * mm)
+                    safe = min(circle_font_size * 0.72, band * 0.34)
+                    radius = (inner / 2.0) + (band / 2.0)
+                    radius = min(outer / 2.0 - safe, max(inner / 2.0 + safe, radius))
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",circle_font_size,legend_rgb)
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",circle_font_size,legend_rgb)
                 else:
