@@ -12924,7 +12924,7 @@ def _botton_svg_preview(
     A4 de pré-visualização.
     Cada foto enviada ocupa um molde diferente.
     Só o modo corporativo 'Repetir uma foto' permite repetição, tratada antes da função.
-    A legenda é ADICIONAL à foto/faixa e fica sempre em cima + embaixo.
+    A marca é adicional à foto/faixa e fica somente embaixo, dentro da faixa externa.
     """
     shape, outer_base, inner_size = _botton_spec(molde_key)
     if inner_override_mm is not None:
@@ -13008,36 +13008,26 @@ def _botton_svg_preview(
                 irx = max(rx-(outer-inner)/2.0, 0)
                 svg.append(f"<rect x='{inner_x:.2f}' y='{inner_y:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{irx:.2f}' fill='#fff'/>")
 
-        # Legenda sempre adicional, dentro da faixa externa.
+        # Marca da Sophi: SOMENTE na parte inferior da faixa externa.
+        # Nunca entra na foto e nunca fica fora da linha de corte.
         if legenda_text.strip():
             font_size = legenda_size_mm * scale
             if shape == "circle":
-                # A marca deve ficar totalmente DENTRO da faixa externa,
-                # encostada à borda externa do molde, sem invadir a foto
-                # e sem ultrapassar o contorno/linha de corte.
-                # O raio é calculado a partir da borda externa e limitado
-                # pela borda interna para funcionar nos 32/44/58 mm.
-                # Para o redondo, a marca deve ocupar SOMENTE a faixa preta:
-                # - fica afastada da foto interna para nunca cobrir a arte do cliente;
-                # - fica afastada do lado externo para nunca sair do molde/papel;
-                # - usa o centro geométrico da faixa, com pequena correção para
-                #   deixar o texto visualmente encostado nas extremidades da faixa.
                 band = max((outer - inner) / 2.0, 0.8 * scale)
-                safe = min(font_size * 0.72, band * 0.34)
-                radius = (inner / 2.0) + (band / 2.0)
-                radius = min(outer / 2.0 - safe, max(inner / 2.0 + safe, radius))
-                for top in (True, False):
-                    pid = f"legend_{i}_{'top' if top else 'bottom'}"
-                    svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
-                    svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'><textPath href='#{pid}' startOffset='50%'>{_svg_escape(legenda_text.strip())}</textPath></text>")
+                # O texto fica na metade inferior da faixa, mais próximo da
+                # borda externa, mas com margem de segurança para não escapar.
+                safe = max(font_size * 0.62, 0.55 * scale)
+                radius = outer / 2.0 - safe
+                radius = min(radius, outer / 2.0 - 0.35 * scale)
+                radius = max(radius, inner / 2.0 + font_size * 0.70)
+                pid = f"legend_{i}_bottom"
+                svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,False)}' fill='none' stroke='none'/>")
+                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'><textPath href='#{pid}' startOffset='50%'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
                 band = max((outer-inner)/2.0, 0.8*scale)
                 left, right = x+band, x+outer-band
-                # A legenda fica dentro da faixa externa, encostada à linha onde a
-                # faixa começa, sem entrar na foto e sem sair para o papel branco.
-                top_y = y+band
                 bottom_y = y+outer-band
-                svg.append(f"<text x='{(left+right)/2:.2f}' y='{top_y-font_size*.12:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                # No quadrado, uma única marca centralizada dentro da faixa inferior.
                 svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.78:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
 
         if show_cut:
@@ -13100,6 +13090,24 @@ def _draw_pdf_square_legends(canvas, text, x, y, size, inner, font_name, font_si
     # Em ReportLab, y cresce para cima: top fica logo dentro da faixa e
     # bottom fica logo acima da borda inferior, ambos fora da foto.
     canvas.drawCentredString((left+right)/2, top_y-font_size*0.18, text)
+    canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
+    canvas.restoreState()
+
+
+def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, font_size, color):
+    if not text:
+        return
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    band = max((size-inner)/2.0, 0.8*2.83464567)
+    left, right = x+band, x+size-band
+    bottom_y = y+size-band
+    available = max(size-2*band, 1)
+    tw = stringWidth(text, font_name, font_size)
+    if tw > available*0.80 and tw > 0:
+        font_size = max(4.0, font_size*(available*0.80)/tw)
+    canvas.saveState()
+    canvas.setFillColor(color)
+    canvas.setFont(font_name, font_size)
     canvas.drawCentredString((left+right)/2, bottom_y+font_size*0.12, text)
     canvas.restoreState()
 
@@ -13220,19 +13228,15 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    # Mesmo posicionamento da prévia: a marca fica dentro da
-                    # faixa, junto à borda externa, sem tocar a área da foto.
                     circle_font_size = max(4, legenda_size_mm*mm)
-                    # Mesmo cálculo da prévia: a marca fica centralizada na
-                    # faixa preta, sem invadir a foto e sem ultrapassar o corte.
-                    band = max((outer - inner) / 2.0, 0.8 * mm)
-                    safe = min(circle_font_size * 0.72, band * 0.34)
-                    radius = (inner / 2.0) + (band / 2.0)
-                    radius = min(outer / 2.0 - safe, max(inner / 2.0 + safe, radius))
-                    _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",circle_font_size,legend_rgb)
+                    safe = max(circle_font_size * 0.62, 0.55 * mm)
+                    radius = outer / 2.0 - safe
+                    radius = min(radius, outer / 2.0 - 0.35 * mm)
+                    radius = max(radius, inner / 2.0 + circle_font_size * 0.70)
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",circle_font_size,legend_rgb)
                 else:
-                    _draw_pdf_square_legends(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
+                    # No quadrado, somente a marca inferior, dentro da faixa.
+                    _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
 
             if show_cut:
                 c.saveState(); c.setStrokeColor(colors.HexColor("#111827")); c.setLineWidth(.25*mm); c.setDash(1.5,1.5)
@@ -13326,15 +13330,15 @@ def tela_gerador_moldes_bottons():
 
         st.markdown("### Marca na faixa")
         adicionar_legenda=st.checkbox(
-            "Adicionar minha marca na faixa (em cima + embaixo)",
+            "Adicionar minha marca na faixa (somente embaixo)",
             value=False,key="gm_add_legend_v3"
         )
         legenda_text=""; legenda_color="#000000"; legenda_size_mm=2.5
         if adicionar_legenda:
-            legenda_text=st.text_input("Texto da marca","SOPHI PERSONALIZADOS",key="gm_legenda_text_v3")
+            legenda_text=st.text_input("Texto da marca","@sophipersonalizadosoficial",key="gm_legenda_text_v3")
             legenda_color=st.color_picker("Cor da marca","#000000",key="gm_legenda_color_v3")
             legenda_size_mm=st.number_input("Tamanho da marca (mm)",min_value=1.0,max_value=8.0,value=2.5,step=.5,key="gm_legenda_size_v3")
-            st.info("Padrão fixo: no redondo a marca contorna o botton em cima e embaixo; no quadrado fica centralizada no lado de cima e no lado de baixo.")
+            st.info("Padrão fixo: a marca fica somente na parte inferior da faixa. No redondo acompanha a curvatura; no quadrado fica centralizada embaixo.")
 
         st.markdown("### Faixa externa do molde")
         st.caption(f"Medida do Canva: {border_default:.2f} mm por lado (externo {outer_base:.2f} mm × interno {original_inner:.2f} mm).")
@@ -13377,7 +13381,7 @@ def tela_gerador_moldes_bottons():
         st.caption(f"Molde externo: {outer_base:.2f} mm · Área interna: {inner_size:.2f} mm · Faixa: {border_area_mm:.2f} mm por lado.")
 
         if adicionar_legenda and legenda_text.strip():
-            st.info("A marca é adicional: ela fica dentro da faixa externa, em cima e embaixo, sem ocupar a área da foto.")
+            st.info("A marca fica somente na parte inferior da faixa externa, sem ocupar a área da foto.")
         if border_fill_mode=="Outra foto" and not background_image_bytes:
             st.warning("Escolha também a foto que preencherá a faixa externa.")
         if border_fill_mode=="Outra foto" and background_image_bytes is None:
