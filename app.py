@@ -13120,7 +13120,7 @@ def _draw_pdf_square_bottom_legend(canvas, text, x, y, size, inner, font_name, f
     # A faixa inferior começa exatamente em y e termina em y + band;
     # a foto termina em y + band. Assim o arroba fica rente à foto,
     # sem descer para perto da borda externa.
-    baseline = y + (band / 2.0) - (font_size * 0.35)
+    baseline = y + band - (font_size * 0.85)
 
     canvas.saveState()
     canvas.setFillColor(color)
