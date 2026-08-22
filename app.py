@@ -12915,43 +12915,6 @@ def _legend_arc_path(cx, cy, radius, top=False, span_deg=120):
     return f"M {x1:.2f},{y1:.2f} A {radius:.2f},{radius:.2f} 0 {large},{sweep} {x2:.2f},{y2:.2f}"
 
 
-def _svg_bottom_arc_legend(svg, text, cx, cy, inner, outer, scale, color, size_mm):
-    """Desenha a marca dos redondos em arco somente na faixa inferior.
-    O arco acompanha a curvatura do redondo, começa imediatamente após a foto
-    e nunca invade a área interna da foto.
-    """
-    text = str(text or "").strip()
-    if not text:
-        return
-    import math
-    band = max((outer - inner) / 2.0, 0.8 * scale)
-    font_size = max(1.0 * scale, min(float(size_mm) * scale, band * 0.45))
-    radius = inner / 2.0 + band * 0.58
-    chars = list(text)
-    # Calcula um arco inferior suficiente para acomodar toda a marca,
-    # mantendo-a exclusivamente entre a foto e a borda externa.
-    approx_char = max(font_size * 0.52, 1.0)
-    total_w = len(chars) * approx_char
-    span = max(58.0, min(112.0, math.degrees(total_w / max(radius, 1.0)) + 12.0))
-    # Se ainda não couber, reduz a fonte sem alterar o tamanho do molde.
-    if radius * math.radians(span) * 0.88 < total_w and total_w > 0:
-        font_size = max(1.0 * scale, font_size * (radius * math.radians(span) * 0.88) / total_w)
-    start = 90.0 + span / 2.0
-    step = span / max(len(chars) - 1, 1)
-    for i, ch in enumerate(chars):
-        ang = start - i * step
-        rad = math.radians(ang)
-        tx = cx + radius * math.cos(rad)
-        ty = cy + radius * math.sin(rad)
-        rot = ang - 90.0
-        svg.append(
-            f"<text x='{tx:.2f}' y='{ty + font_size*0.32:.2f}' "
-            f"fill='{_svg_escape(color)}' font-family='Arial,sans-serif' "
-            f"font-size='{font_size:.2f}' font-weight='700' text-anchor='middle' "
-            f"transform='rotate({rot:.2f} {tx:.2f} {ty:.2f})'>{_svg_escape(ch)}</text>"
-        )
-
-
 def _botton_svg_preview(
     molde_key, fotos, border_color, bleed_mm, gap_mm, margin_mm,
     legenda_text="", legenda_color="#000000", legenda_size_mm=2.5,
@@ -13055,8 +13018,30 @@ def _botton_svg_preview(
             font_mm_global = max(1.0, min(float(legenda_size_mm), band_mm_global * 0.60))
             font_size = font_mm_global * scale
             if shape == "circle":
-                # REDONDO: marca curva, somente embaixo, acompanhando a circunferência.
-                _svg_bottom_arc_legend(svg, legenda_text.strip(), cx, cy, inner, outer, scale, legenda_color, legenda_size_mm)
+                # REDONDO: marca CURVADA, somente embaixo, seguindo a borda da
+                # foto. O texto fica dentro da faixa externa, imediatamente após
+                # o fim da foto, sem tocar/entrar na área visível.
+                band_mm = max((outer_base - inner_size) / 2.0, 0.8)
+                font_mm = max(1.0, min(float(legenda_size_mm), band_mm * 0.48))
+                font_size = font_mm * scale
+                # Centro do texto dentro da faixa inferior, bem próximo da foto.
+                radius = inner / 2.0 + band_mm * scale * 0.48
+                # Arco inferior em coordenadas SVG: 90° é o ponto inferior.
+                span = 78.0
+                path_id = f"legendArc{i}"
+                a1, a2 = 135.0, 45.0
+                import math
+                x1 = cx + radius * math.cos(math.radians(a1))
+                y1 = cy + radius * math.sin(math.radians(a1))
+                x2 = cx + radius * math.cos(math.radians(a2))
+                y2 = cy + radius * math.sin(math.radians(a2))
+                # Reduz a fonte se o texto não couber no arco inferior.
+                arc_len = radius * math.radians(span)
+                approx_width = max(len(legenda_text.strip()) * font_size * 0.52, font_size)
+                if approx_width > arc_len * 0.82 and approx_width > 0:
+                    font_size = max(0.9 * scale, font_size * (arc_len * 0.82) / approx_width)
+                svg.append(f"<path id='{path_id}' d='M {x1:.2f},{y1:.2f} A {radius:.2f},{radius:.2f} 0 0,0 {x2:.2f},{y2:.2f}' fill='none' stroke='none'/>")
+                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700'><textPath href='#{path_id}' startOffset='50%' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
                 band = max((outer-inner)/2.0, 0.8*scale)
                 left, right = x+band, x+outer-band
@@ -13170,42 +13155,6 @@ def _crop_image_for_reportlab(image_bytes, target_w_px=1200, target_h_px=1200):
         return image_bytes
 
 
-def _draw_pdf_bottom_arc_legend(canvas, text, cx, cy, inner, outer, font_name, font_size, color):
-    """Marca dos redondos: arco inferior, rente à foto e dentro da faixa."""
-    if not text:
-        return
-    from math import cos, sin, radians, pi
-    from reportlab.pdfbase.pdfmetrics import stringWidth
-    band = max((outer - inner) / 2.0, 0.8 * 2.83464567)
-    # Mantém a fonte proporcional à faixa para os três diâmetros.
-    font_size = max(2.83464567, min(font_size, band * 0.45))
-    radius = inner / 2.0 + band * 0.58
-    chars = list(str(text))
-    widths = [stringWidth(ch, font_name, font_size) for ch in chars]
-    total = sum(widths)
-    span = max(58.0, min(112.0, (total / max(radius, 1.0)) * 180.0 / pi + 12.0))
-    usable = radius * radians(span) * 0.88
-    if total > usable and total > 0:
-        font_size = max(2.83464567, font_size * usable / total)
-        widths = [stringWidth(ch, font_name, font_size) for ch in chars]
-        total = sum(widths)
-    start = 90.0 + span / 2.0
-    step = span / max(len(chars) - 1, 1)
-    canvas.saveState()
-    canvas.setFillColor(color)
-    canvas.setFont(font_name, font_size)
-    for i, ch in enumerate(chars):
-        ang = start - i * step
-        x = cx + radius * cos(radians(ang))
-        y = cy + radius * sin(radians(ang))
-        canvas.saveState()
-        canvas.translate(x, y)
-        canvas.rotate(ang - 90.0)
-        canvas.drawCentredString(0, -font_size * 0.35, ch)
-        canvas.restoreState()
-    canvas.restoreState()
-
-
 def _gerar_pdf_moldes_bottons(
     molde_key, fotos, border_color, bleed_mm, gap_mm, margin_mm,
     legenda_text="", legenda_color="#000000", legenda_size_mm=2.5,
@@ -13305,8 +13254,23 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    # REDONDO: marca curva, somente embaixo, acompanhando a circunferência.
-                    _draw_pdf_bottom_arc_legend(c, legenda_text.strip(), cx, cy, inner, outer, "Helvetica-Bold", max(4, legenda_size_mm*mm), legend_rgb)
+                    # REDONDO: marca curvada somente embaixo, acompanhando o
+                    # contorno do redondo. O raio fica entre a foto e a borda,
+                    # deixando o texto pequeno e imediatamente próximo da foto.
+                    band_mm = max((outer_base - inner_size) / 2.0, 0.8)
+                    font_mm = max(1.0, min(float(legenda_size_mm), band_mm * 0.48))
+                    circle_font_size = font_mm * mm
+                    radius = inner/2.0 + band_mm * mm * 0.48
+                    # ReportLab: 270° é o centro do arco inferior.
+                    from reportlab.pdfbase.pdfmetrics import stringWidth
+                    max_span = 82.0
+                    min_span = 50.0
+                    tw = stringWidth(legenda_text.strip(), "Helvetica-Bold", circle_font_size)
+                    span = max(min_span, min(max_span, (tw / max(radius, 1.0)) * 180.0 / 3.141592653589793 + 10.0))
+                    usable = 2.0 * 3.141592653589793 * radius * (span / 360.0) * 0.82
+                    if tw > usable and tw > 0:
+                        circle_font_size = max(0.9*mm, circle_font_size * usable / tw)
+                    _draw_pdf_arc_text(c, legenda_text.strip(), cx, cy, radius, False, "Helvetica-Bold", circle_font_size, legend_rgb)
                 else:
                     # No quadrado, somente a marca inferior, dentro da faixa.
                     _draw_pdf_square_bottom_legend(c,legenda_text.strip(),x,y,outer,inner,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
