@@ -12845,7 +12845,7 @@ def tela_catalogo_publico():
 # As demais telas e funções do ERP permanecem intactas.
 
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 44.0, "interna_mm": 35.0},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
     "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
@@ -13186,21 +13186,12 @@ def _gerar_pdf_moldes_bottons(
     try:
         import cairosvg
     except ImportError as exc:
-        raise RuntimeError("CairoSVG não está instalado no ambiente. Instale a dependência CairoSVG para exportar o PDF exatamente igual à prévia.") from exc
+        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # PDF: usa exatamente o mesmo SVG da prévia.
-    # IMPORTANTE: o CSS width:100%/height:auto da prévia é ótimo no navegador,
-    # mas o CairoSVG pode tratá-lo como viewport sem dimensões e gerar uma
-    # página transparente/preta. No PDF removemos SOMENTE esse estilo do
-    # elemento raiz; nenhuma coordenada, tamanho, foto ou posição é alterada.
-    svg_pdf = re.sub(
-        r'(<svg\b[^>]*?)\sstyle=[\'"]width:100%;height:auto;display:block;background:#fff;[\'"]',
-        r"\1",
-        svg,
-        count=1,
-    )
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
+    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
     png = cairosvg.svg2png(
-        bytestring=svg_pdf.encode("utf-8"),
+        bytestring=svg.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
@@ -13318,19 +13309,11 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     try:
         import cairosvg
     except ImportError as exc:
-        raise RuntimeError("CairoSVG não está instalado no ambiente. Instale a dependência CairoSVG para exportar o PDF exatamente igual à prévia.") from exc
+        raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # PDF: usa exatamente o mesmo SVG da prévia.
-    # Removemos somente o CSS de dimensionamento do navegador antes do CairoSVG.
-    # Nenhuma coordenada, tamanho, foto, molde ou posição do @ é recalculada.
-    svg_pdf = re.sub(
-        r'(<svg\b[^>]*?)\sstyle=[\'"]width:100%;height:auto;display:block;background:#fff;[\'"]',
-        r"\1",
-        svg,
-        count=1,
-    )
+    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
     png = cairosvg.svg2png(
-        bytestring=svg_pdf.encode("utf-8"),
+        bytestring=svg.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
