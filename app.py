@@ -13012,7 +13012,9 @@ def _botton_svg_preview(
         if legenda_text.strip():
             font_size = legenda_size_mm * scale
             if shape == "circle":
-                radius = max(inner/2.0 + font_size*0.55, outer/2.0 - font_size*0.55)
+                # A marca circular fica no centro geométrico da faixa,
+                # preservando a área da foto e sem escapar para o papel.
+                radius = (inner/2.0 + outer/2.0) / 2.0
                 for top in (True, False):
                     pid = f"legend_{i}_{'top' if top else 'bottom'}"
                     svg.append(f"<path id='{pid}' d='{_legend_arc_path(cx,cy,radius,top)}' fill='none' stroke='none'/>")
@@ -13065,7 +13067,11 @@ def _draw_pdf_arc_text(canvas, text, cx, cy, radius, top, font_name, font_size, 
         canvas.saveState()
         canvas.translate(x,y)
         canvas.rotate(ang - 90 if top else ang + 90)
-        canvas.drawCentredString(0, -font_size*0.35, ch)
+        # A marca deve ficar DENTRO da faixa, nunca sobre a foto nem fora
+        # do contorno. No arco inferior a correção de sinal é essencial:
+        # o texto precisa ser deslocado para cima (em direção ao centro).
+        inward = -font_size*0.35 if top else font_size*0.35
+        canvas.drawCentredString(0, inward, ch)
         canvas.restoreState()
     canvas.restoreState()
 
@@ -13207,7 +13213,10 @@ def _gerar_pdf_moldes_bottons(
 
             if legenda_text.strip():
                 if shape=="circle":
-                    radius=max(inner/2 + max(4,legenda_size_mm*mm)*0.55, outer/2 - max(4,legenda_size_mm*mm)*0.55)
+                    # Raio fixo no CENTRO da faixa externa. Assim a marca
+                    # respeita a mesma margem interna/externa no redondo e
+                    # permanece integralmente dentro da borda no PDF.
+                    radius=(inner/2 + outer/2)/2
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,True,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
                     _draw_pdf_arc_text(c,legenda_text.strip(),cx,cy,radius,False,"Helvetica-Bold",max(4,legenda_size_mm*mm),legend_rgb)
                 else:
