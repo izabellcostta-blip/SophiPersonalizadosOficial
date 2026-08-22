@@ -12845,7 +12845,7 @@ def tela_catalogo_publico():
 # As demais telas e funções do ERP permanecem intactas.
 
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 44.0, "interna_mm": 35.0},
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
     "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
@@ -13188,29 +13188,35 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
-    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        output_width=2480,
-        output_height=3508,
+    # PDF ESPELHO DA PRÉVIA:
+    # não rasteriza para PNG e não passa pelo ReportLab. O mesmo SVG da prévia
+    # é convertido diretamente para PDF em A4 físico. Isso evita que a etapa
+    # PNG/ReportLab altere, desloque ou faça desaparecer os elementos do SVG.
+    # A largura/altura físicas são definidas somente nesta etapa de exportação;
+    # a arte, posições, foto, faixa e @ continuam exatamente as da prévia.
+    svg_pdf = re.sub(
+        r"<svg\s+([^>]*?)viewBox='0 0 ([0-9.]+) ([0-9.]+)'",
+        r"<svg \1width='210mm' height='297mm' viewBox='0 0 535.5 757.35'",
+        svg,
+        count=1,
     )
+    # O regex acima depende do viewBox gerado pelo módulo. Como garantia,
+    # normalizamos a abertura do SVG sem tocar no restante da arte.
+    if not svg_pdf.startswith("<svg"):
+        svg_pdf = svg
+    else:
+        svg_pdf = re.sub(r"<svg\b", "<svg width='210mm' height='297mm'", svg_pdf, count=1)
+        svg_pdf = svg_pdf.replace("<svg width='210mm' height='297mm' width='210mm' height='297mm'", "<svg width='210mm' height='297mm'", 1)
 
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
-    c.drawImage(
-        ImageReader(BytesIO(png)),
-        0, 0,
-        width=A4[0],
-        height=A4[1],
-        preserveAspectRatio=False,
-        mask="auto",
+    pdf_buffer = BytesIO()
+    cairosvg.svg2pdf(
+        bytestring=svg_pdf.encode("utf-8"),
+        write_to=pdf_buffer,
+        output_width=210 * 96 / 25.4,
+        output_height=297 * 96 / 25.4,
     )
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer.getvalue(), layout, qty
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue(), layout, qty
 
 
 def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
@@ -13311,28 +13317,18 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        output_width=2480,
-        output_height=3508,
+    # PDF ESPELHO DA PRÉVIA MISTA: conversão direta do mesmo SVG para PDF.
+    # Nenhuma coordenada, tamanho ou posição do @ é recalculada no exportador.
+    svg_pdf = re.sub(r"<svg\b", "<svg width='210mm' height='297mm'", svg, count=1)
+    pdf_buffer = BytesIO()
+    cairosvg.svg2pdf(
+        bytestring=svg_pdf.encode("utf-8"),
+        write_to=pdf_buffer,
+        output_width=210 * 96 / 25.4,
+        output_height=297 * 96 / 25.4,
     )
-
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle("Sophi Personalizados - Moldes Mistos")
-    c.drawImage(
-        ImageReader(BytesIO(png)),
-        0, 0,
-        width=A4[0],
-        height=A4[1],
-        preserveAspectRatio=False,
-        mask="auto",
-    )
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer.getvalue(), layout, qty
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue(), layout, qty
 
 
 def _tela_gerador_moldes_mistos():
