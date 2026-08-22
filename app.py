@@ -13025,7 +13025,7 @@ def _botton_svg_preview(
                 font_mm = max(1.0, min(float(legenda_size_mm), band_mm * 0.48))
                 font_size = font_mm * scale
                 # Centro do texto dentro da faixa inferior, bem próximo da foto.
-                radius = inner / 2.0 + band_mm * scale * 0.48
+                radius = inner / 2.0 + max(font_size * 0.62, 0.35 * scale)
                 # Arco inferior em coordenadas SVG: 90° é o ponto inferior.
                 span = 78.0
                 path_id = f"legendArc{i}"
@@ -13344,7 +13344,7 @@ def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
             band=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2,0.8)
             font=max(1.0,min(float(legenda_size_mm),band*.48))*scale
             if shape=="circle":
-                radius=inner/2+band*scale*.48; span=78.0
+                radius=inner/2+max(font*0.62, 0.35*scale); span=78.0
                 a1,a2=135,45
                 x1=cx+radius*__import__('math').cos(__import__('math').radians(a1)); y1=cy+radius*__import__('math').sin(__import__('math').radians(a1))
                 x2=cx+radius*__import__('math').cos(__import__('math').radians(a2)); y2=cy+radius*__import__('math').sin(__import__('math').radians(a2))
@@ -13396,7 +13396,7 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
         if legenda_text.strip():
             band=max((float(spec['externa_mm'])-float(spec['interna_mm']))/2,0.8); font_mm=max(1.0,min(float(legenda_size_mm),band*.48)); fs=font_mm*mm
             if shape=='circle':
-                radius=inner/2+band*mm*.48
+                radius=inner/2+max(fs*0.62, 0.35*mm)
                 from reportlab.pdfbase.pdfmetrics import stringWidth
                 tw=stringWidth(legenda_text.strip(),'Helvetica-Bold',fs); span=max(50,min(82,(tw/max(radius,1))*180/3.141592653589793+10)); usable=2*3.141592653589793*radius*(span/360)*.82
                 if tw>usable and tw>0: fs=max(.9*mm,fs*usable/tw)
@@ -13413,55 +13413,93 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
 
 
 def _tela_gerador_moldes_mistos():
-    st.caption("Escolha quantos moldes de cada tamanho quer testar. Todos podem sair juntos na mesma folha A4.")
-    cols=st.columns(4)
-    quantidades={}
-    keys=list(BOTTON_MOLDES.keys())
-    for col,key in zip(cols,keys):
+    """Montagem de uma única A4 com qualquer combinação dos quatro tamanhos."""
+    st.markdown("### Mesclar tamanhos na mesma A4")
+    st.caption("Escolha a quantidade de cada tamanho. Você pode misturar 32, 44, 58 mm e 50 × 50 mm na mesma folha e baixar tudo em um único PDF.")
+
+    cols = st.columns(4)
+    quantidades = {}
+    for col, key in zip(cols, BOTTON_MOLDES.keys()):
         with col:
-            quantidades[key]=st.number_input(key, min_value=0, max_value=20, value=1 if key in ["32 mm","44 mm","58 mm","50 × 50 mm"] else 0, step=1, key=f"gm_mix_q_{key}")
-    total=sum(int(v) for v in quantidades.values())
-    st.markdown(f"**Total de posições:** {total} molde(s) na mesma A4.")
-    uploaded=st.file_uploader("Fotos — uma foto por posição",type=["png","jpg","jpeg","webp"],accept_multiple_files=True,key="gm_mix_fotos_v1")
-    fotos=[]
-    for f in uploaded or []:
-        b=f.getvalue(); m="image/png" if f.name.lower().endswith(".png") else "image/jpeg"; fotos.append((b,m))
-    if total==0:
-        st.info("Escolha pelo menos 1 unidade de algum tamanho."); return
-    if len(fotos)<total:
-        st.warning(f"Você selecionou {len(fotos)} foto(s) para {total} posições. As posições sem foto ficam com a faixa na cor escolhida para conferência do molde.")
-    border_color=st.color_picker("Cor da faixa / área externa sem foto","#000000",key="gm_mix_border_color_v1")
-    add=st.checkbox("Adicionar minha marca somente embaixo",value=True,key="gm_mix_add_legend_v1")
-    legenda_text=st.text_input("Texto da marca","@sophipersonalizadosoficial",key="gm_mix_legend_text_v1") if add else ""
-    legenda_color=st.color_picker("Cor da marca","#000000",key="gm_mix_legend_color_v1") if add else "#000000"
-    legenda_size=st.number_input("Tamanho da marca (mm)",min_value=1.0,max_value=8.0,value=2.5,step=.5,key="gm_mix_legend_size_v1") if add else 2.5
-    gap=st.number_input("Espaço entre moldes (mm)",min_value=0.0,max_value=20.0,value=3.0,step=.5,key="gm_mix_gap_v1")
-    margin=st.number_input("Margem da folha A4 (mm)",min_value=0.0,max_value=20.0,value=5.0,step=.5,key="gm_mix_margin_v1")
-    show_cut=st.checkbox("Mostrar linha de corte",value=True,key="gm_mix_cut_v1")
-    items=[]
-    for key,q in quantidades.items():
+            quantidades[key] = st.number_input(
+                f"Quantidade — {key}", min_value=0, max_value=100, value=0, step=1,
+                key=f"gm_mix_q_v2_{key}"
+            )
+
+    total = sum(int(v) for v in quantidades.values())
+    if total == 0:
+        st.info("Escolha pelo menos 1 unidade de um ou mais tamanhos para montar a A4 mista.")
+        return
+
+    items = []
+    for key, q in quantidades.items():
         for _ in range(int(q)):
-            spec=BOTTON_MOLDES[key].copy(); spec["key"]=key; items.append(spec)
-    layout=_botton_mixed_layout(items,gap,margin)
+            spec = BOTTON_MOLDES[key].copy()
+            spec["key"] = key
+            items.append(spec)
+
+    gap = st.number_input("Espaço entre moldes (mm)", min_value=0.0, max_value=20.0, value=3.0, step=.5, key="gm_mix_gap_v2")
+    margin = st.number_input("Margem da folha A4 (mm)", min_value=0.0, max_value=20.0, value=5.0, step=.5, key="gm_mix_margin_v2")
+    show_cut = st.checkbox("Mostrar linha de corte", value=True, key="gm_mix_cut_v2")
+
+    layout = _botton_mixed_layout(items, gap, margin)
     if not layout:
-        st.error("Essa combinação não cabe em uma única folha A4. Diminua as quantidades ou o espaço entre moldes."); return
-    svg,_,placed=_botton_mixed_svg_preview(items,fotos,border_color,gap,margin,legenda_text,legenda_color,legenda_size,show_cut)
-    st.success(f"A4 mista pronta: {placed} molde(s) em {layout['rows']} fileira(s).")
-    st.components.v1.html(svg,height=820,scrolling=True)
+        st.error("Essa combinação não cabe em uma única folha A4. Diminua as quantidades ou o espaço entre moldes.")
+        return
+
+    st.markdown("### Fotos")
+    st.caption("As fotos entram na ordem dos tamanhos escolhidos: 32 mm → 44 mm → 58 mm → 50 × 50 mm. Se houver menos fotos que posições, as posições restantes ficam sem foto para você conferir o molde.")
+    uploaded = st.file_uploader(
+        f"Selecione até {total} fotos — uma por posição",
+        type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True,
+        key="gm_mix_fotos_v2"
+    )
+    fotos = []
+    for f in uploaded or []:
+        b = f.getvalue()
+        m = "image/png" if f.name.lower().endswith(".png") else "image/jpeg"
+        fotos.append((b, m))
+    if len(fotos) > total:
+        fotos = fotos[:total]
+        st.warning(f"Foram usadas somente as primeiras {total} fotos, conforme o número de posições escolhidas.")
+
+    border_color = st.color_picker("Cor da faixa / área externa sem foto", "#000000", key="gm_mix_border_color_v2")
+    add = st.checkbox("Adicionar minha marca somente embaixo", value=True, key="gm_mix_add_legend_v2")
+    legenda_text = st.text_input("Texto da marca", "@sophipersonalizadosoficial", key="gm_mix_legend_text_v2") if add else ""
+    legenda_color = st.color_picker("Cor da marca", "#000000", key="gm_mix_legend_color_v2") if add else "#000000"
+    legenda_size = st.number_input("Tamanho da marca (mm)", min_value=1.0, max_value=8.0, value=2.5, step=.5, key="gm_mix_legend_size_v2") if add else 2.5
+
+    resumo = " · ".join(f"{k}: {int(q)}" for k, q in quantidades.items() if int(q) > 0)
+    st.success(f"A4 mista: {resumo} · {total} molde(s) · {layout['rows']} fileira(s).")
+
+    svg, _, placed = _botton_mixed_svg_preview(
+        items, fotos, border_color, gap, margin,
+        legenda_text, legenda_color, legenda_size, show_cut
+    )
+    st.components.v1.html(svg, height=820, scrolling=True)
+
     try:
-        pdf_bytes,_,_= _gerar_pdf_moldes_bottons_misto(items,fotos,border_color,gap,margin,legenda_text,legenda_color,legenda_size,show_cut)
-        st.download_button("⬇️ Baixar PDF A4 misto para impressão",data=pdf_bytes,file_name=f"moldes_bottons_mistos_{total}.pdf",mime="application/pdf",use_container_width=True,key="gm_mix_download_v1")
+        pdf_bytes, _, _ = _gerar_pdf_moldes_bottons_misto(
+            items, fotos, border_color, gap, margin,
+            legenda_text, legenda_color, legenda_size, show_cut
+        )
+        st.download_button(
+            "⬇️ Baixar PDF A4 misto para impressão",
+            data=pdf_bytes,
+            file_name=f"moldes_bottons_mistos_{total}.pdf",
+            mime="application/pdf", use_container_width=True,
+            key="gm_mix_download_v2"
+        )
         st.caption("PDF em A4 e tamanho real. Na impressão: 100% / tamanho real e desative 'ajustar à página'.")
     except Exception as exc:
         st.error(f"Não foi possível gerar o PDF misto: {exc}")
-    st.info("A ordem é 32 mm → 44 mm → 58 mm → 50 × 50 mm. Cada foto enviada ocupa uma posição nessa ordem.")
 
 
 def tela_gerador_moldes_bottons():
     st.title("Gerador de Moldes para Bottons")
     # NOVO: permite combinar 32/44/58 mm e 50×50 mm na mesma A4.
     # O modo antigo permanece intacto quando esta opção não é selecionada.
-    modo_folha = st.radio("Como montar a folha A4?", ["Um único tamanho (modo atual)", "Mesclar tamanhos na mesma A4"], horizontal=True, key="gm_modo_folha_v4")
+    modo_folha = st.radio("Como montar a folha A4?", ["Um único tamanho (modo atual)", "Mesclar tamanhos na mesma A4"], index=1, horizontal=True, key="gm_modo_folha_v5")
     if modo_folha == "Mesclar tamanhos na mesma A4":
         _tela_gerador_moldes_mistos()
         return
