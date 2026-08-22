@@ -13205,32 +13205,30 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só removemos o atributo
-    # CSS de apresentação do elemento <svg> antes da rasterização, porque
-    # o navegador da prévia aceita `width:100%; height:auto`, mas o CairoSVG
-    # pode interpretar esse CSS como uma área de renderização vazia.
-    # Nenhuma coordenada, tamanho, foto, faixa ou legenda é alterada.
-    svg = re.sub(r"\\sstyle='[^']*'", "", svg, count=1)
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        output_width=2480,
-        output_height=3508,
+    # EXPORTAÇÃO ESPELHO DA PRÉVIA:
+    # Não rasterizamos e não redesenhamos a arte. Usamos o MESMO SVG que
+    # acabou de ser mostrado no componente de prévia e apenas damos ao
+    # SVG dimensões físicas A4. O viewBox, todas as coordenadas, fotos,
+    # moldes, faixa e @ permanecem exatamente iguais.
+    #
+    # O problema do PDF branco vinha do CSS `width:100%;height:auto` no
+    # elemento raiz: o navegador resolve esse CSS corretamente, mas o
+    # renderizador de PDF pode calcular a viewport como 0/indefinida.
+    # Aqui removemos somente o CSS e informamos 210 x 297 mm no SVG.
+    svg = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
+    svg = re.sub(
+        r"<svg([^>]*)>",
+        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
+        svg, count=1
     )
 
     buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
-    c.drawImage(
-        ImageReader(BytesIO(png)),
-        0, 0,
-        width=A4[0],
-        height=A4[1],
-        preserveAspectRatio=False,
-        mask="auto",
+    cairosvg.svg2pdf(
+        bytestring=svg.encode("utf-8"),
+        write_to=buffer,
+        output_width=210,
+        output_height=297,
     )
-    c.showPage()
-    c.save()
-    buffer.seek(0)
     return buffer.getvalue(), layout, qty
 
 
@@ -13343,30 +13341,25 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
-    # Apenas removemos o CSS `width:100%;height:auto` do <svg>, que pode fazer
-    # o CairoSVG gerar uma página transparente mesmo com uma arte válida.
-    svg = re.sub(r"\\sstyle='[^']*'", "", svg, count=1)
-    png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
-        output_width=2480,
-        output_height=3508,
+    # EXPORTAÇÃO ESPELHO DA PRÉVIA MISTA.
+    # O SVG exibido na tela é convertido diretamente para PDF. Não existe
+    # uma segunda montagem da folha e nenhuma coordenada é recalculada.
+    # Apenas removemos o CSS responsivo do <svg> e definimos o tamanho físico
+    # A4 para que o mesmo viewBox seja impresso corretamente.
+    svg = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
+    svg = re.sub(
+        r"<svg([^>]*)>",
+        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
+        svg, count=1
     )
 
     buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setTitle("Sophi Personalizados - Moldes Mistos")
-    c.drawImage(
-        ImageReader(BytesIO(png)),
-        0, 0,
-        width=A4[0],
-        height=A4[1],
-        preserveAspectRatio=False,
-        mask="auto",
+    cairosvg.svg2pdf(
+        bytestring=svg.encode("utf-8"),
+        write_to=buffer,
+        output_width=210,
+        output_height=297,
     )
-    c.showPage()
-    c.save()
-    buffer.seek(0)
     return buffer.getvalue(), layout, qty
 
 
