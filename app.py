@@ -12845,7 +12845,7 @@ def tela_catalogo_publico():
 # As demais telas e funções do ERP permanecem intactas.
 
 BOTTON_MOLDES = {
-    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 44.0, "interna_mm": 35.0},
+    "32 mm": {"shape": "circle", "diameter_mm": 32.0, "externa_mm": 35.10, "interna_mm": 26.10},
     "44 mm": {"shape": "circle", "diameter_mm": 44.0, "externa_mm": 55.00, "interna_mm": 44.00},
     "58 mm": {"shape": "circle", "diameter_mm": 58.0, "externa_mm": 70.00, "interna_mm": 58.00},
     "50 × 50 mm": {"shape": "square", "width_mm": 50.0, "height_mm": 50.0, "externa_mm": 61.04, "interna_mm": 52.07},
@@ -13174,6 +13174,23 @@ def _gerar_pdf_moldes_bottons(
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
 
+    # Normaliza os parâmetros numéricos antes de exportar.
+    # Alguns widgets/estados do Streamlit podem devolver texto; o SVG aceita,
+    # mas o exportador PDF/CairoSVG não deve receber uma sequência onde espera float.
+    def _pdf_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    bleed_mm = max(_pdf_float(bleed_mm), 0.0)
+    gap_mm = max(_pdf_float(gap_mm), 0.0)
+    margin_mm = max(_pdf_float(margin_mm), 0.0)
+    legenda_size_mm = _pdf_float(legenda_size_mm, 2.5)
+    corner_radius_mm = max(_pdf_float(corner_radius_mm, 3.0), 0.0)
+    if inner_override_mm is not None:
+        inner_override_mm = max(_pdf_float(inner_override_mm), 1.0)
+
     svg, layout, qty = _botton_svg_preview(
         molde_key, fotos, border_color, bleed_mm, gap_mm, margin_mm,
         legenda_text, legenda_color, legenda_size_mm, show_cut, show_bleed,
@@ -13188,21 +13205,29 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # Usa diretamente o MESMO SVG da prévia.
-    # Não redesenha, não recalcula posições e não altera o @.
-    try:
-        pdf_bytes = cairosvg.svg2pdf(
-            bytestring=svg.encode("utf-8"),
-            output_width="210mm",
-            output_height="297mm",
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Não foi possível exportar a prévia para PDF: {exc}") from exc
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
+    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
+    )
 
-    if not pdf_bytes:
-        raise RuntimeError("O PDF foi gerado vazio.")
-
-    return pdf_bytes, layout, qty
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
+    )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
@@ -13291,6 +13316,17 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
 
+    # Normaliza os valores numéricos antes da rasterização do PDF.
+    def _pdf_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    gap_mm = max(_pdf_float(gap_mm), 0.0)
+    margin_mm = max(_pdf_float(margin_mm), 0.0)
+    legenda_size_mm = _pdf_float(legenda_size_mm, 2.5)
+
     svg, layout, qty = _botton_mixed_svg_preview(
         items, fotos, border_color, gap_mm, margin_mm,
         legenda_text, legenda_color, legenda_size_mm, show_cut
@@ -13303,21 +13339,28 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # Usa diretamente o MESMO SVG da prévia.
-    # Não redesenha, não recalcula posições e não altera o @.
-    try:
-        pdf_bytes = cairosvg.svg2pdf(
-            bytestring=svg.encode("utf-8"),
-            output_width="210mm",
-            output_height="297mm",
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Não foi possível exportar a prévia para PDF: {exc}") from exc
+    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
+    )
 
-    if not pdf_bytes:
-        raise RuntimeError("O PDF foi gerado vazio.")
-
-    return pdf_bytes, layout, qty
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle("Sophi Personalizados - Moldes Mistos")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
+    )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _tela_gerador_moldes_mistos():
