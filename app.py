@@ -15253,7 +15253,7 @@ def aplicar_css_login_premium():
     div[data-testid="stForm"] {
         width: min(430px, 100%);
         box-sizing: border-box;
-        margin-top: 14px;
+        margin: 14px auto 0 !important;
         padding: 22px 20px 18px;
         background: rgba(255,255,255,0.97);
         border: 1px solid rgba(0,0,0,0.08);
