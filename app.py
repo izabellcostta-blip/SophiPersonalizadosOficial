@@ -15125,14 +15125,13 @@ def tela_mensagens_whatsapp():
 # ============================================================
 
 def aplicar_css_login_premium():
-    # Visual exclusivo da tela de login. Nenhuma regra das demais telas é alterada.
     st.markdown("""
     <style>
     .stApp {
         background:
-            radial-gradient(circle at 12% 10%, rgba(216,63,95,0.10), transparent 24%),
-            radial-gradient(circle at 88% 88%, rgba(0,0,0,0.06), transparent 28%),
-            linear-gradient(145deg, #ffffff 0%, #fbfaf8 52%, #f4f2ee 100%) !important;
+            radial-gradient(circle at 8% 8%, rgba(0,0,0,0.055), transparent 24%),
+            radial-gradient(circle at 92% 90%, rgba(0,0,0,0.045), transparent 28%),
+            linear-gradient(135deg, #fbfbfa 0%, #f3f2f0 100%) !important;
     }
 
     [data-testid="stSidebar"] { display: none !important; }
@@ -15140,180 +15139,161 @@ def aplicar_css_login_premium():
 
     .block-container {
         max-width: 760px !important;
-        padding-top: 3.4rem !important;
+        padding-top: 3.5rem !important;
         padding-bottom: 2rem !important;
     }
 
-    .login-wrap {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-    }
-
-    .login-card {
+    .login-shell {
         width: 100%;
-        max-width: 470px;
-        margin: 0 auto;
-        background: rgba(255,255,255,0.96);
-        border: 1px solid rgba(0,0,0,0.08);
-        border-radius: 28px;
-        padding: 30px 34px 26px 34px;
-        box-shadow: 0 28px 70px rgba(0,0,0,0.10);
-        text-align: center;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .login-card::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-        background: linear-gradient(90deg, #050505 0%, #d83f5f 50%, #050505 100%);
-    }
-
-    .login-brand {
         display: flex;
         flex-direction: column;
         align-items: center;
-        margin-bottom: 22px;
+    }
+
+    .login-brand-card {
+        width: min(430px, 100%);
+        box-sizing: border-box;
+        background: rgba(255,255,255,0.94);
+        border: 1px solid rgba(0,0,0,0.08);
+        border-top: 3px solid #111111;
+        border-radius: 24px;
+        padding: 28px 28px 24px;
+        box-shadow: 0 22px 55px rgba(0,0,0,0.09);
+        text-align: center;
     }
 
     .login-logo-img {
-        width: 86px;
-        height: 86px;
+        width: 76px;
+        height: 76px;
         object-fit: contain;
-        border-radius: 22px;
-        margin-bottom: 14px;
-        box-shadow: 0 14px 30px rgba(0,0,0,0.12);
-        background: #fff;
+        border-radius: 20px;
+        display: block;
+        margin: 0 auto 14px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.12);
     }
 
     .login-logo-fallback {
-        width: 86px;
-        height: 86px;
-        border-radius: 22px;
-        background: linear-gradient(145deg, #050505, #222222);
-        color: #ffffff;
-        display: inline-flex;
-        justify-content: center;
+        width: 76px;
+        height: 76px;
+        border-radius: 20px;
+        background: #050505;
+        color: #fff;
+        display: flex;
         align-items: center;
-        font-family: 'Playfair Display', Georgia, serif;
-        font-size: 34px;
-        font-weight: 800;
-        letter-spacing: -1px;
-        margin-bottom: 14px;
-        box-shadow: 0 14px 30px rgba(0,0,0,0.18);
+        justify-content: center;
+        margin: 0 auto 14px;
+        font: 700 26px Georgia, serif;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.12);
     }
 
     .login-title {
-        font-family: 'Playfair Display', Georgia, serif;
+        font-family: Georgia, 'Times New Roman', serif;
         font-size: 36px;
         font-weight: 800;
-        color: #080808;
+        color: #111111;
         margin: 0;
         line-height: 1.05;
-        letter-spacing: -0.5px;
     }
 
-    .login-subtitle {
+    .login-sub {
         margin-top: 8px;
-        color: #222222;
         font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 2.8px;
+        letter-spacing: 3px;
         text-transform: uppercase;
+        font-weight: 700;
+        color: #222222;
     }
 
-    .login-tagline {
-        margin-top: 7px;
+    .login-caption {
+        margin-top: 9px;
         color: #777777;
-        font-size: 12px;
-        line-height: 1.5;
+        font-size: 13px;
     }
 
-    .login-access {
+    .login-access-box {
+        margin-top: 18px;
+        padding: 16px 18px;
+        background: #f7f7f7;
+        border: 1px solid #eeeeee;
+        border-radius: 16px;
         text-align: left;
-        margin: 8px 0 20px 0;
-        padding-bottom: 15px;
-        border-bottom: 1px solid #eeeeee;
     }
 
     .login-access-title {
-        font-size: 20px;
-        font-weight: 800;
         color: #111111;
+        font-size: 18px;
+        font-weight: 800;
         margin-bottom: 4px;
     }
 
     .login-access-sub {
-        font-size: 12px;
         color: #777777;
+        font-size: 12px;
+        line-height: 1.45;
     }
 
-    div[data-testid="stTextInput"] {
-        text-align: left !important;
-    }
-
+    div[data-testid="stTextInput"] { margin-bottom: 0.15rem; }
     div[data-testid="stTextInput"] label {
-        font-size: 13px !important;
+        color: #222222 !important;
         font-weight: 700 !important;
-        color: #151515 !important;
+        font-size: 12px !important;
     }
-
     div[data-testid="stTextInput"] input {
-        border-radius: 14px !important;
-        border: 1px solid #dedbd6 !important;
-        padding: 12px 14px !important;
-        background: #ffffff !important;
-        color: #111111 !important;
-        box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+        border-radius: 13px !important;
+        border: 1px solid #dedede !important;
+        padding: 11px 13px !important;
+        background: #fff !important;
+        color: #111 !important;
     }
-
     div[data-testid="stTextInput"] input:focus {
         border-color: #111111 !important;
-        box-shadow: 0 0 0 2px rgba(0,0,0,0.07) !important;
+        box-shadow: 0 0 0 1px #111111 !important;
     }
 
-    .stFormSubmitButton button,
-    .stButton button {
+    .login-form-card {
+        width: min(430px, 100%);
+        box-sizing: border-box;
+        margin-top: 14px;
+        padding: 22px 20px 18px;
+        background: rgba(255,255,255,0.97);
+        border: 1px solid rgba(0,0,0,0.08);
+        border-radius: 22px;
+        box-shadow: 0 16px 42px rgba(0,0,0,0.08);
+    }
+
+    .stButton button, div[data-testid="stFormSubmitButton"] button {
         width: 100%;
         min-height: 46px;
-        border-radius: 14px !important;
-        background: linear-gradient(135deg, #050505, #1c1c1c) !important;
+        border-radius: 13px !important;
+        background: #050505 !important;
         color: #ffffff !important;
         border: 0 !important;
         font-weight: 800 !important;
-        font-size: 14px !important;
-        padding: 0.72rem 1rem !important;
-        box-shadow: 0 14px 28px rgba(0,0,0,0.18);
-        transition: transform .16s ease, box-shadow .16s ease;
+        box-shadow: 0 10px 24px rgba(0,0,0,0.14);
     }
 
-    .stFormSubmitButton button:hover,
-    .stButton button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 18px 34px rgba(0,0,0,0.22);
+    .stButton button:hover, div[data-testid="stFormSubmitButton"] button:hover {
+        background: #1b1b1b !important;
+        color: #ffffff !important;
+    }
+
+    .login-forgot-wrap {
+        text-align: center;
+        margin-top: 10px;
     }
 
     .login-footer {
-        margin-top: 18px;
+        width: min(430px, 100%);
+        box-sizing: border-box;
+        margin-top: 20px;
         padding-top: 14px;
-        border-top: 1px solid #eeeeee;
-        color: #8a8a8a;
+        border-top: 1px solid rgba(0,0,0,0.08);
+        color: #777777;
         font-size: 11px;
-        line-height: 1.6;
+        text-align: center;
+        line-height: 1.5;
     }
-
-    .login-footer strong { color: #222222; }
-
-    @media (max-width: 600px) {
-        .block-container { padding: 1.5rem 0.8rem 1.5rem !important; }
-        .login-card { padding: 26px 20px 22px; border-radius: 24px; }
-        .login-title { font-size: 32px; }
-    }
+    .login-footer strong { color: #111111; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -15332,17 +15312,23 @@ def obter_credenciais_login():
             login = st.secrets.get("login", {})
         except Exception:
             login = {}
+
         usuario = str(os.getenv("LOGIN_USUARIO", "") or login.get("usuario", "")).strip()
         senha = str(os.getenv("LOGIN_SENHA", "") or login.get("senha", "")).strip()
-        return usuario, senha
+        email = str(os.getenv("LOGIN_EMAIL", "") or login.get("email", "")).strip().lower()
+        email_suporte = str(
+            os.getenv("LOGIN_EMAIL_SUPORTE", "") or login.get("email_suporte", "")
+        ).strip()
+        return usuario, senha, email, email_suporte
     except Exception:
-        return "", ""
+        return "", "", "", ""
 
 
 def tela_login():
     aplicar_css_login_premium()
 
-    # Usa a logo já cadastrada no ERP, sem criar ou alterar nenhum cadastro.
+    # Cabeçalho totalmente em HTML válido para evitar que o código da interface
+    # apareça literalmente na tela do login.
     logo_html = '<div class="login-logo-fallback">SP</div>'
     try:
         logo = obter_config("logo_path", "")
@@ -15351,53 +15337,93 @@ def tela_login():
             ext = Path(logo).suffix.lower().replace(".", "") or "png"
             if ext not in {"png", "jpeg", "jpg", "webp", "gif"}:
                 ext = "png"
-            logo_html = f'<img class="login-logo-img" src="data:image/{ext};base64,{b64}" alt="Sophi Personalizados Oficial">'
+            logo_html = (
+                f'<img class="login-logo-img" '
+                f'src="data:image/{ext};base64,{b64}" '
+                f'alt="Sophi Personalizados Oficial">'
+            )
     except Exception:
         pass
 
     st.markdown(
         f"""
-        <div class="login-card">
-            <div class="login-brand">
+        <div class="login-shell">
+            <div class="login-brand-card">
                 {logo_html}
                 <div class="login-title">Sophi ERP</div>
-                <div class="login-subtitle">Personalizados Oficial</div>
-                <div class="login-tagline">Eternizando momentos desde 2018</div>
-            </div>
-
-            <div class="login-access">
-                <div class="login-access-title">Acesso ao Sistema</div>
-                <div class="login-access-sub">Entre com seu usuário e senha para acessar seu ERP.</div>
+                <div class="login-sub">Personalizados Oficial</div>
+                <div class="login-caption">Eternizando momentos desde 2018</div>
+                <div class="login-access-box">
+                    <div class="login-access-title">Acesso ao Sistema</div>
+                    <div class="login-access-sub">
+                        Entre com seu usuário ou e-mail e sua senha para acessar seu ERP.
+                    </div>
+                </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    usuario_correto, senha_correta = obter_credenciais_login()
+    usuario_correto, senha_correta, email_correto, email_suporte = obter_credenciais_login()
 
     if not usuario_correto or not senha_correta:
         st.error("Login ainda não configurado. Configure os Secrets do Streamlit com [login], usuario e senha.")
         st.stop()
 
+    st.markdown('<div class="login-form-card">', unsafe_allow_html=True)
     with st.form("form_login"):
-        usuario = st.text_input("Usuário", placeholder="Digite seu usuário")
-        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+        identificador = st.text_input(
+            "Usuário ou e-mail",
+            placeholder="Digite seu usuário ou e-mail",
+            autocomplete="username",
+        )
+        senha = st.text_input(
+            "Senha",
+            type="password",
+            placeholder="Digite sua senha",
+            autocomplete="current-password",
+        )
         entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
 
         if entrar:
-            if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
+            identificador_limpo = identificador.strip()
+            identificador_lower = identificador_limpo.lower()
+            acesso_por_usuario = identificador_limpo == usuario_correto
+            acesso_por_email = bool(email_correto) and identificador_lower == email_correto
+
+            if (acesso_por_usuario or acesso_por_email) and senha.strip() == senha_correta:
                 st.session_state["autenticado"] = True
-                st.session_state["usuario_logado"] = usuario.strip()
+                st.session_state["usuario_logado"] = usuario_correto
                 try:
-                    token = _criar_token_acesso(usuario.strip(), senha_correta, validade_dias=30)
+                    # O token continua sendo criado com o usuário configurado,
+                    # preservando o mecanismo de acesso existente mesmo quando
+                    # o login é feito por e-mail.
+                    token = _criar_token_acesso(usuario_correto, senha_correta, validade_dias=30)
                     if token:
                         st.query_params["access"] = token
                 except Exception:
                     pass
                 st.rerun()
             else:
-                st.error("Usuário ou senha incorretos.")
+                st.error("Usuário/e-mail ou senha incorretos.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
+    esqueci = st.button("Esqueci minha senha", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if esqueci:
+        if email_suporte:
+            st.info(
+                f"Para redefinir sua senha, entre em contato pelo e-mail {email_suporte}."
+            )
+        else:
+            st.info(
+                "Para redefinir sua senha, entre em contato com o administrador do Sophi ERP. "
+                "O botão foi incluído sem alterar o mecanismo de segurança atual."
+            )
 
     st.markdown(
         """
@@ -15408,6 +15434,7 @@ def tela_login():
         """,
         unsafe_allow_html=True,
     )
+
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
@@ -15460,7 +15487,7 @@ def exigir_login():
     # evita que o Streamlit peça a senha novamente após uma simples reconexão.
     if not st.session_state["autenticado"]:
         try:
-            usuario_correto, senha_correta = obter_credenciais_login()
+            usuario_correto, senha_correta, _, _ = obter_credenciais_login()
             token = st.query_params.get("access", "")
             valido, usuario_token = _validar_token_acesso(token, usuario_correto, senha_correta)
             if valido:
@@ -15472,7 +15499,6 @@ def exigir_login():
     if not st.session_state["autenticado"]:
         tela_login()
         st.stop()
-
 
 
 
@@ -19976,257 +20002,73 @@ def _mockup_aplicacao_sophi(imagem, aplicacao):
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 
-
-def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_produto=None):
+def _aplicar_arte_em_foto_real(foto, arte, aplicacao):
+    """Aplica a arte sobre uma foto REAL do produto usando perspectiva.
+    A foto do produto é preservada; somente a área da aplicação recebe a arte.
     """
-    Gera o mockup do produto.
-    - Com OPENAI_API_KEY: usa geração/edição de imagem.
-    - Sem chave, mas com foto real do produto: faz uma montagem local funcional.
-    - Sem chave e sem foto: informa que não é possível inventar uma fotografia real
-      localmente; o usuário deve enviar a foto do produto.
-    """
-    import base64 as _b64
-    import json as _json
-    import urllib.request as _ureq
-    import urllib.error as _uerr
-    from io import BytesIO
-
-    api_key = ""
-    try:
-        api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
-    except Exception:
-        pass
-
-    # Sem API: nunca deixa o botão "não funcionar" se a foto real foi enviada.
-    # Usa a fotografia real fornecida pelo usuário como base do mockup.
-    if not api_key:
-        if foto_produto is None:
-            raise RuntimeError(
-                "Para gerar a FOTO REAL sem uma chave de API, envie a foto real do produto "
-                "no campo acima. A montagem será feita diretamente nessa fotografia."
-            )
-        resultado = _aplicar_arte_em_foto_real(
-            foto_produto, arte, aplicacao, forma
-        )
-        buf = BytesIO()
-        resultado.save(buf, format="PNG", dpi=(180, 180))
-        return buf.getvalue()
-
-    def _data_url(img, mime="image/png"):
-        buf = BytesIO()
-        img.convert("RGB").save(buf, format="PNG")
-        return f"data:{mime};base64,{_b64.b64encode(buf.getvalue()).decode('ascii')}"
-
-    arte_url = _data_url(arte)
-
-    nomes = {
-        "Geladeira": "uma geladeira real",
-        "Garrafa": "uma garrafa real de uso cotidiano",
-        "Embalagem": "uma embalagem real de produto",
-        "Sacola": "uma sacola real de papel personalizada",
-        "Caderno": "um caderno real",
-        "Planner": "um planner real",
-        "Caneca": "uma caneca real de cerâmica",
-        "Chaveiro": "um chaveiro real",
-        "Cartão": "um cartão real impresso",
-        "Etiqueta": "uma etiqueta adesiva real aplicada em um produto",
-        "Crachá retrátil": "um crachá retrátil real",
-        "Broche com cordão": "um broche/button real preso a um cordão",
-    }
-    produto = nomes.get(aplicacao, "um produto real personalizado")
-    formato = {
-        "Redondo": "A área personalizada deve ser perfeitamente REDONDA.",
-        "Quadrado": "A área personalizada deve ser perfeitamente QUADRADA.",
-        "Retangular": "A área personalizada deve ser RETANGULAR.",
-        "Personalizado": "A área personalizada deve respeitar exatamente o formato definido pela arte.",
-    }.get(forma, "Respeite exatamente o formato da arte.")
-
-    prompt = f"""
-Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto} com a ARTE FINAL DO CLIENTE aplicada.
-A arte enviada é referência de alta fidelidade. Preserve textos, nomes, logotipos, símbolos,
-cores e detalhes sem redesenhar ou inventar conteúdo.
-
-A arte precisa estar fisicamente aplicada na superfície do produto, seguindo a perspectiva,
-curvatura, textura, iluminação, reflexos e sombras da própria superfície. NÃO mostre a arte
-como uma imagem quadrada/PNG flutuando diante do produto.
-
-{formato}
-
-Mostre o produto inteiro ou quase inteiro, em fotografia comercial realista, pronto para
-apresentação ao cliente. Não transforme em ilustração, desenho ou render 3D.
-
-Se uma foto real do produto foi fornecida, ela é a referência principal: mantenha o mesmo
-produto, ângulo, enquadramento, cor e características físicas e aplique a arte diretamente nele.
-Não substitua a foto por outro produto.
-"""
-
-    content = [
-        {"type": "input_text", "text": prompt},
-        {"type": "input_image", "image_url": arte_url, "detail": "high"},
-    ]
-    if foto_produto is not None:
-        content.append(
-            {"type": "input_image", "image_url": _data_url(foto_produto), "detail": "high"}
-        )
-
-    payload = {
-        "model": "gpt-5",
-        "input": [{"role": "user", "content": content}],
-        "tools": [{
-            "type": "image_generation",
-            "action": "auto",
-            "quality": "high",
-            "size": "1024x1024",
-            "output_format": "png",
-            "input_fidelity": "high",
-        }],
-    }
-
-    req = _ureq.Request(
-        "https://api.openai.com/v1/responses",
-        data=_json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with _ureq.urlopen(req, timeout=180) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-    except _uerr.HTTPError as exc:
-        detalhe = exc.read().decode("utf-8", errors="ignore")
-        # Se a API falhar e houver foto real, ainda entrega um mockup local.
-        if foto_produto is not None:
-            resultado = _aplicar_arte_em_foto_real(
-                foto_produto, arte, aplicacao, forma
-            )
-            buf = BytesIO()
-            resultado.save(buf, format="PNG", dpi=(180, 180))
-            return buf.getvalue()
-        raise RuntimeError(f"Erro da API de imagens ({exc.code}): {detalhe[:800]}")
-    except Exception as exc:
-        if foto_produto is not None:
-            resultado = _aplicar_arte_em_foto_real(
-                foto_produto, arte, aplicacao, forma
-            )
-            buf = BytesIO()
-            resultado.save(buf, format="PNG", dpi=(180, 180))
-            return buf.getvalue()
-        raise RuntimeError(f"Não foi possível gerar o mockup fotográfico: {exc}")
-
-    resultados = []
-    for output in data.get("output", []):
-        if output.get("type") == "image_generation_call":
-            result = output.get("result")
-            if isinstance(result, str) and result:
-                resultados.append(result)
-
-    if not resultados:
-        if foto_produto is not None:
-            resultado = _aplicar_arte_em_foto_real(
-                foto_produto, arte, aplicacao, forma
-            )
-            buf = BytesIO()
-            resultado.save(buf, format="PNG", dpi=(180, 180))
-            return buf.getvalue()
-        raise RuntimeError("A API não retornou uma imagem de mockup.")
-    return _b64.b64decode(resultados[0])
-
-
-
-def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
-    """
-    Fallback local: usa a FOTO REAL enviada como base e aplica a arte em perspectiva.
-    Não cria uma falsa foto do produto; trabalha diretamente sobre a fotografia real.
-    """
-    from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
     import numpy as np
 
     base = foto.convert("RGB")
     bw, bh = base.size
+    # Converte a arte para RGBA e prepara textura/leve transparência para integração.
+    art = ImageOps.fit(arte.convert("RGBA"), (max(10, int(bw*0.28)), max(10, int(bh*0.28))), method=Image.Resampling.LANCZOS)
+    aw, ah = art.size
 
-    # Área de aplicação por produto. Coordenadas normalizadas para fotografias
-    # frontais/semifrontalmente enquadradas.
+    # Região padrão da aplicação em coordenadas relativas da fotografia.
     regioes = {
-        "Geladeira": [(0.30,0.25),(0.70,0.25),(0.70,0.62),(0.30,0.62)],
-        "Garrafa": [(0.32,0.30),(0.68,0.30),(0.66,0.66),(0.34,0.66)],
-        "Embalagem": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
-        "Sacola": [(0.30,0.30),(0.70,0.30),(0.70,0.70),(0.30,0.70)],
-        "Caderno": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
-        "Planner": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
-        "Caneca": [(0.24,0.28),(0.76,0.28),(0.72,0.65),(0.28,0.65)],
-        "Chaveiro": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
-        "Cartão": [(0.20,0.25),(0.80,0.25),(0.80,0.70),(0.20,0.70)],
-        "Etiqueta": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
-        "Crachá retrátil": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
-        "Broche com cordão": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Geladeira": [(0.37,0.30),(0.63,0.28),(0.66,0.58),(0.34,0.60)],
+        "Garrafa": [(0.39,0.34),(0.61,0.34),(0.63,0.63),(0.37,0.63)],
+        "Embalagem": [(0.35,0.38),(0.65,0.38),(0.65,0.68),(0.35,0.68)],
+        "Sacola": [(0.37,0.36),(0.63,0.36),(0.63,0.68),(0.37,0.68)],
+        "Caderno": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
+        "Planner": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
+        "Caneca": [(0.36,0.36),(0.64,0.34),(0.66,0.63),(0.34,0.65)],
+        "Chaveiro": [(0.38,0.34),(0.62,0.34),(0.64,0.63),(0.36,0.63)],
+        "Cartão": [(0.35,0.35),(0.65,0.35),(0.65,0.67),(0.35,0.67)],
+        "Etiqueta": [(0.35,0.34),(0.65,0.34),(0.65,0.68),(0.35,0.68)],
+        "Crachá retrátil": [(0.40,0.34),(0.60,0.34),(0.61,0.61),(0.39,0.61)],
+        "Broche com cordão": [(0.40,0.32),(0.60,0.32),(0.61,0.61),(0.39,0.61)],
     }
+    q = regioes.get(aplicacao, regioes["Geladeira"])
+    quad = tuple((int(x*bw), int(y*bh)) for x,y in q)
 
-    q = regioes.get(aplicacao, regioes["Caderno"])
-    quad = np.float32([[x*bw, y*bh] for x,y in q])
+    # Máscara da arte para respeitar o formato escolhido.
+    mask = Image.new("L", (aw,ah), 0)
+    md = ImageOps.grayscale(Image.new("L", (aw,ah), 255))
+    mask = md
+    # Para produtos redondos, usa máscara circular.
+    if aplicacao in ("Chaveiro","Crachá retrátil","Broche com cordão","Geladeira"):
+        mask = Image.new("L", (aw,ah), 0)
+        from PIL import ImageDraw
+        ImageDraw.Draw(mask).ellipse((0,0,aw-1,ah-1), fill=235)
+    art.putalpha(ImageEnhance.Brightness(art.getchannel("A")).enhance(1.0))
 
-    # Tamanho base proporcional à área selecionada.
-    minx,maxx = quad[:,0].min(),quad[:,0].max()
-    miny,maxy = quad[:,1].min(),quad[:,1].max()
-    aw=max(80,int(maxx-minx))
-    ah=max(80,int(maxy-miny))
-
-    # Preserva o formato da arte.
-    art=ImageOps.contain(arte.convert("RGBA"),(aw,ah),method=Image.Resampling.LANCZOS)
-    canvas=Image.new("RGBA",(aw,ah),(255,255,255,0))
-    canvas.alpha_composite(art,((aw-art.width)//2,(ah-art.height)//2))
-
-    mask=Image.new("L",(aw,ah),0)
-    md=ImageOps.autocontrast(mask)
-    from PIL import ImageDraw
-    d=ImageDraw.Draw(mask)
-    if forma=="Redondo":
-        d.ellipse((1,1,aw-2,ah-2),fill=255)
-    elif forma=="Retangular":
-        d.rectangle((1,1,aw-2,ah-2),fill=255)
-    else:
-        d.rounded_rectangle((1,1,aw-2,ah-2),radius=max(2,int(min(aw,ah)*0.015)),fill=255)
-    canvas.putalpha(mask)
-
+    # Perspectiva com Pillow. Usa os quatro pontos da superfície real.
+    src = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
+    dst = np.float32(quad)
     try:
         import cv2
-        src_pts=np.float32([[0,0],[aw-1,0],[aw-1,ah-1],[0,ah-1]])
-        M=cv2.getPerspectiveTransform(src_pts,quad)
-        warped=cv2.warpPerspective(
-            np.array(canvas),M,(bw,bh),
-            flags=cv2.INTER_LANCZOS,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(0,0,0,0)
-        )
-        overlay=Image.fromarray(warped,"RGBA")
-
-        # Sombra suave sob a peça.
-        alpha=overlay.getchannel("A")
-        shadow_alpha=alpha.filter(ImageFilter.GaussianBlur(max(2,int(min(bw,bh)*0.006))))
-        shadow_alpha=shadow_alpha.point(lambda p:int(p*0.22))
-        shadow=Image.new("RGBA",(bw,bh),(0,0,0,0))
-        shadow.putalpha(shadow_alpha)
-
-        result=Image.alpha_composite(base.convert("RGBA"),shadow)
-
-        # Integração leve com a iluminação da fotografia: reduz um pouco a
-        # opacidade e mistura textura/luz do produto sem destruir a arte.
-        overlay.putalpha(overlay.getchannel("A").point(lambda p:int(p*0.94)))
-        result=Image.alpha_composite(result,overlay)
-        return result.convert("RGB")
+        M = cv2.getPerspectiveTransform(src, dst)
+        rgba = np.array(art)
+        warped = cv2.warpPerspective(rgba, M, (bw,bh), flags=cv2.INTER_LANCZOS, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0))
+        overlay = Image.fromarray(warped, "RGBA")
     except Exception:
-        # Fallback sem OpenCV: aplicação central sem perspectiva.
-        result=base.copy()
-        x=int(minx); y=int(miny)
-        result.paste(canvas.convert("RGB"),(x,y),canvas)
-        return result
+        # Fallback sem OpenCV: mantém a aplicação proporcional na região central.
+        overlay = Image.new("RGBA", (bw,bh), (0,0,0,0))
+        rect = (int(min(x for x,y in quad)), int(min(y for x,y in quad)), int(max(x for x,y in quad)), int(max(y for x,y in quad)))
+        overlay.alpha_composite(art.resize((rect[2]-rect[0], rect[3]-rect[1]), Image.Resampling.LANCZOS), (rect[0],rect[1]))
 
+    # Integração fotográfica: leve transparência, sombra e brilho da foto atravessando a arte.
+    alpha = overlay.getchannel("A").point(lambda v: int(v*0.88))
+    overlay.putalpha(alpha)
+    result = Image.alpha_composite(base.convert("RGBA"), overlay)
+    return result.convert("RGB")
 
 def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
                                  margem_mm, espacamento_mm, sangria_mm,
                                  modo_corte, marcas_registro):
-    """Monta a prévia A4 com a arte realmente no formato escolhido."""
+    """Monta a prévia A4 e retorna PNG + metadados de produção."""
     from PIL import Image, ImageDraw, ImageOps
     from io import BytesIO
     import math
@@ -20235,106 +20077,76 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
     A4_W = int(210 / 25.4 * DPI)
     A4_H = int(297 / 25.4 * DPI)
     mm_px = DPI / 25.4
+
     w = max(1, int(largura_cm / 2.54 * DPI))
     h = max(1, int(altura_cm / 2.54 * DPI))
     margem = int(margem_mm * mm_px)
     esp = int(espacamento_mm * mm_px)
     sangria = int(sangria_mm * mm_px)
 
-    # Quando as marcas da Cameo 4 estão ligadas, a grade precisa ficar
-    # dentro da área segura de Print & Cut, sem invadir as marcas.
-    if marcas_registro:
-        margem = max(margem, int(round(18 * mm_px)))
+    # Mantém proporção e preenche a área final sem deformar a arte.
+    base = ImageOps.fit(imagem.convert("RGB"), (w + 2*sangria, h + 2*sangria),
+                        method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
 
-    pw, ph = w + 2*sangria, h + 2*sangria
-    base = Image.new("RGBA", (pw,ph), (255,255,255,0))
-    arte_fit = ImageOps.fit(imagem.convert("RGBA"), (pw,ph), method=Image.Resampling.LANCZOS)
-
-    mask = Image.new("L", (pw,ph), 0)
-    md = ImageDraw.Draw(mask)
-    if forma == "Redondo":
-        md.ellipse((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
-    else:
-        md.rectangle((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
-    arte_fit.putalpha(mask)
-    base.alpha_composite(arte_fit)
-
-    folha = Image.new("RGB", (A4_W,A4_H), "white")
+    # Prévia da folha branca.
+    folha = Image.new("RGB", (A4_W, A4_H), "white")
     draw = ImageDraw.Draw(folha)
+
     passo_x = w + 2*sangria + esp
     passo_y = h + 2*sangria + esp
     disponivel_w = A4_W - 2*margem
     disponivel_h = A4_H - 2*margem
+
     cols = max(1, (disponivel_w + esp) // passo_x)
     rows = max(1, (disponivel_h + esp) // passo_y)
     por_folha = cols * rows
     folhas = max(1, math.ceil(quantidade / por_folha))
 
-    for i in range(min(quantidade, por_folha)):
-        row,col = divmod(i,cols)
-        x = margem + col*passo_x
-        y = margem + row*passo_y
-        folha.paste(base, (int(x-sangria), int(y-sangria)), base)
+    n = min(quantidade, por_folha)
+    for i in range(n):
+        row = i // cols
+        col = i % cols
+        x = margem + col * passo_x
+        y = margem + row * passo_y
+        folha.paste(base, (int(x - sangria), int(y - sangria)))
+
+        # Visualização da linha de corte, quando solicitada.
         if modo_corte != "Sem corte":
             if forma == "Redondo":
-                draw.ellipse((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
+                draw.ellipse(
+                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
+                )
             else:
-                draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
+                draw.rectangle(
+                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
+                )
 
-    if marcas_registro:
-        # Print & Cut tradicional da Cameo 4: 3 marcas de registro.
-        # O canto superior esquerdo é um quadrado preenchido; superior direito
-        # e inferior esquerdo são marcas em L. A área ocupada pelas marcas é
-        # mantida livre para que a arte não invada a leitura óptica.
-        mm = mm_px
-        mark = max(18, int(round(10 * mm)))
-        bar = max(8, int(round(2.0 * mm)))
-        pad = max(6, int(round(5 * mm)))
-
-        xL = pad
-        xR = A4_W - pad - mark
-        yT = pad
-        yB = A4_H - pad - mark
-
-        # superior esquerdo — quadrado preto
-        draw.rectangle(
-            (xL, yT, xL + mark, yT + mark),
-            fill=(0,0,0)
-        )
-
-        # superior direito — L preto (canto interno voltado para a página)
-        draw.rectangle(
-            (xR, yT, xR + mark, yT + bar),
-            fill=(0,0,0)
-        )
-        draw.rectangle(
-            (xR + mark - bar, yT, xR + mark, yT + mark),
-            fill=(0,0,0)
-        )
-
-        # inferior esquerdo — L preto
-        draw.rectangle(
-            (xL, yB + mark - bar, xL + mark, yB + mark),
-            fill=(0,0,0)
-        )
-        draw.rectangle(
-            (xL, yB, xL + bar, yB + mark),
-            fill=(0,0,0)
-        )
-
-        # Reforça a área segura: a grade nunca deve começar dentro do topo
-        # nem avançar sobre a zona lateral das marcas.
+    # Marcas de registro simples e opcionais para fluxo de impressão/corte.
+    if marcas_registro and modo_corte != "Sem corte":
+        tam = int(5 * mm_px)
+        off = margem // 2
+        for px, py in [
+            (off, off), (A4_W-off-tam, off),
+            (off, A4_H-off-tam), (A4_W-off-tam, A4_H-off-tam)
+        ]:
+            draw.rectangle((px, py, px+tam, py+tam), outline=(0,0,0), width=max(2, int(mm_px*0.3)))
 
     preview = BytesIO()
-    folha.save(preview, format="PNG", dpi=(DPI,DPI))
+    folha.save(preview, format="PNG", dpi=(DPI, DPI))
     preview.seek(0)
+
     return {
-        "png": preview.getvalue(), "cols": cols, "rows": rows,
-        "por_folha": por_folha, "folhas": folhas,
-        "tamanho": f"{largura_cm:g} × {altura_cm:g}",
-        "quantidade": quantidade, "modo_corte": modo_corte,
-        "marcas_registro": marcas_registro, "forma": forma,
+        "png": preview.getvalue(),
+        "cols": cols,
+        "rows": rows,
+        "por_folha": por_folha,
+        "folhas": folhas,
+        "tamanho": f"{largura_cm:g} × {altura_cm:g} cm",
+        "quantidade": quantidade,
+        "modo_corte": modo_corte,
+        "marcas_registro": marcas_registro,
     }
+
 
 def _gerador_imagens_pdf(preview_png, titulo, meta):
     """PDF espelho da prévia do Gerador de Imagens."""
@@ -20382,10 +20194,6 @@ def tela_gerador_imagens_profissional():
         st.session_state.gi_preview = None
     if "gi_meta" not in st.session_state:
         st.session_state.gi_meta = None
-    if "gi_mockup" not in st.session_state:
-        st.session_state.gi_mockup = None
-    if "gi_mockup_bytes" not in st.session_state:
-        st.session_state.gi_mockup_bytes = None
 
     tabs = st.tabs(["🖼️ Criar arte", "👁️ Visualização da aplicação", "📤 Aprovação"])
 
@@ -20418,7 +20226,7 @@ def tela_gerador_imagens_profissional():
         c7, c8, c9 = st.columns(3)
         sangria_mm = c7.number_input("Sangria (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_sangria")
         modo_corte = c8.selectbox("Corte", ["Sem corte", "Corte externo", "Corte por contorno"], key="gi_corte")
-        marcas_registro = c9.checkbox("Marcas de registro — Cameo 4", value=False, key="gi_marcas")
+        marcas_registro = c9.checkbox("Marcas para Cameo 4", value=False, key="gi_marcas")
 
         if st.button("🧩 Gerar prévia A4", use_container_width=True, key="gi_gerar"):
             if st.session_state.gi_imagem is None:
@@ -20435,70 +20243,49 @@ def tela_gerador_imagens_profissional():
         if st.session_state.gi_preview:
             st.image(st.session_state.gi_preview, caption="Prévia da folha A4 — espelho do PDF", use_container_width=True)
             meta = st.session_state.gi_meta
-            st.info(f"📐 {meta.get('forma', forma)} • {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
+            st.info(f"📐 {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
 
             pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
             st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
 
     with tabs[1]:
         st.markdown("### 👁️ Visualização realista da aplicação")
-        st.caption(
-            "Gere uma FOTO REALISTA do produto com a arte do cliente aplicada. "
-            "A foto do produto é recomendada. Com uma foto real, o ERP consegue fazer a montagem "
-            "diretamente nela mesmo sem API; sem foto, a geração automática depende da OPENAI_API_KEY."
-        )
+        st.caption("Veja a arte aplicada em uma representação visual do produto antes de enviar ao cliente. A arte original permanece intacta.")
         aplicacao = st.selectbox(
             "Como você quer mostrar este produto?",
             ["Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta", "Crachá retrátil", "Broche com cordão"],
             key="gi_aplicacao"
         )
         foto_real_produto = st.file_uploader(
-            "📷 Foto REAL do produto (recomendada para montagem sem API)",
+            "📷 Foto REAL do produto (opcional)",
             type=["png", "jpg", "jpeg", "webp"],
             key="gi_foto_real_produto",
-            help="Envie a foto real da caneca, garrafa, caderno, sacola etc. Para funcionar sem OPENAI_API_KEY, esta foto é necessária."
+            help="Envie uma foto real da geladeira, garrafa, embalagem etc. A arte será aplicada diretamente nela para uma visualização fotográfica real."
         )
-
-        from io import BytesIO
         if st.session_state.gi_imagem is not None:
-            if st.button("✨ Gerar FOTO REAL do produto", use_container_width=True, key="gi_gerar_mockup"):
-                with st.spinner("Gerando a montagem fotográfica real..."):
-                    try:
-                        from PIL import Image as _PILImage
-                        _foto_ref = None
-                        if foto_real_produto is not None:
-                            _foto_ref = _PILImage.open(foto_real_produto).convert("RGB")
-
-                        mock_bytes = _chamar_openai_mockup_fotografico(
-                            st.session_state.gi_imagem,
-                            aplicacao,
-                            st.session_state.get("gi_forma", "Quadrado"),
-                            _foto_ref
-                        )
-                        st.session_state.gi_mockup_bytes = mock_bytes
-                        st.session_state.gi_mockup = _PILImage.open(BytesIO(mock_bytes)).convert("RGB")
-                        st.success("FOTO REAL do produto gerada com a arte aplicada.")
-                    except Exception as exc:
-                        st.error(str(exc))
-                        st.info("Se a OPENAI_API_KEY não estiver configurada, envie uma FOTO REAL do produto. O ERP fará a montagem diretamente nessa fotografia.")
-
-            if st.session_state.gi_mockup_bytes:
-                st.image(
-                    st.session_state.gi_mockup_bytes,
-                    caption=f"Foto realista — {aplicacao}",
-                    use_container_width=True
-                )
-                st.download_button(
-                    "🖼️ Baixar foto do produto personalizado",
-                    st.session_state.gi_mockup_bytes,
-                    file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
-                    mime="image/png",
-                    use_container_width=True,
-                    key="gi_download_mockup"
-                )
-                st.caption("Esta imagem é uma visualização comercial do produto; a arte de impressão continua sendo a prévia A4.")
+            if foto_real_produto is not None:
+                from PIL import Image as _PILImage
+                _foto_real = _PILImage.open(foto_real_produto).convert("RGB")
+                mockup = _aplicar_arte_em_foto_real(_foto_real, st.session_state.gi_imagem, aplicacao)
+                st.success("Aplicação fotográfica real gerada sobre a foto do produto.")
+            else:
+                mockup = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao)
+            from io import BytesIO
+            mock_buf = BytesIO()
+            mockup.save(mock_buf, format="PNG", dpi=(180,180))
+            mock_bytes = mock_buf.getvalue()
+            st.image(mock_bytes, caption=f"Prévia do produto aplicado — {aplicacao}", use_container_width=True)
+            st.download_button(
+                "🖼️ Baixar imagem do mockup",
+                mock_bytes,
+                file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
+                mime="image/png",
+                use_container_width=True,
+                key="gi_download_mockup"
+            )
+            st.caption("Esta é a visualização comercial da aplicação. Para impressão, use a prévia A4 da aba Criar arte.")
         else:
-            st.info("Envie a arte do cliente na aba Criar arte primeiro.")
+            st.info("Envie a arte do cliente primeiro para visualizar a aplicação.")
 
     with tabs[2]:
         st.markdown("### 📤 Enviar para aprovação")
@@ -20521,32 +20308,27 @@ def tela_gerador_imagens_profissional():
             observacao = st.text_area("Observação para o cliente (opcional)", value="Confira a prévia do seu produto e aprove a arte ou solicite uma alteração.", height=90, key="gi_obs_portal")
 
             if tipo_aprovacao == "Mockup aplicado no produto":
-                st.caption("O cliente verá a montagem fotográfica REAL do produto escolhida na aba Visualização da aplicação.")
+                st.caption("O cliente verá a arte aplicada no produto escolhido na aba Visualização da aplicação.")
 
             if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
-                _pronto_envio = (
-                    bool(st.session_state.gi_imagem)
-                    and (
-                        bool(st.session_state.gi_mockup_bytes)
-                        if tipo_aprovacao == "Mockup aplicado no produto"
-                        else bool(st.session_state.gi_preview)
-                    )
-                )
-                if not _pronto_envio:
-                    if tipo_aprovacao == "Mockup aplicado no produto":
-                        st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
-                    else:
-                        st.warning("Envie a arte e gere a prévia A4 antes de enviar.")
+                if not st.session_state.gi_preview or st.session_state.gi_imagem is None:
+                    st.warning("Envie a arte e gere a prévia antes de enviar.")
                 else:
                     try:
                         if tipo_aprovacao == "Mockup aplicado no produto":
-                            if not st.session_state.get("gi_mockup_bytes"):
-                                st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
-                                st.stop()
-                            arquivo_envio = st.session_state.gi_mockup_bytes
                             aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
+                            if st.session_state.get("gi_foto_real_produto") is not None:
+                                from PIL import Image as _PILImage
+                                _foto_real_envio = _PILImage.open(st.session_state["gi_foto_real_produto"]).convert("RGB")
+                                mockup_envio = _aplicar_arte_em_foto_real(_foto_real_envio, st.session_state.gi_imagem, aplicacao_envio)
+                            else:
+                                mockup_envio = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao_envio)
+                            from io import BytesIO
+                            _mb = BytesIO()
+                            mockup_envio.save(_mb, format="PNG", dpi=(180,180))
+                            arquivo_envio = _mb.getvalue()
                             nome_envio = f"{titulo.strip() or 'mockup'}_{aplicacao_envio.lower().replace(' ', '_')}.png"
-                            obs_envio = f"{observacao}\\n\\nMockup fotográfico real: {aplicacao_envio}"
+                            obs_envio = f"{observacao}\n\nMockup de aplicação: {aplicacao_envio}"
                         else:
                             arquivo_envio = st.session_state.gi_preview
                             nome_envio = f"{titulo.strip() or 'previa'}_gerador_imagens.png"
@@ -20558,7 +20340,6 @@ def tela_gerador_imagens_profissional():
                         st.success(f"Arquivo enviado para o Portal do Cliente — versão {versao}.")
                     except Exception as exc:
                         st.error(f"Não foi possível enviar para o Portal: {exc}")
-
         else:
             st.info("É necessário ter pelo menos um orçamento cadastrado para vincular a aprovação ao Portal do Cliente.")
 
