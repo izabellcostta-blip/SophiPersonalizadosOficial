@@ -19884,13 +19884,14 @@ def _mockup_aplicacao_sophi(imagem, aplicacao):
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 
+
 def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_produto=None):
     """
-    Gera uma FOTO/MOCKUP fotográfico usando a API de imagens da OpenAI.
-    A arte do cliente é enviada como referência e deve ser preservada.
-    Se uma foto real do produto for fornecida, ela é usada como referência
-    para a montagem; se não for fornecida, o modelo cria uma foto realista
-    do produto escolhido.
+    Gera o mockup do produto.
+    - Com OPENAI_API_KEY: usa geração/edição de imagem.
+    - Sem chave, mas com foto real do produto: faz uma montagem local funcional.
+    - Sem chave e sem foto: informa que não é possível inventar uma fotografia real
+      localmente; o usuário deve enviar a foto do produto.
     """
     import base64 as _b64
     import json as _json
@@ -19903,11 +19904,21 @@ def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_pr
         api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
     except Exception:
         pass
+
+    # Sem API: nunca deixa o botão "não funcionar" se a foto real foi enviada.
+    # Usa a fotografia real fornecida pelo usuário como base do mockup.
     if not api_key:
-        raise RuntimeError(
-            "A chave OPENAI_API_KEY não está configurada nos Secrets do Streamlit. "
-            "Ela é necessária para gerar a montagem fotográfica real."
+        if foto_produto is None:
+            raise RuntimeError(
+                "Para gerar a FOTO REAL sem uma chave de API, envie a foto real do produto "
+                "no campo acima. A montagem será feita diretamente nessa fotografia."
+            )
+        resultado = _aplicar_arte_em_foto_real(
+            foto_produto, arte, aplicacao, forma
         )
+        buf = BytesIO()
+        resultado.save(buf, format="PNG", dpi=(180, 180))
+        return buf.getvalue()
 
     def _data_url(img, mime="image/png"):
         buf = BytesIO()
@@ -19927,11 +19938,10 @@ def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_pr
         "Chaveiro": "um chaveiro real",
         "Cartão": "um cartão real impresso",
         "Etiqueta": "uma etiqueta adesiva real aplicada em um produto",
-        "Crachá retrátil": "um crachá retrátil real com cordão/yo-yo",
+        "Crachá retrátil": "um crachá retrátil real",
         "Broche com cordão": "um broche/button real preso a um cordão",
     }
     produto = nomes.get(aplicacao, "um produto real personalizado")
-
     formato = {
         "Redondo": "A área personalizada deve ser perfeitamente REDONDA.",
         "Quadrado": "A área personalizada deve ser perfeitamente QUADRADA.",
@@ -19940,30 +19950,22 @@ def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_pr
     }.get(forma, "Respeite exatamente o formato da arte.")
 
     prompt = f"""
-Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto}, como uma fotografia de produto
-profissional feita com câmera, iluminação natural/de estúdio, materiais e sombras reais.
+Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto} com a ARTE FINAL DO CLIENTE aplicada.
+A arte enviada é referência de alta fidelidade. Preserve textos, nomes, logotipos, símbolos,
+cores e detalhes sem redesenhar ou inventar conteúdo.
 
-A imagem enviada como ARTE DO CLIENTE é a arte FINAL e deve ser tratada como referência
-de alta fidelidade. NÃO redesenhe, NÃO recrie, NÃO substitua, NÃO invente e NÃO corrija
-logotipo, textos, nomes, letras, símbolos, cores ou detalhes da arte. Preserve a arte
-do cliente visualmente o mais fielmente possível.
-
-APLIQUE fisicamente essa arte no produto, como se o produto já tivesse sido produzido.
-A arte deve ficar aderida/impressa no produto, acompanhando a perspectiva, curvatura,
-textura, reflexos e iluminação da superfície. Ela não pode parecer uma imagem PNG
-flutuando ou colada por cima da fotografia.
+A arte precisa estar fisicamente aplicada na superfície do produto, seguindo a perspectiva,
+curvatura, textura, iluminação, reflexos e sombras da própria superfície. NÃO mostre a arte
+como uma imagem quadrada/PNG flutuando diante do produto.
 
 {formato}
 
-Mostre o produto inteiro ou quase inteiro, com enquadramento comercial limpo e realista.
-O resultado deve parecer uma FOTO REAL de um produto personalizado pronto para mostrar
-ao cliente, e não uma ilustração, desenho, render 3D ou composição com a arte solta.
+Mostre o produto inteiro ou quase inteiro, em fotografia comercial realista, pronto para
+apresentação ao cliente. Não transforme em ilustração, desenho ou render 3D.
 
-Se houver uma FOTO REAL DO PRODUTO como segunda imagem de referência, preserve a identidade,
-formato, posição, ângulo, cor e características físicas desse produto e faça a aplicação
-diretamente nele.
-
-Não adicione textos, logos ou elementos que não estejam na arte do cliente.
+Se uma foto real do produto foi fornecida, ela é a referência principal: mantenha o mesmo
+produto, ângulo, enquadramento, cor e características físicas e aplique a arte diretamente nele.
+Não substitua a foto por outro produto.
 """
 
     content = [
@@ -20002,8 +20004,23 @@ Não adicione textos, logos ou elementos que não estejam na arte do cliente.
             data = _json.loads(resp.read().decode("utf-8"))
     except _uerr.HTTPError as exc:
         detalhe = exc.read().decode("utf-8", errors="ignore")
+        # Se a API falhar e houver foto real, ainda entrega um mockup local.
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
         raise RuntimeError(f"Erro da API de imagens ({exc.code}): {detalhe[:800]}")
     except Exception as exc:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
         raise RuntimeError(f"Não foi possível gerar o mockup fotográfico: {exc}")
 
     resultados = []
@@ -20014,74 +20031,104 @@ Não adicione textos, logos ou elementos que não estejam na arte do cliente.
                 resultados.append(result)
 
     if not resultados:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
         raise RuntimeError("A API não retornou uma imagem de mockup.")
     return _b64.b64decode(resultados[0])
 
 
+
 def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
     """
-    Compatibilidade/fallback local. A tela principal usa o gerador fotográfico
-    por IA; esta função permanece apenas para instalações sem a API configurada.
+    Fallback local: usa a FOTO REAL enviada como base e aplica a arte em perspectiva.
+    Não cria uma falsa foto do produto; trabalha diretamente sobre a fotografia real.
     """
-    from PIL import Image, ImageOps, ImageFilter, ImageDraw
+    from PIL import Image, ImageOps, ImageFilter, ImageEnhance
     import numpy as np
 
     base = foto.convert("RGB")
     bw, bh = base.size
-    target = max(80, int(min(bw, bh) * 0.28))
-    if forma == "Redondo":
-        aw = ah = target
-    elif forma == "Retangular":
-        aw, ah = target, max(80, int(target * 1.42))
-    else:
-        aw = ah = target
 
-    art = ImageOps.fit(arte.convert("RGBA"), (aw, ah), method=Image.Resampling.LANCZOS)
-    mask = Image.new("L", (aw, ah), 0)
-    md = ImageDraw.Draw(mask)
-    if forma == "Redondo":
-        md.ellipse((1, 1, aw-2, ah-2), fill=255)
-    else:
-        md.rounded_rectangle((1, 1, aw-2, ah-2), radius=max(1, int(min(aw,ah)*0.015)), fill=255)
-    art.putalpha(mask)
-
+    # Área de aplicação por produto. Coordenadas normalizadas para fotografias
+    # frontais/semifrontalmente enquadradas.
     regioes = {
-        "Geladeira": [(0.36,0.29),(0.64,0.29),(0.64,0.59),(0.36,0.59)],
-        "Garrafa": [(0.38,0.34),(0.62,0.34),(0.62,0.63),(0.38,0.63)],
-        "Embalagem": [(0.34,0.38),(0.66,0.38),(0.66,0.69),(0.34,0.69)],
-        "Sacola": [(0.36,0.36),(0.64,0.36),(0.64,0.69),(0.36,0.69)],
-        "Caderno": [(0.37,0.30),(0.63,0.30),(0.63,0.69),(0.37,0.69)],
-        "Planner": [(0.37,0.30),(0.63,0.30),(0.63,0.69),(0.37,0.69)],
-        "Caneca": [(0.35,0.35),(0.65,0.34),(0.66,0.64),(0.34,0.65)],
-        "Chaveiro": [(0.38,0.34),(0.62,0.34),(0.63,0.64),(0.37,0.64)],
-        "Cartão": [(0.34,0.35),(0.66,0.35),(0.66,0.68),(0.34,0.68)],
-        "Etiqueta": [(0.34,0.34),(0.66,0.34),(0.66,0.69),(0.34,0.69)],
-        "Crachá retrátil": [(0.39,0.33),(0.61,0.33),(0.61,0.61),(0.39,0.61)],
-        "Broche com cordão": [(0.39,0.31),(0.61,0.31),(0.61,0.61),(0.39,0.61)],
+        "Geladeira": [(0.30,0.25),(0.70,0.25),(0.70,0.62),(0.30,0.62)],
+        "Garrafa": [(0.32,0.30),(0.68,0.30),(0.66,0.66),(0.34,0.66)],
+        "Embalagem": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Sacola": [(0.30,0.30),(0.70,0.30),(0.70,0.70),(0.30,0.70)],
+        "Caderno": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Planner": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Caneca": [(0.24,0.28),(0.76,0.28),(0.72,0.65),(0.28,0.65)],
+        "Chaveiro": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Cartão": [(0.20,0.25),(0.80,0.25),(0.80,0.70),(0.20,0.70)],
+        "Etiqueta": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Crachá retrátil": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Broche com cordão": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
     }
-    q = regioes.get(aplicacao, regioes["Caderno"])
-    quad = tuple((int(x*bw), int(y*bh)) for x,y in q)
 
-    src_pts = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
-    dst_pts = np.float32(quad)
+    q = regioes.get(aplicacao, regioes["Caderno"])
+    quad = np.float32([[x*bw, y*bh] for x,y in q])
+
+    # Tamanho base proporcional à área selecionada.
+    minx,maxx = quad[:,0].min(),quad[:,0].max()
+    miny,maxy = quad[:,1].min(),quad[:,1].max()
+    aw=max(80,int(maxx-minx))
+    ah=max(80,int(maxy-miny))
+
+    # Preserva o formato da arte.
+    art=ImageOps.contain(arte.convert("RGBA"),(aw,ah),method=Image.Resampling.LANCZOS)
+    canvas=Image.new("RGBA",(aw,ah),(255,255,255,0))
+    canvas.alpha_composite(art,((aw-art.width)//2,(ah-art.height)//2))
+
+    mask=Image.new("L",(aw,ah),0)
+    md=ImageOps.autocontrast(mask)
+    from PIL import ImageDraw
+    d=ImageDraw.Draw(mask)
+    if forma=="Redondo":
+        d.ellipse((1,1,aw-2,ah-2),fill=255)
+    elif forma=="Retangular":
+        d.rectangle((1,1,aw-2,ah-2),fill=255)
+    else:
+        d.rounded_rectangle((1,1,aw-2,ah-2),radius=max(2,int(min(aw,ah)*0.015)),fill=255)
+    canvas.putalpha(mask)
+
     try:
         import cv2
-        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-        warped = cv2.warpPerspective(np.array(art), M, (bw,bh),
-                                     flags=cv2.INTER_LANCZOS,
-                                     borderMode=cv2.BORDER_CONSTANT,
-                                     borderValue=(0,0,0,0))
-        overlay = Image.fromarray(warped, "RGBA")
-        alpha = overlay.getchannel("A")
-        shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(max(2, int(min(bw,bh)*0.008))))
-        shadow_alpha = shadow_alpha.point(lambda p: int(p * 0.30))
-        shadow = Image.new("RGBA", (bw,bh), (0,0,0,0))
-        shadow.putalpha(shadow_alpha)
-        result = Image.alpha_composite(base.convert("RGBA"), shadow)
-        return Image.alpha_composite(result, overlay).convert("RGB")
-    except Exception:
-        return base
+        src_pts=np.float32([[0,0],[aw-1,0],[aw-1,ah-1],[0,ah-1]])
+        M=cv2.getPerspectiveTransform(src_pts,quad)
+        warped=cv2.warpPerspective(
+            np.array(canvas),M,(bw,bh),
+            flags=cv2.INTER_LANCZOS,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0,0,0,0)
+        )
+        overlay=Image.fromarray(warped,"RGBA")
 
+        # Sombra suave sob a peça.
+        alpha=overlay.getchannel("A")
+        shadow_alpha=alpha.filter(ImageFilter.GaussianBlur(max(2,int(min(bw,bh)*0.006))))
+        shadow_alpha=shadow_alpha.point(lambda p:int(p*0.22))
+        shadow=Image.new("RGBA",(bw,bh),(0,0,0,0))
+        shadow.putalpha(shadow_alpha)
+
+        result=Image.alpha_composite(base.convert("RGBA"),shadow)
+
+        # Integração leve com a iluminação da fotografia: reduz um pouco a
+        # opacidade e mistura textura/luz do produto sem destruir a arte.
+        overlay.putalpha(overlay.getchannel("A").point(lambda p:int(p*0.94)))
+        result=Image.alpha_composite(result,overlay)
+        return result.convert("RGB")
+    except Exception:
+        # Fallback sem OpenCV: aplicação central sem perspectiva.
+        result=base.copy()
+        x=int(minx); y=int(miny)
+        result.paste(canvas.convert("RGB"),(x,y),canvas)
+        return result
 
 
 def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
@@ -20143,35 +20190,48 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
                 draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
 
     if marcas_registro:
-        # Cameo 4 usa o sistema tradicional de 3 marcas para Print & Cut:
-        # duas no topo e uma no canto inferior esquerdo. As marcas são
-        # quadrados pretos preenchidos e a área de exclusão fica livre.
-        mark = int(round(10 * mm_px))
-        inset = int(round(5 * mm_px))
-        top = int(round(5 * mm_px))
-        left = int(round(5 * mm_px))
-        right = A4_W - left - mark
-        bottom = A4_H - top - mark
+        # Print & Cut tradicional da Cameo 4: 3 marcas de registro.
+        # O canto superior esquerdo é um quadrado preenchido; superior direito
+        # e inferior esquerdo são marcas em L. A área ocupada pelas marcas é
+        # mantida livre para que a arte não invada a leitura óptica.
+        mm = mm_px
+        mark = max(18, int(round(10 * mm)))
+        bar = max(8, int(round(2.0 * mm)))
+        pad = max(6, int(round(5 * mm)))
 
-        for px, py in [
-            (left, top),
-            (right, top),
-            (left, bottom),
-        ]:
-            draw.rectangle(
-                (px, py, px + mark, py + mark),
-                fill=(0, 0, 0)
-            )
+        xL = pad
+        xR = A4_W - pad - mark
+        yT = pad
+        yB = A4_H - pad - mark
 
-        # Faixas de segurança semelhantes à área de não impressão do
-        # Silhouette Studio: apenas visuais na prévia, não são linhas de corte.
-        zona_x0 = left + mark + int(round(4 * mm_px))
-        zona_x1 = right - int(round(4 * mm_px))
-        zona_y0 = top + mark + int(round(4 * mm_px))
-        zona_y1 = bottom - int(round(4 * mm_px))
+        # superior esquerdo — quadrado preto
+        draw.rectangle(
+            (xL, yT, xL + mark, yT + mark),
+            fill=(0,0,0)
+        )
 
-        # Não desenhamos linhas sobre a arte; o espaçamento da grade já
-        # começa abaixo da área superior das marcas.
+        # superior direito — L preto (canto interno voltado para a página)
+        draw.rectangle(
+            (xR, yT, xR + mark, yT + bar),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xR + mark - bar, yT, xR + mark, yT + mark),
+            fill=(0,0,0)
+        )
+
+        # inferior esquerdo — L preto
+        draw.rectangle(
+            (xL, yB + mark - bar, xL + mark, yB + mark),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xL, yB, xL + bar, yB + mark),
+            fill=(0,0,0)
+        )
+
+        # Reforça a área segura: a grade nunca deve começar dentro do topo
+        # nem avançar sobre a zona lateral das marcas.
 
     preview = BytesIO()
     folha.save(preview, format="PNG", dpi=(DPI,DPI))
@@ -20292,8 +20352,8 @@ def tela_gerador_imagens_profissional():
         st.markdown("### 👁️ Visualização realista da aplicação")
         st.caption(
             "Gere uma FOTO REALISTA do produto com a arte do cliente aplicada. "
-            "A foto do produto é opcional: se você não enviar uma, a IA cria a fotografia "
-            "do produto escolhido; se enviar, ela usa essa foto como referência."
+            "A foto do produto é recomendada. Com uma foto real, o ERP consegue fazer a montagem "
+            "diretamente nela mesmo sem API; sem foto, a geração automática depende da OPENAI_API_KEY."
         )
         aplicacao = st.selectbox(
             "Como você quer mostrar este produto?",
@@ -20301,10 +20361,10 @@ def tela_gerador_imagens_profissional():
             key="gi_aplicacao"
         )
         foto_real_produto = st.file_uploader(
-            "📷 Foto REAL do produto (opcional — usada como referência)",
+            "📷 Foto REAL do produto (recomendada para montagem sem API)",
             type=["png", "jpg", "jpeg", "webp"],
             key="gi_foto_real_produto",
-            help="Se você tiver uma foto real da caneca, garrafa, caderno etc., envie aqui. Caso contrário, a IA cria uma fotografia realista do produto."
+            help="Envie a foto real da caneca, garrafa, caderno, sacola etc. Para funcionar sem OPENAI_API_KEY, esta foto é necessária."
         )
 
         from io import BytesIO
@@ -20328,10 +20388,7 @@ def tela_gerador_imagens_profissional():
                         st.success("FOTO REAL do produto gerada com a arte aplicada.")
                     except Exception as exc:
                         st.error(str(exc))
-                        st.info(
-                            "A montagem fotográfica usa a OPENAI_API_KEY configurada nos Secrets "
-                            "do Streamlit. A arte continua sendo usada como referência de alta fidelidade."
-                        )
+                        st.info("Se a OPENAI_API_KEY não estiver configurada, envie uma FOTO REAL do produto. O ERP fará a montagem diretamente nessa fotografia.")
 
             if st.session_state.gi_mockup_bytes:
                 st.image(
