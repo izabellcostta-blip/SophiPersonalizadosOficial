@@ -19884,8 +19884,145 @@ def _mockup_aplicacao_sophi(imagem, aplicacao):
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 
+def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_produto=None):
+    """
+    Gera uma FOTO/MOCKUP fotográfico usando a API de imagens da OpenAI.
+    A arte do cliente é enviada como referência e deve ser preservada.
+    Se uma foto real do produto for fornecida, ela é usada como referência
+    para a montagem; se não for fornecida, o modelo cria uma foto realista
+    do produto escolhido.
+    """
+    import base64 as _b64
+    import json as _json
+    import urllib.request as _ureq
+    import urllib.error as _uerr
+    from io import BytesIO
+
+    api_key = ""
+    try:
+        api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
+    except Exception:
+        pass
+    if not api_key:
+        raise RuntimeError(
+            "A chave OPENAI_API_KEY não está configurada nos Secrets do Streamlit. "
+            "Ela é necessária para gerar a montagem fotográfica real."
+        )
+
+    def _data_url(img, mime="image/png"):
+        buf = BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        return f"data:{mime};base64,{_b64.b64encode(buf.getvalue()).decode('ascii')}"
+
+    arte_url = _data_url(arte)
+
+    nomes = {
+        "Geladeira": "uma geladeira real",
+        "Garrafa": "uma garrafa real de uso cotidiano",
+        "Embalagem": "uma embalagem real de produto",
+        "Sacola": "uma sacola real de papel personalizada",
+        "Caderno": "um caderno real",
+        "Planner": "um planner real",
+        "Caneca": "uma caneca real de cerâmica",
+        "Chaveiro": "um chaveiro real",
+        "Cartão": "um cartão real impresso",
+        "Etiqueta": "uma etiqueta adesiva real aplicada em um produto",
+        "Crachá retrátil": "um crachá retrátil real com cordão/yo-yo",
+        "Broche com cordão": "um broche/button real preso a um cordão",
+    }
+    produto = nomes.get(aplicacao, "um produto real personalizado")
+
+    formato = {
+        "Redondo": "A área personalizada deve ser perfeitamente REDONDA.",
+        "Quadrado": "A área personalizada deve ser perfeitamente QUADRADA.",
+        "Retangular": "A área personalizada deve ser RETANGULAR.",
+        "Personalizado": "A área personalizada deve respeitar exatamente o formato definido pela arte.",
+    }.get(forma, "Respeite exatamente o formato da arte.")
+
+    prompt = f"""
+Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto}, como uma fotografia de produto
+profissional feita com câmera, iluminação natural/de estúdio, materiais e sombras reais.
+
+A imagem enviada como ARTE DO CLIENTE é a arte FINAL e deve ser tratada como referência
+de alta fidelidade. NÃO redesenhe, NÃO recrie, NÃO substitua, NÃO invente e NÃO corrija
+logotipo, textos, nomes, letras, símbolos, cores ou detalhes da arte. Preserve a arte
+do cliente visualmente o mais fielmente possível.
+
+APLIQUE fisicamente essa arte no produto, como se o produto já tivesse sido produzido.
+A arte deve ficar aderida/impressa no produto, acompanhando a perspectiva, curvatura,
+textura, reflexos e iluminação da superfície. Ela não pode parecer uma imagem PNG
+flutuando ou colada por cima da fotografia.
+
+{formato}
+
+Mostre o produto inteiro ou quase inteiro, com enquadramento comercial limpo e realista.
+O resultado deve parecer uma FOTO REAL de um produto personalizado pronto para mostrar
+ao cliente, e não uma ilustração, desenho, render 3D ou composição com a arte solta.
+
+Se houver uma FOTO REAL DO PRODUTO como segunda imagem de referência, preserve a identidade,
+formato, posição, ângulo, cor e características físicas desse produto e faça a aplicação
+diretamente nele.
+
+Não adicione textos, logos ou elementos que não estejam na arte do cliente.
+"""
+
+    content = [
+        {"type": "input_text", "text": prompt},
+        {"type": "input_image", "image_url": arte_url, "detail": "high"},
+    ]
+    if foto_produto is not None:
+        content.append(
+            {"type": "input_image", "image_url": _data_url(foto_produto), "detail": "high"}
+        )
+
+    payload = {
+        "model": "gpt-5",
+        "input": [{"role": "user", "content": content}],
+        "tools": [{
+            "type": "image_generation",
+            "action": "auto",
+            "quality": "high",
+            "size": "1024x1024",
+            "output_format": "png",
+            "input_fidelity": "high",
+        }],
+    }
+
+    req = _ureq.Request(
+        "https://api.openai.com/v1/responses",
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ureq.urlopen(req, timeout=180) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+    except _uerr.HTTPError as exc:
+        detalhe = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Erro da API de imagens ({exc.code}): {detalhe[:800]}")
+    except Exception as exc:
+        raise RuntimeError(f"Não foi possível gerar o mockup fotográfico: {exc}")
+
+    resultados = []
+    for output in data.get("output", []):
+        if output.get("type") == "image_generation_call":
+            result = output.get("result")
+            if isinstance(result, str) and result:
+                resultados.append(result)
+
+    if not resultados:
+        raise RuntimeError("A API não retornou uma imagem de mockup.")
+    return _b64.b64decode(resultados[0])
+
+
 def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
-    """Aplica a arte final, no formato escolhido, sobre uma FOTO REAL do produto."""
+    """
+    Compatibilidade/fallback local. A tela principal usa o gerador fotográfico
+    por IA; esta função permanece apenas para instalações sem a API configurada.
+    """
     from PIL import Image, ImageOps, ImageFilter, ImageDraw
     import numpy as np
 
@@ -19927,33 +20064,25 @@ def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
 
     src_pts = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
     dst_pts = np.float32(quad)
-
     try:
         import cv2
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-        warped = cv2.warpPerspective(
-            np.array(art), M, (bw,bh),
-            flags=cv2.INTER_LANCZOS,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(0,0,0,0)
-        )
+        warped = cv2.warpPerspective(np.array(art), M, (bw,bh),
+                                     flags=cv2.INTER_LANCZOS,
+                                     borderMode=cv2.BORDER_CONSTANT,
+                                     borderValue=(0,0,0,0))
         overlay = Image.fromarray(warped, "RGBA")
-
         alpha = overlay.getchannel("A")
         shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(max(2, int(min(bw,bh)*0.008))))
         shadow_alpha = shadow_alpha.point(lambda p: int(p * 0.30))
         shadow = Image.new("RGBA", (bw,bh), (0,0,0,0))
         shadow.putalpha(shadow_alpha)
-
         result = Image.alpha_composite(base.convert("RGBA"), shadow)
         return Image.alpha_composite(result, overlay).convert("RGB")
     except Exception:
-        overlay = Image.new("RGBA", (bw,bh), (0,0,0,0))
-        x0,y0 = min(x for x,y in quad), min(y for x,y in quad)
-        x1,y1 = max(x for x,y in quad), max(y for x,y in quad)
-        piece = art.resize((max(2,x1-x0), max(2,y1-y0)), Image.Resampling.LANCZOS)
-        overlay.alpha_composite(piece, (x0,y0))
-        return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
+        return base
+
+
 
 def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
                                  margem_mm, espacamento_mm, sangria_mm,
@@ -19972,6 +20101,11 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
     margem = int(margem_mm * mm_px)
     esp = int(espacamento_mm * mm_px)
     sangria = int(sangria_mm * mm_px)
+
+    # Quando as marcas da Cameo 4 estão ligadas, a grade precisa ficar
+    # dentro da área segura de Print & Cut, sem invadir as marcas.
+    if marcas_registro:
+        margem = max(margem, int(round(18 * mm_px)))
 
     pw, ph = w + 2*sangria, h + 2*sangria
     base = Image.new("RGBA", (pw,ph), (255,255,255,0))
@@ -20008,10 +20142,36 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
             else:
                 draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
 
-    if marcas_registro and modo_corte != "Sem corte":
-        tam = int(5*mm_px); off = margem//2
-        for px,py in [(off,off),(A4_W-off-tam,off),(off,A4_H-off-tam),(A4_W-off-tam,A4_H-off-tam)]:
-            draw.rectangle((px,py,px+tam,py+tam), outline=(0,0,0), width=max(2,int(mm_px*0.3)))
+    if marcas_registro:
+        # Cameo 4 usa o sistema tradicional de 3 marcas para Print & Cut:
+        # duas no topo e uma no canto inferior esquerdo. As marcas são
+        # quadrados pretos preenchidos e a área de exclusão fica livre.
+        mark = int(round(10 * mm_px))
+        inset = int(round(5 * mm_px))
+        top = int(round(5 * mm_px))
+        left = int(round(5 * mm_px))
+        right = A4_W - left - mark
+        bottom = A4_H - top - mark
+
+        for px, py in [
+            (left, top),
+            (right, top),
+            (left, bottom),
+        ]:
+            draw.rectangle(
+                (px, py, px + mark, py + mark),
+                fill=(0, 0, 0)
+            )
+
+        # Faixas de segurança semelhantes à área de não impressão do
+        # Silhouette Studio: apenas visuais na prévia, não são linhas de corte.
+        zona_x0 = left + mark + int(round(4 * mm_px))
+        zona_x1 = right - int(round(4 * mm_px))
+        zona_y0 = top + mark + int(round(4 * mm_px))
+        zona_y1 = bottom - int(round(4 * mm_px))
+
+        # Não desenhamos linhas sobre a arte; o espaçamento da grade já
+        # começa abaixo da área superior das marcas.
 
     preview = BytesIO()
     folha.save(preview, format="PNG", dpi=(DPI,DPI))
@@ -20070,6 +20230,10 @@ def tela_gerador_imagens_profissional():
         st.session_state.gi_preview = None
     if "gi_meta" not in st.session_state:
         st.session_state.gi_meta = None
+    if "gi_mockup" not in st.session_state:
+        st.session_state.gi_mockup = None
+    if "gi_mockup_bytes" not in st.session_state:
+        st.session_state.gi_mockup_bytes = None
 
     tabs = st.tabs(["🖼️ Criar arte", "👁️ Visualização da aplicação", "📤 Aprovação"])
 
@@ -20102,7 +20266,7 @@ def tela_gerador_imagens_profissional():
         c7, c8, c9 = st.columns(3)
         sangria_mm = c7.number_input("Sangria (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_sangria")
         modo_corte = c8.selectbox("Corte", ["Sem corte", "Corte externo", "Corte por contorno"], key="gi_corte")
-        marcas_registro = c9.checkbox("Marcas para Cameo 4", value=False, key="gi_marcas")
+        marcas_registro = c9.checkbox("Marcas de registro — Cameo 4", value=False, key="gi_marcas")
 
         if st.button("🧩 Gerar prévia A4", use_container_width=True, key="gi_gerar"):
             if st.session_state.gi_imagem is None:
@@ -20126,50 +20290,66 @@ def tela_gerador_imagens_profissional():
 
     with tabs[1]:
         st.markdown("### 👁️ Visualização realista da aplicação")
-        st.caption("Monte uma FOTO REAL do produto com a arte do cliente aplicada. Envie a fotografia real abaixo; a arte será recortada no formato escolhido e aplicada em perspectiva.")
+        st.caption(
+            "Gere uma FOTO REALISTA do produto com a arte do cliente aplicada. "
+            "A foto do produto é opcional: se você não enviar uma, a IA cria a fotografia "
+            "do produto escolhido; se enviar, ela usa essa foto como referência."
+        )
         aplicacao = st.selectbox(
             "Como você quer mostrar este produto?",
             ["Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta", "Crachá retrátil", "Broche com cordão"],
             key="gi_aplicacao"
         )
         foto_real_produto = st.file_uploader(
-            "📷 Foto REAL do produto (opcional)",
+            "📷 Foto REAL do produto (opcional — usada como referência)",
             type=["png", "jpg", "jpeg", "webp"],
             key="gi_foto_real_produto",
-            help="Envie uma foto real da geladeira, garrafa, embalagem etc. A arte será aplicada diretamente nela para uma visualização fotográfica real."
+            help="Se você tiver uma foto real da caneca, garrafa, caderno etc., envie aqui. Caso contrário, a IA cria uma fotografia realista do produto."
         )
-        if st.session_state.gi_imagem is not None:
 
-            from io import BytesIO
-            if foto_real_produto is None:
-                st.warning("Envie uma FOTO REAL do produto para gerar a montagem fotográfica.")
-                st.info("A arte será recortada no formato escolhido e aplicada diretamente na fotografia do produto.")
-            else:
-                from PIL import Image as _PILImage
-                _foto_real = _PILImage.open(foto_real_produto).convert("RGB")
-                mockup = _aplicar_arte_em_foto_real(
-                    _foto_real,
-                    st.session_state.gi_imagem,
-                    aplicacao,
-                    st.session_state.get("gi_forma", "Quadrado")
+        from io import BytesIO
+        if st.session_state.gi_imagem is not None:
+            if st.button("✨ Gerar FOTO REAL do produto", use_container_width=True, key="gi_gerar_mockup"):
+                with st.spinner("Gerando a montagem fotográfica real..."):
+                    try:
+                        from PIL import Image as _PILImage
+                        _foto_ref = None
+                        if foto_real_produto is not None:
+                            _foto_ref = _PILImage.open(foto_real_produto).convert("RGB")
+
+                        mock_bytes = _chamar_openai_mockup_fotografico(
+                            st.session_state.gi_imagem,
+                            aplicacao,
+                            st.session_state.get("gi_forma", "Quadrado"),
+                            _foto_ref
+                        )
+                        st.session_state.gi_mockup_bytes = mock_bytes
+                        st.session_state.gi_mockup = _PILImage.open(BytesIO(mock_bytes)).convert("RGB")
+                        st.success("FOTO REAL do produto gerada com a arte aplicada.")
+                    except Exception as exc:
+                        st.error(str(exc))
+                        st.info(
+                            "A montagem fotográfica usa a OPENAI_API_KEY configurada nos Secrets "
+                            "do Streamlit. A arte continua sendo usada como referência de alta fidelidade."
+                        )
+
+            if st.session_state.gi_mockup_bytes:
+                st.image(
+                    st.session_state.gi_mockup_bytes,
+                    caption=f"Foto realista — {aplicacao}",
+                    use_container_width=True
                 )
-                mock_buf = BytesIO()
-                mockup.save(mock_buf, format="PNG", dpi=(180,180))
-                mock_bytes = mock_buf.getvalue()
-                st.success("Montagem fotográfica REAL gerada com a arte aplicada ao produto.")
-                st.image(mock_bytes, caption=f"Prévia fotográfica REAL — {aplicacao}", use_container_width=True)
                 st.download_button(
-                    "🖼️ Baixar imagem do mockup",
-                    mock_bytes,
+                    "🖼️ Baixar foto do produto personalizado",
+                    st.session_state.gi_mockup_bytes,
                     file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
                     mime="image/png",
                     use_container_width=True,
                     key="gi_download_mockup"
                 )
-                st.caption("Para impressão, use a prévia A4 da aba Criar arte.")
-
+                st.caption("Esta imagem é uma visualização comercial do produto; a arte de impressão continua sendo a prévia A4.")
         else:
-            st.info("Envie a arte do cliente primeiro para visualizar a aplicação.")
+            st.info("Envie a arte do cliente na aba Criar arte primeiro.")
 
     with tabs[2]:
         st.markdown("### 📤 Enviar para aprovação")
@@ -20195,34 +20375,29 @@ def tela_gerador_imagens_profissional():
                 st.caption("O cliente verá a montagem fotográfica REAL do produto escolhida na aba Visualização da aplicação.")
 
             if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
-                if not st.session_state.gi_preview or st.session_state.gi_imagem is None:
-                    st.warning("Envie a arte e gere a prévia antes de enviar.")
+                _pronto_envio = (
+                    bool(st.session_state.gi_imagem)
+                    and (
+                        bool(st.session_state.gi_mockup_bytes)
+                        if tipo_aprovacao == "Mockup aplicado no produto"
+                        else bool(st.session_state.gi_preview)
+                    )
+                )
+                if not _pronto_envio:
+                    if tipo_aprovacao == "Mockup aplicado no produto":
+                        st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
+                    else:
+                        st.warning("Envie a arte e gere a prévia A4 antes de enviar.")
                 else:
                     try:
                         if tipo_aprovacao == "Mockup aplicado no produto":
-                            aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
-                            if st.session_state.get("gi_foto_real_produto") is None:
-                                st.warning("Envie uma FOTO REAL do produto na aba Visualização da aplicação antes de enviar o mockup.")
+                            if not st.session_state.get("gi_mockup_bytes"):
+                                st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
                                 st.stop()
-
-                            from PIL import Image as _PILImage
-                            _foto_real_envio = _PILImage.open(
-                                st.session_state["gi_foto_real_produto"]
-                            ).convert("RGB")
-
-                            mockup_envio = _aplicar_arte_em_foto_real(
-                                _foto_real_envio,
-                                st.session_state.gi_imagem,
-                                aplicacao_envio,
-                                st.session_state.get("gi_forma", "Quadrado")
-                            )
-
-                            from io import BytesIO
-                            _mb = BytesIO()
-                            mockup_envio.save(_mb, format="PNG", dpi=(180,180))
-                            arquivo_envio = _mb.getvalue()
+                            arquivo_envio = st.session_state.gi_mockup_bytes
+                            aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
                             nome_envio = f"{titulo.strip() or 'mockup'}_{aplicacao_envio.lower().replace(' ', '_')}.png"
-                            obs_envio = f"{observacao}\n\nMockup de aplicação: {aplicacao_envio}"
+                            obs_envio = f"{observacao}\\n\\nMockup fotográfico real: {aplicacao_envio}"
                         else:
                             arquivo_envio = st.session_state.gi_preview
                             nome_envio = f"{titulo.strip() or 'previa'}_gerador_imagens.png"
