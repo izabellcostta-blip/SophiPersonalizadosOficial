@@ -13681,6 +13681,54 @@ def tela_gerador_moldes_bottons():
             st.error(f"Não foi possível gerar o PDF: {exc}")
 
     st.divider()
+    st.subheader("👁️ Visualização da aplicação para o cliente")
+    st.caption("A arte do molde pode ser apresentada aplicada ao produto antes da impressão.")
+
+    aplic_molde = st.selectbox(
+        "Como você quer mostrar este produto?",
+        ["Broche", "Ímã de geladeira", "Crachá retrátil", "Broche com cordão", "Chaveiro"],
+        key="gm_aplicacao_cliente_v1"
+    )
+
+    if fotos:
+        try:
+            from PIL import Image
+            from io import BytesIO
+            imagem_molde = Image.open(BytesIO(fotos[0][0])).convert("RGB")
+            mockup_molde = _mockup_aplicacao_sophi(imagem_molde, aplic_molde)
+            buf_mock = BytesIO()
+            mockup_molde.save(buf_mock, format="PNG")
+            mockup_bytes = buf_mock.getvalue()
+            st.image(mockup_bytes, caption=f"Prévia aplicada — {aplic_molde}", use_container_width=True)
+
+            st.markdown("### 📤 Enviar esta prévia para aprovação")
+            orc_molde = _clientes_com_orcamentos()
+            if not orc_molde.empty:
+                op_molde = {}
+                for _, row in orc_molde.iterrows():
+                    oid = int(row["orcamento_id"])
+                    nome = str(row.get("cliente_nome") or "Cliente")
+                    op_molde[f"#{oid} — {nome} — {str(row.get('data_orcamento') or '')[:10]}"] = oid
+
+                sel_molde = st.selectbox("Orçamento / cliente", list(op_molde.keys()), key="gm_orcamento_aprovacao_v1")
+                obs_molde = st.text_area("Observação para o cliente", value=f"Prévia do seu {aplic_molde}. Confira a arte antes da produção.", height=80, key="gm_obs_aprovacao_v1")
+                if st.button("📤 Enviar prévia do botton para o Portal", use_container_width=True, key="gm_enviar_portal_v1"):
+                    try:
+                        versao = _portal_enviar_arquivo_aprovacao(
+                            op_molde[sel_molde],
+                            mockup_bytes,
+                            f"previa_{molde_key.replace(' ', '_')}_{aplic_molde.replace(' ', '_')}.png",
+                            obs_molde
+                        )
+                        st.success(f"Prévia enviada para o Portal — versão {versao}.")
+                    except Exception as exc:
+                        st.error(f"Não foi possível enviar a prévia: {exc}")
+            else:
+                st.info("Cadastre um orçamento para enviar a prévia ao Portal do Cliente.")
+        except Exception as exc:
+            st.warning(f"Não foi possível gerar a visualização da aplicação: {exc}")
+
+    st.divider()
     st.subheader("3. Conferência rápida")
     resumo=_botton_layout_mm(BOTTON_MOLDES[molde_key]["shape"],BOTTON_MOLDES[molde_key]["externa_mm"],bleed_mm,gap_mm,margin_mm)
     r1,r2,r3,r4=st.columns(4)
@@ -19583,7 +19631,7 @@ try:
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
-        "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Central de Automação":"⚡",
+        "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Gerador de Imagens":"🖼️", "Central de Automação":"⚡",
         "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
@@ -19597,6 +19645,318 @@ try:
     """, unsafe_allow_html=True)
 except Exception:
     pass
+
+
+
+def _portal_enviar_arquivo_aprovacao(orcamento_id, arquivo_bytes, nome_arquivo, observacao=""):
+    garantir_portal_v2()
+    oid = int(orcamento_id)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_original = Path(nome_arquivo).name.replace(" ", "_")
+    safe_name = f"portal_{oid}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe_original}"
+    caminho = UPLOAD_DIR / safe_name
+    caminho.write_bytes(arquivo_bytes)
+    prev = consultar("SELECT COALESCE(MAX(versao),0) AS v FROM portal_artes WHERE orcamento_id=?", (oid,))
+    versao = int(prev.iloc[0]["v"] or 0) + 1 if not prev.empty else 1
+    executar(
+        "INSERT INTO portal_artes(orcamento_id,nome_arquivo,caminho,versao,status,observacao) VALUES(?,?,?,?,?,?)",
+        (oid, nome_arquivo, str(caminho), versao, "Aguardando aprovação", observacao)
+    )
+    portal_evento(oid, gerar_token_portal("Orçamento", oid), "Arte enviada", f"Versão {versao} enviada para aprovação pelo Gerador.")
+    return versao
+
+
+def _clientes_com_orcamentos():
+    try:
+        df = consultar("""
+            SELECT o.id AS orcamento_id,
+                   o.cliente_id,
+                   COALESCE(NULLIF(o.cliente_nome,''), c.nome) AS cliente_nome,
+                   o.data_orcamento,
+                   o.status
+            FROM orcamentos o
+            LEFT JOIN clientes c ON c.id=o.cliente_id
+            ORDER BY o.id DESC
+        """)
+        return df if not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _mockup_aplicacao_sophi(imagem, aplicacao):
+    from PIL import Image, ImageDraw, ImageOps
+    base = Image.new("RGB", (1000, 700), "#f4f4f4")
+    d = ImageDraw.Draw(base)
+    art = ImageOps.fit(imagem.convert("RGB"), (260, 260), method=Image.Resampling.LANCZOS)
+
+    if aplicacao == "Geladeira":
+        d.rounded_rectangle((130,80,870,620), radius=28, fill="#ffffff", outline="#d0d0d0", width=4)
+        d.rectangle((130,80,870,145), fill="#ededed")
+        base.paste(art, (370,235))
+        d.ellipse((362,227,638,503), outline="#999999", width=4)
+    elif aplicacao == "Garrafa":
+        d.rounded_rectangle((350,70,650,630), radius=100, fill="#ffffff", outline="#cccccc", width=5)
+        d.rectangle((430,35,570,100), fill="#d5d5d5")
+        base.paste(ImageOps.fit(art,(220,220)), (390,245))
+    elif aplicacao == "Embalagem":
+        d.polygon([(250,150),(750,150),(820,250),(180,250)], fill="#ffffff", outline="#c8c8c8")
+        d.rectangle((180,250,820,570), fill="#ffffff", outline="#c8c8c8")
+        base.paste(ImageOps.fit(art,(220,220)), (390,295))
+    elif aplicacao == "Sacola":
+        d.rectangle((260,190,740,590), fill="#ffffff", outline="#c8c8c8", width=5)
+        d.arc((370,70,630,290), 180, 360, fill="#999999", width=12)
+        base.paste(ImageOps.fit(art,(220,220)), (390,300))
+    elif aplicacao in ("Caderno","Planner"):
+        d.rounded_rectangle((250,80,750,620), radius=18, fill="#ffffff", outline="#c8c8c8", width=5)
+        base.paste(ImageOps.fit(art,(190,190)), (455,235))
+    elif aplicacao == "Caneca":
+        d.ellipse((270,150,730,600), fill="#ffffff", outline="#c8c8c8", width=5)
+        d.arc((660,235,850,505), 270, 90, fill="#cccccc", width=35)
+        base.paste(ImageOps.fit(art,(230,230)), (385,265))
+    elif aplicacao == "Chaveiro":
+        d.ellipse((300,180,700,580), fill="#ffffff", outline="#c8c8c8", width=5)
+        d.ellipse((465,120,535,190), outline="#888888", width=12)
+        base.paste(ImageOps.fit(art,(220,220)), (390,270))
+    else:
+        d.ellipse((300,150,700,550), fill="#ffffff", outline="#bbbbbb", width=8)
+        base.paste(ImageOps.fit(art,(300,300)), (350,200))
+        if aplicacao == "Crachá retrátil":
+            d.line((500,550,500,640), fill="#555555", width=10)
+            d.rounded_rectangle((445,625,555,675), radius=15, fill="#222222")
+        elif aplicacao == "Broche com cordão":
+            d.arc((250,470,750,700), 200, 340, fill="#555555", width=10)
+    d.text((35,25), f"Visualização: {aplicacao}", fill="#111111")
+    return base
+
+def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
+                                 margem_mm, espacamento_mm, sangria_mm,
+                                 modo_corte, marcas_registro):
+    """Monta a prévia A4 e retorna PNG + metadados de produção."""
+    from PIL import Image, ImageDraw, ImageOps
+    from io import BytesIO
+    import math
+
+    DPI = 300
+    A4_W = int(210 / 25.4 * DPI)
+    A4_H = int(297 / 25.4 * DPI)
+    mm_px = DPI / 25.4
+
+    w = max(1, int(largura_cm / 2.54 * DPI))
+    h = max(1, int(altura_cm / 2.54 * DPI))
+    margem = int(margem_mm * mm_px)
+    esp = int(espacamento_mm * mm_px)
+    sangria = int(sangria_mm * mm_px)
+
+    # Mantém proporção e preenche a área final sem deformar a arte.
+    base = ImageOps.fit(imagem.convert("RGB"), (w + 2*sangria, h + 2*sangria),
+                        method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+    # Prévia da folha branca.
+    folha = Image.new("RGB", (A4_W, A4_H), "white")
+    draw = ImageDraw.Draw(folha)
+
+    passo_x = w + 2*sangria + esp
+    passo_y = h + 2*sangria + esp
+    disponivel_w = A4_W - 2*margem
+    disponivel_h = A4_H - 2*margem
+
+    cols = max(1, (disponivel_w + esp) // passo_x)
+    rows = max(1, (disponivel_h + esp) // passo_y)
+    por_folha = cols * rows
+    folhas = max(1, math.ceil(quantidade / por_folha))
+
+    n = min(quantidade, por_folha)
+    for i in range(n):
+        row = i // cols
+        col = i % cols
+        x = margem + col * passo_x
+        y = margem + row * passo_y
+        folha.paste(base, (int(x - sangria), int(y - sangria)))
+
+        # Visualização da linha de corte, quando solicitada.
+        if modo_corte != "Sem corte":
+            if forma == "Redondo":
+                draw.ellipse(
+                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
+                )
+            else:
+                draw.rectangle(
+                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
+                )
+
+    # Marcas de registro simples e opcionais para fluxo de impressão/corte.
+    if marcas_registro and modo_corte != "Sem corte":
+        tam = int(5 * mm_px)
+        off = margem // 2
+        for px, py in [
+            (off, off), (A4_W-off-tam, off),
+            (off, A4_H-off-tam), (A4_W-off-tam, A4_H-off-tam)
+        ]:
+            draw.rectangle((px, py, px+tam, py+tam), outline=(0,0,0), width=max(2, int(mm_px*0.3)))
+
+    preview = BytesIO()
+    folha.save(preview, format="PNG", dpi=(DPI, DPI))
+    preview.seek(0)
+
+    return {
+        "png": preview.getvalue(),
+        "cols": cols,
+        "rows": rows,
+        "por_folha": por_folha,
+        "folhas": folhas,
+        "tamanho": f"{largura_cm:g} × {altura_cm:g} cm",
+        "quantidade": quantidade,
+        "modo_corte": modo_corte,
+        "marcas_registro": marcas_registro,
+    }
+
+
+def _gerador_imagens_pdf(preview_png, titulo, meta):
+    """PDF espelho da prévia do Gerador de Imagens."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.lib import colors
+    from io import BytesIO
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, H-35, titulo[:80])
+    c.setFont("Helvetica", 8)
+    c.drawString(30, H-48, f"Tamanho: {meta['tamanho']}  •  Quantidade: {meta['quantidade']}  •  {meta['por_folha']} por A4  •  {meta['folhas']} folha(s)")
+
+    img = ImageReader(BytesIO(preview_png))
+    # A prévia ocupa a área útil, preservando a proporção da folha A4.
+    c.drawImage(img, 30, 40, width=W-60, height=H-100, preserveAspectRatio=True, anchor="c")
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _gerador_imagens_portal_salvar(cliente_id, titulo, preview_png, meta):
+    """Mantido por compatibilidade; o envio real ocorre via portal_artes."""
+    try:
+        # cliente_id pode ser usado pelo fluxo de orçamento; não altera tabelas do portal.
+        return bool(preview_png and meta)
+    except Exception:
+        return False
+
+
+
+def tela_gerador_imagens_profissional():
+    st.markdown("## 🖼️ Gerador de Imagens")
+    st.caption("Monte artes para impressão e corte sem alterar o Gerador de Moldes de bottons.")
+
+    if "gi_imagem" not in st.session_state:
+        st.session_state.gi_imagem = None
+    if "gi_preview" not in st.session_state:
+        st.session_state.gi_preview = None
+    if "gi_meta" not in st.session_state:
+        st.session_state.gi_meta = None
+
+    tabs = st.tabs(["🖼️ Criar arte", "👁️ Visualização da aplicação", "📤 Aprovação"])
+
+    with tabs[0]:
+        arquivo = st.file_uploader(
+            "Envie a arte do cliente",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="gi_upload"
+        )
+        if arquivo:
+            from PIL import Image
+            st.session_state.gi_imagem = Image.open(arquivo).convert("RGB")
+            st.image(st.session_state.gi_imagem, caption="Arte recebida", width=260)
+
+        c1, c2, c3 = st.columns(3)
+        forma = c1.selectbox("Formato", ["Redondo", "Quadrado", "Retangular", "Personalizado"], key="gi_forma")
+        presets = {
+            "Redondo": (5.0, 5.0), "Quadrado": (5.0, 5.0),
+            "Retangular": (7.0, 10.0), "Personalizado": (5.0, 5.0)
+        }
+        pad = presets.get(forma, (5.0, 5.0))
+        largura_cm = c2.number_input("Largura (cm)", min_value=0.1, value=float(pad[0]), step=0.1, format="%.1f", key="gi_largura")
+        altura_cm = c3.number_input("Altura (cm)", min_value=0.1, value=float(pad[1]), step=0.1, format="%.1f", key="gi_altura")
+
+        c4, c5, c6 = st.columns(3)
+        quantidade = c4.number_input("Quantidade", min_value=1, value=1, step=1, key="gi_qtd")
+        margem_mm = c5.number_input("Margem (mm)", min_value=0.0, value=5.0, step=0.5, key="gi_margem")
+        espacamento_mm = c6.number_input("Espaçamento (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_esp")
+
+        c7, c8, c9 = st.columns(3)
+        sangria_mm = c7.number_input("Sangria (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_sangria")
+        modo_corte = c8.selectbox("Corte", ["Sem corte", "Corte externo", "Corte por contorno"], key="gi_corte")
+        marcas_registro = c9.checkbox("Marcas para Cameo 4", value=False, key="gi_marcas")
+
+        if st.button("🧩 Gerar prévia A4", use_container_width=True, key="gi_gerar"):
+            if st.session_state.gi_imagem is None:
+                st.warning("Envie a arte do cliente primeiro.")
+            else:
+                st.session_state.gi_meta = _gerador_imagens_desenhar_a4(
+                    st.session_state.gi_imagem, forma, largura_cm, altura_cm,
+                    int(quantidade), margem_mm, espacamento_mm, sangria_mm,
+                    modo_corte, marcas_registro
+                )
+                st.session_state.gi_preview = st.session_state.gi_meta["png"]
+                st.success("Prévia gerada.")
+
+        if st.session_state.gi_preview:
+            st.image(st.session_state.gi_preview, caption="Prévia da folha A4 — espelho do PDF", use_container_width=True)
+            meta = st.session_state.gi_meta
+            st.info(f"📐 {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
+
+            pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
+            st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
+
+    with tabs[1]:
+        st.markdown("### 👁️ Visualização da aplicação")
+        st.caption("Área preparada para aplicações/mockups. A arte enviada é preservada como referência.")
+        aplicacao = st.selectbox(
+            "Onde você quer visualizar?",
+            ["Nenhuma", "Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta"],
+            key="gi_aplicacao"
+        )
+        if st.session_state.gi_imagem is not None:
+            st.image(st.session_state.gi_imagem, caption=f"Arte selecionada — {aplicacao}", width=420)
+            st.caption("A aplicação visual pode ser ampliada com mockups específicos sem alterar o arquivo de impressão.")
+        else:
+            st.info("Gere ou envie uma arte para visualizar.")
+
+    with tabs[2]:
+        st.markdown("### 📤 Enviar para aprovação")
+        st.caption("O envio usa a infraestrutura do Portal do Cliente existente, sem alterar o Gerador de Moldes.")
+        orcamentos_portal = _clientes_com_orcamentos()
+        if not orcamentos_portal.empty:
+            opcoes = {}
+            for _, row in orcamentos_portal.iterrows():
+                oid = int(row["orcamento_id"])
+                nome = str(row.get("cliente_nome") or "Cliente")
+                opcoes[f"#{oid} — {nome} — {str(row.get('data_orcamento') or '')[:10]}"] = oid
+
+            escolha = st.selectbox("Orçamento / cliente para aprovação", list(opcoes.keys()), key="gi_orcamento_portal")
+            titulo = st.text_input("Título da aprovação", value="Prévia de produto personalizado", key="gi_titulo")
+            observacao = st.text_area("Observação para o cliente (opcional)", value="Confira a prévia do seu produto e aprove a arte ou solicite uma alteração.", height=90, key="gi_obs_portal")
+
+            if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
+                if not st.session_state.gi_preview:
+                    st.warning("Gere a prévia antes de enviar.")
+                else:
+                    try:
+                        versao = _portal_enviar_arquivo_aprovacao(
+                            opcoes[escolha],
+                            st.session_state.gi_preview,
+                            f"{titulo.strip() or 'previa'}_gerador_imagens.png",
+                            f"{observacao}\n\n{st.session_state.gi_meta}"
+                        )
+                        st.success(f"Prévia enviada para o Portal do Cliente — versão {versao}.")
+                    except Exception as exc:
+                        st.error(f"Não foi possível enviar para o Portal: {exc}")
+        else:
+            st.info("É necessário ter pelo menos um orçamento cadastrado para vincular a aprovação ao Portal do Cliente.")
+
 
 if menu_limpo == "Dashboard":
     tela_inicio()
@@ -19632,6 +19992,8 @@ elif menu_limpo == "Impressão / Etiquetas":
     tela_impressao_etiquetas()
 elif menu_limpo == "Gerador de Moldes":
     tela_gerador_moldes_bottons()
+elif menu_limpo == "Gerador de Imagens":
+    tela_gerador_imagens_profissional()
 elif menu_limpo == "Calendário Comercial":
     tela_calendario_comercial()
 elif menu_limpo == "Central de Automação":
