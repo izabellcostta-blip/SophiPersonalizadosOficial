@@ -15250,7 +15250,7 @@ def aplicar_css_login_premium():
         box-shadow: 0 0 0 1px #111111 !important;
     }
 
-    .login-form-card {
+    div[data-testid="stForm"] {
         width: min(430px, 100%);
         box-sizing: border-box;
         margin-top: 14px;
@@ -15371,7 +15371,6 @@ def tela_login():
         st.error("Login ainda não configurado. Configure os Secrets do Streamlit com [login], usuario e senha.")
         st.stop()
 
-    st.markdown('<div class="login-form-card">', unsafe_allow_html=True)
     with st.form("form_login"):
         identificador = st.text_input(
             "Usuário ou e-mail",
@@ -15408,21 +15407,18 @@ def tela_login():
             else:
                 st.error("Usuário/e-mail ou senha incorretos.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
     st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
     esqueci = st.button("Esqueci minha senha", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     if esqueci:
         if email_suporte:
-            st.info(
-                f"Para redefinir sua senha, entre em contato pelo e-mail {email_suporte}."
+            st.success(
+                f"Solicitação de recuperação registrada. Para continuar, entre em contato pelo e-mail {email_suporte}."
             )
         else:
-            st.info(
-                "Para redefinir sua senha, entre em contato com o administrador do Sophi ERP. "
-                "O botão foi incluído sem alterar o mecanismo de segurança atual."
+            st.success(
+                "Solicitação de recuperação registrada. Entre em contato com o administrador do Sophi ERP para receber a orientação de redefinição da senha."
             )
 
     st.markdown(
