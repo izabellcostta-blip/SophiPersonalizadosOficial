@@ -19884,73 +19884,81 @@ def _mockup_aplicacao_sophi(imagem, aplicacao):
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 
-def _aplicar_arte_em_foto_real(foto, arte, aplicacao):
-    """Aplica a arte sobre uma foto REAL do produto usando perspectiva.
-    A foto do produto é preservada; somente a área da aplicação recebe a arte.
-    """
-    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
+    """Aplica a arte final, no formato escolhido, sobre uma FOTO REAL do produto."""
+    from PIL import Image, ImageOps, ImageFilter, ImageDraw
     import numpy as np
 
     base = foto.convert("RGB")
     bw, bh = base.size
-    # Converte a arte para RGBA e prepara textura/leve transparência para integração.
-    art = ImageOps.fit(arte.convert("RGBA"), (max(10, int(bw*0.28)), max(10, int(bh*0.28))), method=Image.Resampling.LANCZOS)
-    aw, ah = art.size
+    target = max(80, int(min(bw, bh) * 0.28))
+    if forma == "Redondo":
+        aw = ah = target
+    elif forma == "Retangular":
+        aw, ah = target, max(80, int(target * 1.42))
+    else:
+        aw = ah = target
 
-    # Região padrão da aplicação em coordenadas relativas da fotografia.
+    art = ImageOps.fit(arte.convert("RGBA"), (aw, ah), method=Image.Resampling.LANCZOS)
+    mask = Image.new("L", (aw, ah), 0)
+    md = ImageDraw.Draw(mask)
+    if forma == "Redondo":
+        md.ellipse((1, 1, aw-2, ah-2), fill=255)
+    else:
+        md.rounded_rectangle((1, 1, aw-2, ah-2), radius=max(1, int(min(aw,ah)*0.015)), fill=255)
+    art.putalpha(mask)
+
     regioes = {
-        "Geladeira": [(0.37,0.30),(0.63,0.28),(0.66,0.58),(0.34,0.60)],
-        "Garrafa": [(0.39,0.34),(0.61,0.34),(0.63,0.63),(0.37,0.63)],
-        "Embalagem": [(0.35,0.38),(0.65,0.38),(0.65,0.68),(0.35,0.68)],
-        "Sacola": [(0.37,0.36),(0.63,0.36),(0.63,0.68),(0.37,0.68)],
-        "Caderno": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
-        "Planner": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
-        "Caneca": [(0.36,0.36),(0.64,0.34),(0.66,0.63),(0.34,0.65)],
-        "Chaveiro": [(0.38,0.34),(0.62,0.34),(0.64,0.63),(0.36,0.63)],
-        "Cartão": [(0.35,0.35),(0.65,0.35),(0.65,0.67),(0.35,0.67)],
-        "Etiqueta": [(0.35,0.34),(0.65,0.34),(0.65,0.68),(0.35,0.68)],
-        "Crachá retrátil": [(0.40,0.34),(0.60,0.34),(0.61,0.61),(0.39,0.61)],
-        "Broche com cordão": [(0.40,0.32),(0.60,0.32),(0.61,0.61),(0.39,0.61)],
+        "Geladeira": [(0.36,0.29),(0.64,0.29),(0.64,0.59),(0.36,0.59)],
+        "Garrafa": [(0.38,0.34),(0.62,0.34),(0.62,0.63),(0.38,0.63)],
+        "Embalagem": [(0.34,0.38),(0.66,0.38),(0.66,0.69),(0.34,0.69)],
+        "Sacola": [(0.36,0.36),(0.64,0.36),(0.64,0.69),(0.36,0.69)],
+        "Caderno": [(0.37,0.30),(0.63,0.30),(0.63,0.69),(0.37,0.69)],
+        "Planner": [(0.37,0.30),(0.63,0.30),(0.63,0.69),(0.37,0.69)],
+        "Caneca": [(0.35,0.35),(0.65,0.34),(0.66,0.64),(0.34,0.65)],
+        "Chaveiro": [(0.38,0.34),(0.62,0.34),(0.63,0.64),(0.37,0.64)],
+        "Cartão": [(0.34,0.35),(0.66,0.35),(0.66,0.68),(0.34,0.68)],
+        "Etiqueta": [(0.34,0.34),(0.66,0.34),(0.66,0.69),(0.34,0.69)],
+        "Crachá retrátil": [(0.39,0.33),(0.61,0.33),(0.61,0.61),(0.39,0.61)],
+        "Broche com cordão": [(0.39,0.31),(0.61,0.31),(0.61,0.61),(0.39,0.61)],
     }
-    q = regioes.get(aplicacao, regioes["Geladeira"])
+    q = regioes.get(aplicacao, regioes["Caderno"])
     quad = tuple((int(x*bw), int(y*bh)) for x,y in q)
 
-    # Máscara da arte para respeitar o formato escolhido.
-    mask = Image.new("L", (aw,ah), 0)
-    md = ImageOps.grayscale(Image.new("L", (aw,ah), 255))
-    mask = md
-    # Para produtos redondos, usa máscara circular.
-    if aplicacao in ("Chaveiro","Crachá retrátil","Broche com cordão","Geladeira"):
-        mask = Image.new("L", (aw,ah), 0)
-        from PIL import ImageDraw
-        ImageDraw.Draw(mask).ellipse((0,0,aw-1,ah-1), fill=235)
-    art.putalpha(ImageEnhance.Brightness(art.getchannel("A")).enhance(1.0))
+    src_pts = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
+    dst_pts = np.float32(quad)
 
-    # Perspectiva com Pillow. Usa os quatro pontos da superfície real.
-    src = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
-    dst = np.float32(quad)
     try:
         import cv2
-        M = cv2.getPerspectiveTransform(src, dst)
-        rgba = np.array(art)
-        warped = cv2.warpPerspective(rgba, M, (bw,bh), flags=cv2.INTER_LANCZOS, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0))
+        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        warped = cv2.warpPerspective(
+            np.array(art), M, (bw,bh),
+            flags=cv2.INTER_LANCZOS,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0,0,0,0)
+        )
         overlay = Image.fromarray(warped, "RGBA")
-    except Exception:
-        # Fallback sem OpenCV: mantém a aplicação proporcional na região central.
-        overlay = Image.new("RGBA", (bw,bh), (0,0,0,0))
-        rect = (int(min(x for x,y in quad)), int(min(y for x,y in quad)), int(max(x for x,y in quad)), int(max(y for x,y in quad)))
-        overlay.alpha_composite(art.resize((rect[2]-rect[0], rect[3]-rect[1]), Image.Resampling.LANCZOS), (rect[0],rect[1]))
 
-    # Integração fotográfica: leve transparência, sombra e brilho da foto atravessando a arte.
-    alpha = overlay.getchannel("A").point(lambda v: int(v*0.88))
-    overlay.putalpha(alpha)
-    result = Image.alpha_composite(base.convert("RGBA"), overlay)
-    return result.convert("RGB")
+        alpha = overlay.getchannel("A")
+        shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(max(2, int(min(bw,bh)*0.008))))
+        shadow_alpha = shadow_alpha.point(lambda p: int(p * 0.30))
+        shadow = Image.new("RGBA", (bw,bh), (0,0,0,0))
+        shadow.putalpha(shadow_alpha)
+
+        result = Image.alpha_composite(base.convert("RGBA"), shadow)
+        return Image.alpha_composite(result, overlay).convert("RGB")
+    except Exception:
+        overlay = Image.new("RGBA", (bw,bh), (0,0,0,0))
+        x0,y0 = min(x for x,y in quad), min(y for x,y in quad)
+        x1,y1 = max(x for x,y in quad), max(y for x,y in quad)
+        piece = art.resize((max(2,x1-x0), max(2,y1-y0)), Image.Resampling.LANCZOS)
+        overlay.alpha_composite(piece, (x0,y0))
+        return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
                                  margem_mm, espacamento_mm, sangria_mm,
                                  modo_corte, marcas_registro):
-    """Monta a prévia A4 e retorna PNG + metadados de produção."""
+    """Monta a prévia A4 com a arte realmente no formato escolhido."""
     from PIL import Image, ImageDraw, ImageOps
     from io import BytesIO
     import math
@@ -19959,76 +19967,62 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
     A4_W = int(210 / 25.4 * DPI)
     A4_H = int(297 / 25.4 * DPI)
     mm_px = DPI / 25.4
-
     w = max(1, int(largura_cm / 2.54 * DPI))
     h = max(1, int(altura_cm / 2.54 * DPI))
     margem = int(margem_mm * mm_px)
     esp = int(espacamento_mm * mm_px)
     sangria = int(sangria_mm * mm_px)
 
-    # Mantém proporção e preenche a área final sem deformar a arte.
-    base = ImageOps.fit(imagem.convert("RGB"), (w + 2*sangria, h + 2*sangria),
-                        method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+    pw, ph = w + 2*sangria, h + 2*sangria
+    base = Image.new("RGBA", (pw,ph), (255,255,255,0))
+    arte_fit = ImageOps.fit(imagem.convert("RGBA"), (pw,ph), method=Image.Resampling.LANCZOS)
 
-    # Prévia da folha branca.
-    folha = Image.new("RGB", (A4_W, A4_H), "white")
+    mask = Image.new("L", (pw,ph), 0)
+    md = ImageDraw.Draw(mask)
+    if forma == "Redondo":
+        md.ellipse((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
+    else:
+        md.rectangle((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
+    arte_fit.putalpha(mask)
+    base.alpha_composite(arte_fit)
+
+    folha = Image.new("RGB", (A4_W,A4_H), "white")
     draw = ImageDraw.Draw(folha)
-
     passo_x = w + 2*sangria + esp
     passo_y = h + 2*sangria + esp
     disponivel_w = A4_W - 2*margem
     disponivel_h = A4_H - 2*margem
-
     cols = max(1, (disponivel_w + esp) // passo_x)
     rows = max(1, (disponivel_h + esp) // passo_y)
     por_folha = cols * rows
     folhas = max(1, math.ceil(quantidade / por_folha))
 
-    n = min(quantidade, por_folha)
-    for i in range(n):
-        row = i // cols
-        col = i % cols
-        x = margem + col * passo_x
-        y = margem + row * passo_y
-        folha.paste(base, (int(x - sangria), int(y - sangria)))
-
-        # Visualização da linha de corte, quando solicitada.
+    for i in range(min(quantidade, por_folha)):
+        row,col = divmod(i,cols)
+        x = margem + col*passo_x
+        y = margem + row*passo_y
+        folha.paste(base, (int(x-sangria), int(y-sangria)), base)
         if modo_corte != "Sem corte":
             if forma == "Redondo":
-                draw.ellipse(
-                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
-                )
+                draw.ellipse((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
             else:
-                draw.rectangle(
-                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
-                )
+                draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
 
-    # Marcas de registro simples e opcionais para fluxo de impressão/corte.
     if marcas_registro and modo_corte != "Sem corte":
-        tam = int(5 * mm_px)
-        off = margem // 2
-        for px, py in [
-            (off, off), (A4_W-off-tam, off),
-            (off, A4_H-off-tam), (A4_W-off-tam, A4_H-off-tam)
-        ]:
-            draw.rectangle((px, py, px+tam, py+tam), outline=(0,0,0), width=max(2, int(mm_px*0.3)))
+        tam = int(5*mm_px); off = margem//2
+        for px,py in [(off,off),(A4_W-off-tam,off),(off,A4_H-off-tam),(A4_W-off-tam,A4_H-off-tam)]:
+            draw.rectangle((px,py,px+tam,py+tam), outline=(0,0,0), width=max(2,int(mm_px*0.3)))
 
     preview = BytesIO()
-    folha.save(preview, format="PNG", dpi=(DPI, DPI))
+    folha.save(preview, format="PNG", dpi=(DPI,DPI))
     preview.seek(0)
-
     return {
-        "png": preview.getvalue(),
-        "cols": cols,
-        "rows": rows,
-        "por_folha": por_folha,
-        "folhas": folhas,
-        "tamanho": f"{largura_cm:g} × {altura_cm:g} cm",
-        "quantidade": quantidade,
-        "modo_corte": modo_corte,
-        "marcas_registro": marcas_registro,
+        "png": preview.getvalue(), "cols": cols, "rows": rows,
+        "por_folha": por_folha, "folhas": folhas,
+        "tamanho": f"{largura_cm:g} × {altura_cm:g}",
+        "quantidade": quantidade, "modo_corte": modo_corte,
+        "marcas_registro": marcas_registro, "forma": forma,
     }
-
 
 def _gerador_imagens_pdf(preview_png, titulo, meta):
     """PDF espelho da prévia do Gerador de Imagens."""
@@ -20125,14 +20119,14 @@ def tela_gerador_imagens_profissional():
         if st.session_state.gi_preview:
             st.image(st.session_state.gi_preview, caption="Prévia da folha A4 — espelho do PDF", use_container_width=True)
             meta = st.session_state.gi_meta
-            st.info(f"📐 {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
+            st.info(f"📐 {meta.get('forma', forma)} • {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
 
             pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
             st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
 
     with tabs[1]:
         st.markdown("### 👁️ Visualização realista da aplicação")
-        st.caption("Veja a arte aplicada em uma representação visual do produto antes de enviar ao cliente. A arte original permanece intacta.")
+        st.caption("Monte uma FOTO REAL do produto com a arte do cliente aplicada. Envie a fotografia real abaixo; a arte será recortada no formato escolhido e aplicada em perspectiva.")
         aplicacao = st.selectbox(
             "Como você quer mostrar este produto?",
             ["Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta", "Crachá retrátil", "Broche com cordão"],
@@ -20145,27 +20139,35 @@ def tela_gerador_imagens_profissional():
             help="Envie uma foto real da geladeira, garrafa, embalagem etc. A arte será aplicada diretamente nela para uma visualização fotográfica real."
         )
         if st.session_state.gi_imagem is not None:
-            if foto_real_produto is not None:
+
+            from io import BytesIO
+            if foto_real_produto is None:
+                st.warning("Envie uma FOTO REAL do produto para gerar a montagem fotográfica.")
+                st.info("A arte será recortada no formato escolhido e aplicada diretamente na fotografia do produto.")
+            else:
                 from PIL import Image as _PILImage
                 _foto_real = _PILImage.open(foto_real_produto).convert("RGB")
-                mockup = _aplicar_arte_em_foto_real(_foto_real, st.session_state.gi_imagem, aplicacao)
-                st.success("Aplicação fotográfica real gerada sobre a foto do produto.")
-            else:
-                mockup = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao)
-            from io import BytesIO
-            mock_buf = BytesIO()
-            mockup.save(mock_buf, format="PNG", dpi=(180,180))
-            mock_bytes = mock_buf.getvalue()
-            st.image(mock_bytes, caption=f"Prévia do produto aplicado — {aplicacao}", use_container_width=True)
-            st.download_button(
-                "🖼️ Baixar imagem do mockup",
-                mock_bytes,
-                file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
-                mime="image/png",
-                use_container_width=True,
-                key="gi_download_mockup"
-            )
-            st.caption("Esta é a visualização comercial da aplicação. Para impressão, use a prévia A4 da aba Criar arte.")
+                mockup = _aplicar_arte_em_foto_real(
+                    _foto_real,
+                    st.session_state.gi_imagem,
+                    aplicacao,
+                    st.session_state.get("gi_forma", "Quadrado")
+                )
+                mock_buf = BytesIO()
+                mockup.save(mock_buf, format="PNG", dpi=(180,180))
+                mock_bytes = mock_buf.getvalue()
+                st.success("Montagem fotográfica REAL gerada com a arte aplicada ao produto.")
+                st.image(mock_bytes, caption=f"Prévia fotográfica REAL — {aplicacao}", use_container_width=True)
+                st.download_button(
+                    "🖼️ Baixar imagem do mockup",
+                    mock_bytes,
+                    file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key="gi_download_mockup"
+                )
+                st.caption("Para impressão, use a prévia A4 da aba Criar arte.")
+
         else:
             st.info("Envie a arte do cliente primeiro para visualizar a aplicação.")
 
@@ -20190,7 +20192,7 @@ def tela_gerador_imagens_profissional():
             observacao = st.text_area("Observação para o cliente (opcional)", value="Confira a prévia do seu produto e aprove a arte ou solicite uma alteração.", height=90, key="gi_obs_portal")
 
             if tipo_aprovacao == "Mockup aplicado no produto":
-                st.caption("O cliente verá a arte aplicada no produto escolhido na aba Visualização da aplicação.")
+                st.caption("O cliente verá a montagem fotográfica REAL do produto escolhida na aba Visualização da aplicação.")
 
             if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
                 if not st.session_state.gi_preview or st.session_state.gi_imagem is None:
@@ -20199,12 +20201,22 @@ def tela_gerador_imagens_profissional():
                     try:
                         if tipo_aprovacao == "Mockup aplicado no produto":
                             aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
-                            if st.session_state.get("gi_foto_real_produto") is not None:
-                                from PIL import Image as _PILImage
-                                _foto_real_envio = _PILImage.open(st.session_state["gi_foto_real_produto"]).convert("RGB")
-                                mockup_envio = _aplicar_arte_em_foto_real(_foto_real_envio, st.session_state.gi_imagem, aplicacao_envio)
-                            else:
-                                mockup_envio = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao_envio)
+                            if st.session_state.get("gi_foto_real_produto") is None:
+                                st.warning("Envie uma FOTO REAL do produto na aba Visualização da aplicação antes de enviar o mockup.")
+                                st.stop()
+
+                            from PIL import Image as _PILImage
+                            _foto_real_envio = _PILImage.open(
+                                st.session_state["gi_foto_real_produto"]
+                            ).convert("RGB")
+
+                            mockup_envio = _aplicar_arte_em_foto_real(
+                                _foto_real_envio,
+                                st.session_state.gi_imagem,
+                                aplicacao_envio,
+                                st.session_state.get("gi_forma", "Quadrado")
+                            )
+
                             from io import BytesIO
                             _mb = BytesIO()
                             mockup_envio.save(_mb, format="PNG", dpi=(180,180))
@@ -20222,6 +20234,7 @@ def tela_gerador_imagens_profissional():
                         st.success(f"Arquivo enviado para o Portal do Cliente — versão {versao}.")
                     except Exception as exc:
                         st.error(f"Não foi possível enviar para o Portal: {exc}")
+
         else:
             st.info("É necessário ter pelo menos um orçamento cadastrado para vincular a aprovação ao Portal do Cliente.")
 
