@@ -2581,158 +2581,222 @@ def garantir_tarefas_dia():
         prazo TEXT,
         observacoes TEXT,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-        concluido_em TEXT
+        concluido_em TEXT,
+        hora TEXT,
+        repetir TEXT DEFAULT 'Não repetir'
     )
     """)
+    # Compatibilidade com instalações antigas: acrescenta somente os campos da área Tarefas do Dia.
+    try:
+        cols = consultar("PRAGMA table_info(tarefas_dia)")
+        existentes = set(cols["name"].astype(str).tolist()) if not cols.empty else set()
+        if "hora" not in existentes:
+            executar("ALTER TABLE tarefas_dia ADD COLUMN hora TEXT")
+        if "repetir" not in existentes:
+            executar("ALTER TABLE tarefas_dia ADD COLUMN repetir TEXT DEFAULT 'Não repetir'")
+    except Exception:
+        pass
 
 
 def tela_tarefas_dia():
     garantir_tarefas_dia()
 
     st.title("Tarefas do Dia")
-    st.write("Anote e acompanhe tudo que precisa resolver hoje: WhatsApp, orçamento, arte, pagamento, produção, entrega e pós-venda.")
+    st.caption("Seu lugar para lembrar de tudo que precisa fazer na Sophi Personalizados.")
 
-    hoje = datetime.now().strftime("%Y-%m-%d")
+    hoje_dt = agora_brasil().date()
+    hoje = hoje_dt.strftime("%Y-%m-%d")
 
-    tarefas_hoje = consultar("""
-    SELECT *
-    FROM tarefas_dia
-    WHERE data_tarefa=? AND COALESCE(status, 'Pendente') <> 'Concluída'
-    ORDER BY id DESC
+    # Dados para o painel principal.
+    todas_pendentes = consultar("""
+        SELECT * FROM tarefas_dia
+        WHERE COALESCE(status, 'Pendente') <> 'Concluída'
+        ORDER BY data_tarefa ASC, CASE WHEN COALESCE(hora,'')='' THEN '99:99' ELSE hora END ASC, id DESC
+    """)
+    tarefas_hoje = todas_pendentes[todas_pendentes["data_tarefa"].astype(str) == hoje].copy() if not todas_pendentes.empty else todas_pendentes
+    datas = pd.to_datetime(todas_pendentes["data_tarefa"], errors="coerce").dt.date if not todas_pendentes.empty else pd.Series(dtype=object)
+    atrasadas = todas_pendentes[(datas < hoje_dt)] if not todas_pendentes.empty else todas_pendentes
+    proximas = todas_pendentes[(datas > hoje_dt)] if not todas_pendentes.empty else todas_pendentes
+
+    concluidas_hoje = consultar("""
+        SELECT * FROM tarefas_dia
+        WHERE status='Concluída' AND substr(COALESCE(concluido_em,''),1,10)=?
     """, (hoje,))
 
-    tarefas_pendentes = consultar("""
-    SELECT *
-    FROM tarefas_dia
-    WHERE COALESCE(status, 'Pendente') <> 'Concluída'
-    ORDER BY data_tarefa, id DESC
-    """)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("☀️ Para hoje", len(tarefas_hoje))
+    c2.metric("🔴 Atrasadas", len(atrasadas))
+    c3.metric("📅 Próximas", len(proximas))
+    c4.metric("🟢 Feitas hoje", len(concluidas_hoje))
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Tarefas de hoje", len(tarefas_hoje))
-    c2.metric("Pendentes", len(tarefas_pendentes))
-    c3.metric(
-        "Urgentes",
-        len(tarefas_pendentes[tarefas_pendentes["prioridade"] == "Urgente"])
-        if not tarefas_pendentes.empty and "prioridade" in tarefas_pendentes.columns
-        else 0
-    )
+    total_hoje = len(tarefas_hoje) + len(concluidas_hoje)
+    if total_hoje:
+        progresso = len(concluidas_hoje) / total_hoje
+        st.progress(progresso, text=f"{len(concluidas_hoje)} de {total_hoje} tarefas de hoje concluídas")
 
-    # Visão rápida para o dia a dia: vencidas, hoje e próximas, sem alterar o cadastro existente.
-    hoje_dt = agora_brasil().date()
-    vencidas = tarefas_pendentes[pd.to_datetime(tarefas_pendentes["data_tarefa"], errors="coerce").dt.date < hoje_dt] if not tarefas_pendentes.empty else tarefas_pendentes
-    c4, c5 = st.columns(2)
-    c4.metric("⚠️ Atrasadas", len(vencidas))
-    c5.metric("📅 Próximas", len(tarefas_pendentes) - len(tarefas_hoje) - len(vencidas))
+    # Atalhos de navegação.
+    aba_nova, aba_hoje, aba_atrasadas, aba_proximas, aba_calendario, aba_historico = st.tabs([
+        "➕ Nova tarefa", "☀️ Hoje", "🔴 Atrasadas", "📅 Próximas", "🗓️ Calendário", "🟢 Concluídas"
+    ])
 
-    st.divider()
+    def executar_tarefa(t, acao):
+        tid = int(t["id"])
+        if acao == "concluir":
+            executar("UPDATE tarefas_dia SET status='Concluída', concluido_em=CURRENT_TIMESTAMP WHERE id=?", (tid,))
+            repetir = str(t.get("repetir", "Não repetir") or "Não repetir")
+            if repetir != "Não repetir":
+                try:
+                    base = pd.to_datetime(str(t.get("data_tarefa")), errors="coerce")
+                    if pd.isna(base):
+                        base = pd.Timestamp(hoje_dt)
+                    if repetir == "Todos os dias":
+                        nova_data = base + pd.Timedelta(days=1)
+                    elif repetir == "Toda semana":
+                        nova_data = base + pd.Timedelta(days=7)
+                    elif repetir == "Todo mês":
+                        nova_data = base + pd.DateOffset(months=1)
+                    else:
+                        nova_data = None
+                    if nova_data is not None:
+                        executar("""
+                        INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes, hora, repetir)
+                        VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?, ?, ?)
+                        """, (
+                            str(t.get("titulo", "")), str(t.get("cliente", "") or ""), str(t.get("whatsapp", "") or ""),
+                            str(t.get("tipo", "Outro") or "Outro"), str(t.get("prioridade", "Normal") or "Normal"),
+                            nova_data.strftime("%Y-%m-%d"), str(t.get("prazo", "") or ""), str(t.get("observacoes", "") or ""),
+                            str(t.get("hora", "") or ""), repetir,
+                        ))
+                except Exception:
+                    pass
+        elif acao == "andamento":
+            executar("UPDATE tarefas_dia SET status='Em andamento' WHERE id=?", (tid,))
+        elif acao == "amanha":
+            nova_data = hoje_dt + timedelta(days=1)
+            executar("UPDATE tarefas_dia SET data_tarefa=?, status='Pendente' WHERE id=?", (nova_data.strftime("%Y-%m-%d"), tid))
+        elif acao == "excluir":
+            executar("DELETE FROM tarefas_dia WHERE id=?", (tid,))
+        st.rerun()
 
-    st.subheader("Nova tarefa")
-    with st.form("nova_tarefa_form"):
-        col1, col2 = st.columns(2)
-        titulo = col1.text_input("O que precisa fazer?", placeholder="Ex: responder cliente sobre orçamento da arte")
-        cliente = col2.text_input("Cliente", placeholder="Nome do cliente")
+    def mostrar_tarefas(df, prefixo):
+        if df is None or df.empty:
+            st.info("Nenhuma tarefa nesta lista.")
+            return
+        for _, t in df.iterrows():
+            data_str = str(t.get("data_tarefa", ""))
+            try:
+                data_fmt = pd.to_datetime(data_str).strftime("%d/%m/%Y")
+            except Exception:
+                data_fmt = data_str
+            prioridade = str(t.get("prioridade", "Normal") or "Normal")
+            icone = "🔴" if prioridade == "Urgente" else ("🟠" if prioridade == "Alta" else "⚪")
+            with st.container(border=True):
+                st.markdown(f"### {icone} {str(t.get('titulo',''))}")
+                info = [f"📅 {data_fmt}"]
+                if str(t.get("hora", "") or "").strip():
+                    info.append(f"🕐 {t.get('hora')}")
+                if str(t.get("tipo", "") or "").strip():
+                    info.append(f"🏷️ {t.get('tipo')}")
+                if str(t.get("cliente", "") or "").strip():
+                    info.append(f"👤 {t.get('cliente')}")
+                if str(t.get("repetir", "") or "") != "Não repetir":
+                    info.append(f"🔁 {t.get('repetir')}")
+                st.caption("  •  ".join(info))
+                if str(t.get("prazo", "") or "").strip():
+                    st.write(f"**Prazo:** {t.get('prazo')}")
+                if str(t.get("observacoes", "") or "").strip():
+                    st.write(str(t.get("observacoes")))
 
-        col3, col4 = st.columns(2)
-        whatsapp = col3.text_input("WhatsApp", placeholder="Ex: 13999999999")
-        tipo = col4.selectbox(
-            "Tipo",
-            [
-                "Responder WhatsApp",
-                "Enviar orçamento",
-                "Criar arte",
-                "Ajustar arte",
-                "Aguardando aprovação",
-                "Solicitar pagamento",
-                "Conferir comprovante",
-                "Produção",
-                "Entrega / retirada",
-                "Pós-venda",
-                "Outro",
-            ],
-        )
+                b1, b2, b3, b4, b5 = st.columns(5)
+                with b1:
+                    if st.button("✅ Concluir", key=f"td_concluir_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "concluir")
+                with b2:
+                    if st.button("🔄 Em andamento", key=f"td_andamento_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "andamento")
+                with b3:
+                    if st.button("📅 Amanhã", key=f"td_amanha_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "amanha")
+                with b4:
+                    numero = str(t.get("whatsapp", "") or "")
+                    if numero.strip():
+                        msg = "Olá " + str(t.get("cliente") or "") + "! 🤍\\n\\nPassando para falar sobre: " + str(t.get("titulo") or "") + "\\n\\nEquipe Sophi Personalizados Oficial"
+                        link = link_whatsapp(numero, msg)
+                        if link:
+                            st.link_button("💬 WhatsApp", link, use_container_width=True)
+                    else:
+                        st.empty()
+                with b5:
+                    if st.button("🗑️ Excluir", key=f"td_excluir_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "excluir")
 
-        col5, col6, col7 = st.columns(3)
-        prioridade = col5.selectbox("Prioridade", ["Normal", "Alta", "Urgente", "Baixa"])
-        data_tarefa = col6.date_input("Data", value=datetime.now().date())
-        prazo = col7.text_input("Prazo/horário", placeholder="Ex: até 18h")
+    with aba_nova:
+        st.subheader("➕ O que você precisa fazer?")
+        st.caption("Cliente é opcional. Se não tiver cliente, a tarefa continua sendo apenas uma lembrança sua.")
+        with st.form("nova_tarefa_form_intuitiva"):
+            titulo = st.text_input("Tarefa", placeholder="Ex: Comprar papel fotográfico")
+            c1, c2, c3 = st.columns(3)
+            data_tarefa = c1.date_input("📅 Quando?", value=hoje_dt)
+            hora = c2.text_input("🕐 Horário / lembrete", placeholder="Ex: 14:00")
+            prioridade = c3.selectbox("Prioridade", ["Normal", "Alta", "Urgente"])
 
-        observacoes = st.text_area("Observações", placeholder="Detalhes da pendência, resposta, arte, prazo ou pedido.")
+            c4, c5 = st.columns(2)
+            tipo = c4.selectbox("🏷️ Categoria", [
+                "Atendimento", "Orçamento", "Arte", "Produção", "Embalagem", "Entrega / retirada",
+                "Compras", "Financeiro", "Marketing", "Administrativo", "Organização", "Outro"
+            ])
+            repetir = c5.selectbox("🔁 Repetir", ["Não repetir", "Todos os dias", "Toda semana", "Todo mês"])
 
-        salvar = st.form_submit_button("Salvar tarefa")
-        if salvar:
-            if not titulo.strip():
-                st.error("Digite a tarefa.")
-            else:
-                executar("""
-                INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes)
-                VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)
-                """, (titulo, cliente, whatsapp, tipo, prioridade, str(data_tarefa), prazo, observacoes))
-                st.success("Tarefa salva.")
-                st.rerun()
+            c6, c7 = st.columns(2)
+            cliente = c6.text_input("👤 Cliente (opcional)", placeholder="Nome do cliente")
+            whatsapp = c7.text_input("💬 WhatsApp (opcional)", placeholder="13999999999")
+            prazo = st.text_input("Prazo", placeholder="Ex: entregar até 18h")
+            observacoes = st.text_area("Observações", placeholder="Detalhes que você não pode esquecer...")
 
-    st.divider()
-
-    st.subheader("Lista de tarefas")
-    filtro = st.radio("Mostrar", ["Hoje", "Todas pendentes", "Concluídas"], horizontal=True)
-
-    if filtro == "Hoje":
-        df = tarefas_hoje
-    elif filtro == "Todas pendentes":
-        df = tarefas_pendentes
-    else:
-        df = consultar("SELECT * FROM tarefas_dia WHERE status='Concluída' ORDER BY concluido_em DESC LIMIT 200")
-
-    if df.empty:
-        st.info("Nenhuma tarefa encontrada.")
-        return
-
-    for _, t in df.iterrows():
-        with st.container(border=True):
-            st.markdown(f"### {t['titulo']}")
-
-            linha = []
-            if str(t.get("cliente", "") or "").strip():
-                linha.append(f"Cliente: {t.get('cliente')}")
-            if str(t.get("tipo", "") or "").strip():
-                linha.append(f"Tipo: {t.get('tipo')}")
-            if str(t.get("prioridade", "") or "").strip():
-                linha.append(f"Prioridade: {t.get('prioridade')}")
-            if str(t.get("status", "") or "").strip():
-                linha.append(f"Status: {t.get('status')}")
-            if str(t.get("prazo", "") or "").strip():
-                linha.append(f"Prazo: {t.get('prazo')}")
-            if linha:
-                st.write(" | ".join(linha))
-
-            if str(t.get("observacoes", "") or "").strip():
-                st.caption(t.get("observacoes"))
-
-            b1, b2, b3, b4 = st.columns(4)
-
-            with b1:
-                if st.button("Concluir", key=f"tarefa_concluir_{int(t['id'])}", use_container_width=True):
-                    executar("UPDATE tarefas_dia SET status='Concluída', concluido_em=CURRENT_TIMESTAMP WHERE id=?", (int(t["id"]),))
+            if st.form_submit_button("💾 Salvar tarefa", use_container_width=True):
+                if not titulo.strip():
+                    st.error("Digite o que você precisa fazer.")
+                else:
+                    executar("""
+                    INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes, hora, repetir)
+                    VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?, ?, ?)
+                    """, (titulo.strip(), cliente.strip(), whatsapp.strip(), tipo, prioridade, str(data_tarefa), prazo.strip(), observacoes.strip(), hora.strip(), repetir))
+                    st.success("Tarefa salva para " + data_tarefa.strftime("%d/%m/%Y") + ".")
                     st.rerun()
 
-            with b2:
-                if st.button("Em andamento", key=f"tarefa_andamento_{int(t['id'])}", use_container_width=True):
-                    executar("UPDATE tarefas_dia SET status='Em andamento' WHERE id=?", (int(t["id"]),))
-                    st.rerun()
+    with aba_hoje:
+        st.subheader(f"☀️ Tarefas de hoje — {hoje_dt.strftime('%d/%m/%Y')}")
+        mostrar_tarefas(tarefas_hoje, "hoje")
 
-            with b3:
-                numero = str(t.get("whatsapp", "") or "")
-                if numero.strip():
-                    msg = "Olá " + str(t.get("cliente") or "") + "! 🤍\\n\\nPassando para falar sobre: " + str(t.get("titulo") or "") + "\\n\\nEquipe Sophi Personalizados Oficial"
-                    link = link_whatsapp(numero, msg)
-                    if link:
-                        st.link_button("WhatsApp", link, use_container_width=True)
+    with aba_atrasadas:
+        st.subheader("🔴 O que ficou para trás")
+        mostrar_tarefas(atrasadas, "atrasadas")
 
-            with b4:
-                if st.button("Excluir", key=f"tarefa_excluir_{int(t['id'])}", use_container_width=True):
-                    executar("DELETE FROM tarefas_dia WHERE id=?", (int(t["id"]),))
-                    st.rerun()
+    with aba_proximas:
+        st.subheader("📅 Próximas tarefas")
+        mostrar_tarefas(proximas, "proximas")
 
+    with aba_calendario:
+        st.subheader("🗓️ Escolha um dia")
+        dia_escolhido = st.date_input("Ver tarefas de", value=hoje_dt, key="tarefas_dia_calendario")
+        dia_iso = dia_escolhido.strftime("%Y-%m-%d")
+        df_dia = consultar("SELECT * FROM tarefas_dia WHERE data_tarefa=? ORDER BY CASE WHEN COALESCE(hora,'')='' THEN '99:99' ELSE hora END ASC, id DESC", (dia_iso,))
+        st.caption(f"{len(df_dia)} tarefa(s) em {dia_escolhido.strftime('%d/%m/%Y')}")
+        mostrar_tarefas(df_dia, "calendario")
+
+    with aba_historico:
+        st.subheader("🟢 Tarefas concluídas")
+        busca = st.text_input("🔎 Pesquisar tarefa concluída", placeholder="Ex: papel, cliente, pedido...")
+        if busca.strip():
+            termo = f"%{busca.strip()}%"
+            df_conc = consultar("""
+                SELECT * FROM tarefas_dia
+                WHERE status='Concluída' AND (titulo LIKE ? OR cliente LIKE ? OR observacoes LIKE ?)
+                ORDER BY concluido_em DESC LIMIT 300
+            """, (termo, termo, termo))
+        else:
+            df_conc = consultar("SELECT * FROM tarefas_dia WHERE status='Concluída' ORDER BY concluido_em DESC LIMIT 300")
+        mostrar_tarefas(df_conc, "concluidas")
 
 def tela_clientes():
     st.title("Clientes")
