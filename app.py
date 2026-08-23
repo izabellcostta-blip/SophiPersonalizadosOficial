@@ -17207,7 +17207,7 @@ def _status_preco(margem_real, lucro):
 
 
 def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
-    """Gera um PDF comercial simples do catálogo selecionado, sem alterar o banco."""
+    """Gera o PDF comercial usando as informações configuradas pela Sophi."""
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
@@ -17221,25 +17221,58 @@ def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
     largura, altura = A4
     margem = 15 * mm
 
+    empresa = obter_config("catalogo_nome_empresa", obter_config("catalogo_titulo", "Sophi Personalizados"))
+    slogan = obter_config("catalogo_frase", obter_config("catalogo_slogan", "Eternizando momentos desde 2018"))
+    instagram = obter_config("catalogo_instagram", "@sophipersonalizadosoficial")
+    whatsapp = obter_config("catalogo_whatsapp", obter_config("whatsapp_empresa", ""))
+    site = obter_config("catalogo_site", "")
+    endereco = obter_config("catalogo_endereco", "")
+    email = obter_config("catalogo_email", "")
+    rodape = obter_config("catalogo_rodape", "Entre em contato para personalizar seu pedido.")
+    logo_path = obter_config("catalogo_logo_path", obter_config("logo_path", ""))
+
     def desenhar_cabecalho():
         c.setFillColor(colors.black)
-        c.rect(0, altura - 34 * mm, largura, 34 * mm, fill=1, stroke=0)
+        c.rect(0, altura - 42 * mm, largura, 42 * mm, fill=1, stroke=0)
+
+        # Logo configurada pela loja, quando disponível.
+        if logo_path and Path(str(logo_path)).exists():
+            try:
+                c.drawImage(
+                    str(logo_path), margem, altura - 35 * mm,
+                    width=22 * mm, height=22 * mm,
+                    preserveAspectRatio=True, anchor="c", mask="auto"
+                )
+                x_texto = margem + 27 * mm
+            except Exception:
+                x_texto = margem
+        else:
+            x_texto = margem
+
         c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 19)
-        c.drawString(margem, altura - 15 * mm, "SOPHI PERSONALIZADOS")
-        c.setFont("Helvetica", 10)
-        c.drawString(margem, altura - 22 * mm, titulo)
-        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(x_texto, altura - 14 * mm, str(empresa)[:42])
+        c.setFont("Helvetica", 9.5)
+        c.drawString(x_texto, altura - 20 * mm, str(slogan)[:75])
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_texto, altura - 28 * mm, str(titulo)[:65])
+
+        contatos = " • ".join(
+            [x for x in [instagram, whatsapp, site] if str(x).strip()]
+        )
+        if contatos:
+            c.setFont("Helvetica", 8)
+            c.drawString(x_texto, altura - 34 * mm, contatos[:115])
 
     desenhar_cabecalho()
-    y = altura - 48 * mm
+    y = altura - 56 * mm
 
-    for idx, (_, produto) in enumerate(produtos_df.iterrows()):
+    for _, produto in produtos_df.iterrows():
         card_h = 66 * mm
-        if y - card_h < 15 * mm:
+        if y - card_h < 18 * mm:
             c.showPage()
             desenhar_cabecalho()
-            y = altura - 48 * mm
+            y = altura - 56 * mm
 
         x = margem
         w = largura - 2 * margem
@@ -17254,7 +17287,11 @@ def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
                     img = ImageReader(BytesIO(raw))
                 else:
                     img = ImageReader(foto)
-                c.drawImage(img, x+5*mm, y-card_h+5*mm, width=48*mm, height=48*mm, preserveAspectRatio=True, anchor='c', mask='auto')
+                c.drawImage(
+                    img, x+5*mm, y-card_h+5*mm,
+                    width=48*mm, height=48*mm,
+                    preserveAspectRatio=True, anchor="c", mask="auto"
+                )
             except Exception:
                 pass
 
@@ -17262,11 +17299,14 @@ def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
         c.setFillColor(colors.black)
         c.setFont("Helvetica-Bold", 13)
         c.drawString(tx, y - 12 * mm, str(produto.get("nome", "Produto"))[:58])
+
         c.setFont("Helvetica", 9.5)
         c.drawString(tx, y - 20 * mm, f"Categoria: {str(produto.get('categoria', '') or 'Sem categoria')[:45]}")
+
         preco = n(produto.get("preco_escolhido", 0)) or n(produto.get("preco_sugerido", 0))
         c.setFont("Helvetica-Bold", 11)
         c.drawString(tx, y - 29 * mm, f"A partir de {real(preco)}")
+
         desc = str(produto.get("descricao_catalogo", "") or "").strip()
         if desc:
             c.setFont("Helvetica", 9)
@@ -17288,13 +17328,22 @@ def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
 
         y -= card_h + 7 * mm
 
-    c.setFont("Helvetica", 8)
-    c.setFillColor(colors.HexColor("#666666"))
-    c.drawCentredString(largura/2, 8*mm, "Produtos personalizados sob encomenda • Consulte disponibilidade e personalização.")
+    # Rodapé comercial configurado pela loja.
+    c.setStrokeColor(colors.HexColor("#dddddd"))
+    c.line(margem, 15 * mm, largura - margem, 15 * mm)
+    c.setFillColor(colors.HexColor("#555555"))
+    c.setFont("Helvetica", 7.5)
+
+    contato_final = " • ".join(
+        [x for x in [instagram, whatsapp, site, email, endereco] if str(x).strip()]
+    )
+    if contato_final:
+        c.drawCentredString(largura / 2, 10.5 * mm, contato_final[:145])
+    c.drawCentredString(largura / 2, 6.5 * mm, str(rodape)[:145])
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
-
 
 def tela_precificacao_profissional():
     _garantir_tabelas_gestao_ia()
@@ -17639,6 +17688,86 @@ def tela_precificacao_profissional():
     with abas[1]:
         st.subheader("📚 Catálogo de produtos")
         st.caption("Sua vitrine interna de produtos. Edite, oculte, exclua ou prepare um catálogo para enviar ao cliente.")
+
+        with st.expander("⚙️ Informações que aparecem no PDF e mensagem para o cliente", expanded=False):
+            st.markdown("#### 🖤 Informações da Sophi no catálogo")
+            s1, s2 = st.columns(2)
+            cat_nome = s1.text_input(
+                "Nome da empresa",
+                value=obter_config("catalogo_nome_empresa", obter_config("catalogo_titulo", "Sophi Personalizados")),
+                key="cat_envio_nome_empresa",
+            )
+            cat_instagram = s1.text_input(
+                "Instagram",
+                value=obter_config("catalogo_instagram", "@sophipersonalizadosoficial"),
+                key="cat_envio_instagram",
+            )
+            cat_whatsapp = s1.text_input(
+                "WhatsApp",
+                value=obter_config("catalogo_whatsapp", obter_config("whatsapp_empresa", "")),
+                key="cat_envio_whatsapp",
+            )
+            cat_site = s1.text_input(
+                "Site",
+                value=obter_config("catalogo_site", ""),
+                key="cat_envio_site",
+            )
+            cat_endereco = s2.text_input(
+                "Endereço",
+                value=obter_config("catalogo_endereco", ""),
+                key="cat_envio_endereco",
+            )
+            cat_email = s2.text_input(
+                "E-mail",
+                value=obter_config("catalogo_email", ""),
+                key="cat_envio_email",
+            )
+            cat_frase = s2.text_input(
+                "Frase de apresentação",
+                value=obter_config("catalogo_frase", obter_config("catalogo_slogan", "Eternizando momentos desde 2018")),
+                key="cat_envio_frase",
+            )
+            cat_rodape = s2.text_area(
+                "Texto de rodapé",
+                value=obter_config("catalogo_rodape", "Entre em contato para personalizar seu pedido."),
+                height=80,
+                key="cat_envio_rodape",
+            )
+            logo_envio = st.file_uploader(
+                "Logo do catálogo (opcional)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="cat_envio_logo",
+            )
+
+            st.markdown("#### 💬 Mensagem padrão para enviar ao cliente")
+            cat_msg = st.text_area(
+                "Mensagem padrão",
+                value=obter_config(
+                    "catalogo_mensagem_padrao",
+                    "Olá! 🖤\n\nPreparei nosso catálogo com algumas opções de produtos personalizados que podem combinar com o que você está procurando.\n\nDá uma olhadinha e, se gostar de algum, me chama que preparo seu orçamento personalizado. 😊\n\nSophi Personalizados\nEternizando momentos desde 2018."
+                ),
+                height=150,
+                key="cat_envio_msg_padrao",
+            )
+
+            if st.button("💾 Salvar informações e mensagem", use_container_width=True, key="cat_envio_salvar_config"):
+                salvar_config("catalogo_nome_empresa", cat_nome.strip())
+                salvar_config("catalogo_instagram", cat_instagram.strip())
+                salvar_config("catalogo_whatsapp", cat_whatsapp.strip())
+                salvar_config("catalogo_site", cat_site.strip())
+                salvar_config("catalogo_endereco", cat_endereco.strip())
+                salvar_config("catalogo_email", cat_email.strip())
+                salvar_config("catalogo_frase", cat_frase.strip())
+                salvar_config("catalogo_rodape", cat_rodape.strip())
+                salvar_config("catalogo_mensagem_padrao", cat_msg.strip())
+
+                if logo_envio is not None:
+                    caminho_logo = salvar_upload(logo_envio, "logo_catalogo_comercial")
+                    salvar_config("catalogo_logo_path", caminho_logo)
+
+                st.success("Informações do catálogo e mensagem salvas.")
+                st.rerun()
+
 
         busca_catalogo = st.text_input(
             "🔎 Buscar produto no catálogo",
