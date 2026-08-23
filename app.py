@@ -15125,103 +15125,194 @@ def tela_mensagens_whatsapp():
 # ============================================================
 
 def aplicar_css_login_premium():
+    # Visual exclusivo da tela de login. Nenhuma regra das demais telas é alterada.
     st.markdown("""
     <style>
     .stApp {
         background:
-            radial-gradient(circle at top left, rgba(255, 212, 226, 0.45), transparent 28%),
-            radial-gradient(circle at bottom right, rgba(210, 210, 210, 0.35), transparent 25%),
-            linear-gradient(135deg, #fbfaf8 0%, #f5f1ec 100%) !important;
+            radial-gradient(circle at 12% 10%, rgba(216,63,95,0.10), transparent 24%),
+            radial-gradient(circle at 88% 88%, rgba(0,0,0,0.06), transparent 28%),
+            linear-gradient(145deg, #ffffff 0%, #fbfaf8 52%, #f4f2ee 100%) !important;
     }
 
-    [data-testid="stSidebar"] {
-        display: none !important;
-    }
-
-    header, footer, #MainMenu {
-        visibility: hidden !important;
-        display: none !important;
-    }
+    [data-testid="stSidebar"] { display: none !important; }
+    header, footer, #MainMenu { visibility: hidden !important; display: none !important; }
 
     .block-container {
         max-width: 760px !important;
-        padding-top: 4rem !important;
+        padding-top: 3.4rem !important;
+        padding-bottom: 2rem !important;
     }
 
     .login-wrap {
         display: flex;
         justify-content: center;
         align-items: center;
-        margin-top: 10px;
     }
 
     .login-card {
-        width: 430px;
-        background: rgba(255,255,255,0.86);
-        border: 1px solid rgba(20,20,20,0.08);
-        border-radius: 34px;
-        padding: 34px 34px 28px 34px;
-        box-shadow: 0 26px 70px rgba(0,0,0,0.10);
-        text-align: center;
-        backdrop-filter: blur(10px);
-    }
-
-    .login-logo {
-        width: 92px;
-        height: 92px;
+        width: 100%;
+        max-width: 470px;
+        margin: 0 auto;
+        background: rgba(255,255,255,0.96);
+        border: 1px solid rgba(0,0,0,0.08);
         border-radius: 28px;
-        background: linear-gradient(145deg, #050505, #222);
-        color: white;
-        display: inline-flex;
-        justify-content: center;
+        padding: 30px 34px 26px 34px;
+        box-shadow: 0 28px 70px rgba(0,0,0,0.10);
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .login-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #050505 0%, #d83f5f 50%, #050505 100%);
+    }
+
+    .login-brand {
+        display: flex;
+        flex-direction: column;
         align-items: center;
-        font-family: Georgia, serif;
-        font-size: 34px;
-        font-weight: 700;
-        margin-bottom: 20px;
-        box-shadow: 0 18px 36px rgba(0,0,0,0.18);
-    }
-
-    .login-title {
-        font-family: Georgia, serif;
-        font-size: 38px;
-        font-weight: 800;
-        color: #161616;
-        margin: 0;
-        line-height: 1;
-    }
-
-    .login-sub {
-        letter-spacing: 3px;
-        text-transform: uppercase;
-        color: #777;
-        font-size: 11px;
-        margin-top: 8px;
-        margin-bottom: 8px;
-    }
-
-    .login-caption {
-        color: #8a8a8a;
-        font-size: 13px;
         margin-bottom: 22px;
     }
 
-    div[data-testid="stTextInput"] input {
-        border-radius: 16px !important;
-        border: 1px solid #e6ded5 !important;
-        padding: 12px 14px !important;
-        background: #fff !important;
+    .login-logo-img {
+        width: 86px;
+        height: 86px;
+        object-fit: contain;
+        border-radius: 22px;
+        margin-bottom: 14px;
+        box-shadow: 0 14px 30px rgba(0,0,0,0.12);
+        background: #fff;
     }
 
+    .login-logo-fallback {
+        width: 86px;
+        height: 86px;
+        border-radius: 22px;
+        background: linear-gradient(145deg, #050505, #222222);
+        color: #ffffff;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 34px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        margin-bottom: 14px;
+        box-shadow: 0 14px 30px rgba(0,0,0,0.18);
+    }
+
+    .login-title {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 36px;
+        font-weight: 800;
+        color: #080808;
+        margin: 0;
+        line-height: 1.05;
+        letter-spacing: -0.5px;
+    }
+
+    .login-subtitle {
+        margin-top: 8px;
+        color: #222222;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 2.8px;
+        text-transform: uppercase;
+    }
+
+    .login-tagline {
+        margin-top: 7px;
+        color: #777777;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    .login-access {
+        text-align: left;
+        margin: 8px 0 20px 0;
+        padding-bottom: 15px;
+        border-bottom: 1px solid #eeeeee;
+    }
+
+    .login-access-title {
+        font-size: 20px;
+        font-weight: 800;
+        color: #111111;
+        margin-bottom: 4px;
+    }
+
+    .login-access-sub {
+        font-size: 12px;
+        color: #777777;
+    }
+
+    div[data-testid="stTextInput"] {
+        text-align: left !important;
+    }
+
+    div[data-testid="stTextInput"] label {
+        font-size: 13px !important;
+        font-weight: 700 !important;
+        color: #151515 !important;
+    }
+
+    div[data-testid="stTextInput"] input {
+        border-radius: 14px !important;
+        border: 1px solid #dedbd6 !important;
+        padding: 12px 14px !important;
+        background: #ffffff !important;
+        color: #111111 !important;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+    }
+
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #111111 !important;
+        box-shadow: 0 0 0 2px rgba(0,0,0,0.07) !important;
+    }
+
+    .stFormSubmitButton button,
     .stButton button {
         width: 100%;
-        border-radius: 16px !important;
-        background: linear-gradient(135deg, #050505, #1e1e1e) !important;
-        color: white !important;
+        min-height: 46px;
+        border-radius: 14px !important;
+        background: linear-gradient(135deg, #050505, #1c1c1c) !important;
+        color: #ffffff !important;
         border: 0 !important;
         font-weight: 800 !important;
-        padding: 0.75rem 1rem !important;
-        box-shadow: 0 16px 32px rgba(0,0,0,0.16);
+        font-size: 14px !important;
+        padding: 0.72rem 1rem !important;
+        box-shadow: 0 14px 28px rgba(0,0,0,0.18);
+        transition: transform .16s ease, box-shadow .16s ease;
+    }
+
+    .stFormSubmitButton button:hover,
+    .stButton button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 18px 34px rgba(0,0,0,0.22);
+    }
+
+    .login-footer {
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid #eeeeee;
+        color: #8a8a8a;
+        font-size: 11px;
+        line-height: 1.6;
+    }
+
+    .login-footer strong { color: #222222; }
+
+    @media (max-width: 600px) {
+        .block-container { padding: 1.5rem 0.8rem 1.5rem !important; }
+        .login-card { padding: 26px 20px 22px; border-radius: 24px; }
+        .login-title { font-size: 32px; }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -15250,43 +15341,34 @@ def obter_credenciais_login():
 
 def tela_login():
     aplicar_css_login_premium()
+
+    # Usa a logo já cadastrada no ERP, sem criar ou alterar nenhum cadastro.
+    logo_html = '<div class="login-logo-fallback">SP</div>'
+    try:
+        logo = obter_config("logo_path", "")
+        if logo and Path(logo).exists():
+            b64 = base64.b64encode(Path(logo).read_bytes()).decode("utf-8")
+            ext = Path(logo).suffix.lower().replace(".", "") or "png"
+            if ext not in {"png", "jpeg", "jpg", "webp", "gif"}:
+                ext = "png"
+            logo_html = f'<img class="login-logo-img" src="data:image/{ext};base64,{b64}" alt="Sophi Personalizados Oficial">'
+    except Exception:
+        pass
+
     st.markdown(
-        """
-        <style>
-        .login-card {
-            max-width: 430px;
-            margin: 7vh auto 0 auto;
-            background: #ffffff;
-            border: 1px solid #e9e9e9;
-            border-radius: 22px;
-            padding: 34px 32px;
-            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
-            text-align: center;
-        }
-        .login-title {
-            font-family: 'Playfair Display', serif;
-            font-size: 38px;
-            font-weight: 700;
-            color: #000000;
-            margin-bottom: 4px;
-        }
-        .login-subtitle {
-            font-size: 12px;
-            letter-spacing: 2.2px;
-            text-transform: uppercase;
-            color: #777777;
-            margin-bottom: 18px;
-        }
-        .login-caption {
-            font-size: 13px;
-            color: #777777;
-            margin-bottom: 22px;
-        }
-        </style>
+        f"""
         <div class="login-card">
-            <div class="login-title">Sophi ERP</div>
-            <div class="login-subtitle">Personalizados Oficial</div>
-            <div class="login-caption">Acesso restrito ao sistema</div>
+            <div class="login-brand">
+                {logo_html}
+                <div class="login-title">Sophi ERP</div>
+                <div class="login-subtitle">Personalizados Oficial</div>
+                <div class="login-tagline">Eternizando momentos desde 2018</div>
+            </div>
+
+            <div class="login-access">
+                <div class="login-access-title">Acesso ao Sistema</div>
+                <div class="login-access-sub">Entre com seu usuário e senha para acessar seu ERP.</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -15299,9 +15381,9 @@ def tela_login():
         st.stop()
 
     with st.form("form_login"):
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar")
+        usuario = st.text_input("Usuário", placeholder="Digite seu usuário")
+        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+        entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
 
         if entrar:
             if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
@@ -15316,6 +15398,16 @@ def tela_login():
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
+    st.markdown(
+        """
+        <div class="login-footer">
+            <strong>Sophi Personalizados Oficial</strong><br>
+            Sistema interno • Acesso exclusivo e seguro
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
