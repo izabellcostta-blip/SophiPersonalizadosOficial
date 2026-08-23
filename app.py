@@ -20098,8 +20098,22 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
     sangria = int(sangria_mm * mm_px)
 
     # Mantém proporção e preenche a área final sem deformar a arte.
-    base = ImageOps.fit(imagem.convert("RGB"), (w + 2*sangria, h + 2*sangria),
-                        method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+    base_w = w + 2*sangria
+    base_h = h + 2*sangria
+    base_fitted = ImageOps.fit(imagem.convert("RGB"), (base_w, base_h),
+                               method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+    # Quando o formato é REDONDO, a própria arte fica circular de verdade:
+    # os cantos externos são transparentes e não são impressos como um quadrado.
+    # A sangria também acompanha o círculo para preservar o acabamento no corte.
+    if forma == "Redondo":
+        base = Image.new("RGBA", (base_w, base_h), (255, 255, 255, 0))
+        mascara_circular = Image.new("L", (base_w, base_h), 0)
+        mascara_draw = ImageDraw.Draw(mascara_circular)
+        mascara_draw.ellipse((0, 0, base_w - 1, base_h - 1), fill=255)
+        base.paste(base_fitted, (0, 0), mascara_circular)
+    else:
+        base = base_fitted.convert("RGB")
 
     # Prévia da folha branca.
     folha = Image.new("RGB", (A4_W, A4_H), "white")
@@ -20121,7 +20135,12 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
         col = i % cols
         x = margem + col * passo_x
         y = margem + row * passo_y
-        folha.paste(base, (int(x - sangria), int(y - sangria)))
+        if forma == "Redondo":
+            # Usa a transparência circular para impedir que o quadrado da imagem
+            # seja colocado na folha.
+            folha.paste(base, (int(x - sangria), int(y - sangria)), base)
+        else:
+            folha.paste(base, (int(x - sangria), int(y - sangria)))
 
         # Visualização da linha de corte, quando solicitada.
         if modo_corte != "Sem corte":
