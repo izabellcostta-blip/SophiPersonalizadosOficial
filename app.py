@@ -18068,8 +18068,44 @@ section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p 
 [data-testid="stTextInput"] input:focus,[data-testid="stNumberInput"] input:focus,[data-testid="stTextArea"] textarea:focus { border-color:#222!important;box-shadow:0 0 0 3px rgba(0,0,0,.06)!important; }
 label[data-testid="stWidgetLabel"] p { color:#3f3f3f!important;font-size:12px!important;font-weight:750!important; }
 
-.stButton button[kind="primary"] { background:linear-gradient(135deg,#d83f5f,#b92849)!important;box-shadow:0 12px 28px rgba(216,63,95,.24)!important; }
-.stButton button[kind="secondary"] { background:#fff!important;color:#111!important;border:1px solid #dedad4!important;box-shadow:none!important; }
+.stButton button[kind="primary"],
+.stButton button[kind="secondary"],
+.stButton button[disabled],
+.stDownloadButton button,
+div[data-testid="stLinkButton"] a {
+    background:#000000 !important;
+    background-color:#000000 !important;
+    background-image:none !important;
+    color:#ffffff !important;
+    border:1px solid #000000 !important;
+    box-shadow:0 10px 24px rgba(0,0,0,.16) !important;
+    font-weight:900 !important;
+    opacity:1 !important;
+    text-shadow:none !important;
+}
+.stButton button[kind="primary"] *,
+.stButton button[kind="secondary"] *,
+.stButton button[disabled] *,
+.stDownloadButton button *,
+div[data-testid="stLinkButton"] a * {
+    color:#ffffff !important;
+    font-weight:900 !important;
+    opacity:1 !important;
+}
+.stButton button:hover,
+.stButton button:focus,
+.stButton button:focus-visible,
+.stButton button:active,
+.stDownloadButton button:hover,
+.stDownloadButton button:focus,
+div[data-testid="stLinkButton"] a:hover {
+    background:#000000 !important;
+    background-color:#000000 !important;
+    background-image:none !important;
+    color:#ffffff !important;
+    border-color:#000000 !important;
+    box-shadow:0 12px 28px rgba(0,0,0,.22) !important;
+}
 
 .stTabs [data-baseweb="tab-list"] { background:rgba(255,255,255,.65);padding:5px;border-radius:16px;border:1px solid rgba(20,20,20,.06);gap:5px; }
 .stTabs [data-baseweb="tab"] { border:0!important;border-radius:11px!important;background:transparent!important;padding:10px 16px; }
