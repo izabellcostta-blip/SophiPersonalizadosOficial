@@ -13205,30 +13205,28 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # EXPORTAÇÃO ESPELHO DA PRÉVIA:
-    # Não rasterizamos e não redesenhamos a arte. Usamos o MESMO SVG que
-    # acabou de ser mostrado no componente de prévia e apenas damos ao
-    # SVG dimensões físicas A4. O viewBox, todas as coordenadas, fotos,
-    # moldes, faixa e @ permanecem exatamente iguais.
-    #
-    # O problema do PDF branco vinha do CSS `width:100%;height:auto` no
-    # elemento raiz: o navegador resolve esse CSS corretamente, mas o
-    # renderizador de PDF pode calcular a viewport como 0/indefinida.
-    # Aqui removemos somente o CSS e informamos 210 x 297 mm no SVG.
-    svg = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
-    svg = re.sub(
-        r"<svg([^>]*)>",
-        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
-        svg, count=1
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
+    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
     )
 
     buffer = BytesIO()
-    cairosvg.svg2pdf(
-        bytestring=svg.encode("utf-8"),
-        write_to=buffer,
-        output_width=210,
-        output_height=297,
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
     )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
     return buffer.getvalue(), layout, qty
 
 
@@ -13341,25 +13339,27 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # EXPORTAÇÃO ESPELHO DA PRÉVIA MISTA.
-    # O SVG exibido na tela é convertido diretamente para PDF. Não existe
-    # uma segunda montagem da folha e nenhuma coordenada é recalculada.
-    # Apenas removemos o CSS responsivo do <svg> e definimos o tamanho físico
-    # A4 para que o mesmo viewBox seja impresso corretamente.
-    svg = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
-    svg = re.sub(
-        r"<svg([^>]*)>",
-        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
-        svg, count=1
+    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
+        output_width=2480,
+        output_height=3508,
     )
 
     buffer = BytesIO()
-    cairosvg.svg2pdf(
-        bytestring=svg.encode("utf-8"),
-        write_to=buffer,
-        output_width=210,
-        output_height=297,
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle("Sophi Personalizados - Moldes Mistos")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
+        0, 0,
+        width=A4[0],
+        height=A4[1],
+        preserveAspectRatio=False,
+        mask="auto",
     )
+    c.showPage()
+    c.save()
+    buffer.seek(0)
     return buffer.getvalue(), layout, qty
 
 
@@ -17153,15 +17153,32 @@ def tela_precificacao_profissional():
     </div>
     """, unsafe_allow_html=True)
 
-    abas = st.tabs(["Nova simulação", "Histórico", "Diagnóstico rápido"])
+    abas = st.tabs(["Nova simulação", "Catálogo de produtos", "Histórico", "Diagnóstico rápido"])
 
     with abas[0]:
         c0, c1, c2 = st.columns([2.4, 1, 1])
-        nome_simulacao = c0.text_input("Nome da simulação", placeholder="Ex.: 1.000 cartões de visita laminados")
+        nome_simulacao = c0.text_input("Nome da simulação / produto", placeholder="Ex.: 1.000 cartões de visita laminados")
         qtd_total_lote = c1.number_input("Quantidade final", min_value=1.0, value=1000.0, step=1.0, key="prof_qtd_lote")
         qtd_por_folha = c2.number_input("Rendimento por folha/base", min_value=1.0, value=10.0, step=1.0, key="prof_rend_folha")
         folhas_estimadas = int((qtd_total_lote + qtd_por_folha - 1) // qtd_por_folha)
         st.info(f"Produção estimada: {folhas_estimadas} folhas/bases para {qtd_total_lote:.0f} unidades finais.")
+
+        st.subheader("Dados do produto para o catálogo")
+        ccat1, ccat2 = st.columns([1, 2])
+        with ccat1:
+            foto_upload = st.file_uploader(
+                "Foto do produto",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="prof_foto_produto",
+                help="A foto será salva junto ao produto para reutilização no catálogo e em orçamentos.",
+            )
+        with ccat2:
+            descricao_catalogo = st.text_area(
+                "Descrição do produto",
+                placeholder="Ex.: Botton personalizado 32 mm, acabamento profissional...",
+                height=110,
+                key="prof_descricao_catalogo",
+            )
 
         st.subheader("1. Materiais utilizados")
 
@@ -17392,9 +17409,118 @@ def tela_precificacao_profissional():
                 margem, preco_sugerido, preco_escolhido, lucro_lote, margem_real, concorrente,
                 json.dumps(memoria, ensure_ascii=False), "Simulação interna para atualização no Offstore"
             ))
-            st.success("Simulação salva. Agora você pode atualizar o preço no Offstore.")
+            st.success("Simulação salva no histórico.")
+
+        st.divider()
+        st.subheader("Salvar produto para reutilizar depois")
+        st.caption("Salve a precificação como produto do seu ERP. O produto ficará disponível para novos orçamentos e no catálogo interno da Precificação.")
+        p1, p2, p3 = st.columns([2, 1, 1])
+        with p1:
+            categoria_catalogo = st.text_input(
+                "Categoria do produto",
+                placeholder="Ex.: Bottons, Papelaria, Kits, Adesivos...",
+                key="prof_categoria_catalogo",
+            )
+        with p2:
+            ativo_catalogo = st.selectbox("Disponível para orçamentos?", ["Sim", "Não"], index=0, key="prof_ativo_catalogo")
+        with p3:
+            favorito_catalogo = st.selectbox("Favorito?", ["Não", "Sim"], index=0, key="prof_favorito_catalogo")
+
+        if st.button("💾 Salvar produto no catálogo", type="primary", use_container_width=True, key="prof_salvar_produto_catalogo"):
+            if not nome_simulacao.strip():
+                st.error("Digite o nome do produto antes de salvar.")
+            else:
+                foto_path = salvar_upload_produto_data_uri(foto_upload) if foto_upload else ""
+                dados_produto = {
+                    "nome": nome_simulacao.strip(),
+                    "categoria": categoria_catalogo.strip(),
+                    "qtd_por_lote": qtd_total_lote,
+                    "qtd_por_folha": qtd_por_folha,
+                    "receita_json": json.dumps(receita, ensure_ascii=False),
+                    "tintas_json": json.dumps(tintas, ensure_ascii=False),
+                    "equipamentos_json": json.dumps(equipamentos, ensure_ascii=False),
+                    "tempo_min": tempo_min,
+                    "valor_hora": valor_hora,
+                    "reserva_erro": reserva,
+                    "margem_lucro": margem,
+                    "custo_insumos": custo_insumos_total,
+                    "custo_tintas": custo_tintas_total,
+                    "custo_equipamentos": custo_equip_total,
+                    "custo_fixos": custo_fixos_total,
+                    "custo_mao_obra": custo_mao_obra,
+                    "custo_total_lote": custo_total,
+                    "custo_unitario": custo_unitario,
+                    "preco_sugerido": preco_sugerido_unit,
+                    "preco_escolhido": preco_escolhido_unit,
+                    "lucro_unitario": preco_escolhido_unit - custo_unitario,
+                    "margem_real": margem_real,
+                    "ativo": ativo_catalogo,
+                    "foto": foto_path,
+                    "favorito": favorito_catalogo,
+                    "status_catalogo": "Disponível",
+                    "descricao_catalogo": descricao_catalogo.strip(),
+                }
+
+                # Usa somente colunas que realmente existem no banco, sem alterar outras áreas do ERP.
+                try:
+                    colunas_banco = consultar("PRAGMA table_info(produtos)")["name"].tolist()
+                except Exception:
+                    colunas_banco = []
+
+                dados_produto = {k: v for k, v in dados_produto.items() if k in colunas_banco}
+                if not dados_produto:
+                    st.error("Não foi possível localizar a estrutura de produtos do ERP.")
+                else:
+                    colunas = ", ".join(dados_produto.keys())
+                    placeholders = ", ".join(["?"] * len(dados_produto))
+                    executar(
+                        f"INSERT INTO produtos ({colunas}) VALUES ({placeholders})",
+                        tuple(dados_produto.values()),
+                    )
+                    st.success("Produto salvo no catálogo e disponível para próximos orçamentos.")
+                    st.rerun()
 
     with abas[1]:
+        st.subheader("Catálogo de produtos salvos")
+        busca_catalogo = st.text_input("🔎 Buscar produto no catálogo", placeholder="Digite o nome ou categoria", key="prof_busca_catalogo")
+        catalogo = consultar("SELECT * FROM produtos WHERE ativo='Sim' ORDER BY categoria, nome")
+        if busca_catalogo.strip() and not catalogo.empty:
+            termo = busca_catalogo.strip()
+            mask = (
+                catalogo["nome"].astype(str).str.contains(termo, case=False, na=False)
+                | catalogo["categoria"].astype(str).str.contains(termo, case=False, na=False)
+            )
+            catalogo = catalogo[mask]
+
+        if catalogo.empty:
+            st.info("Nenhum produto salvo no catálogo ainda. Faça uma precificação e clique em “Salvar produto no catálogo”.")
+        else:
+            st.caption(f"{len(catalogo)} produto(s) salvo(s). Eles também ficam disponíveis para seleção nos Orçamentos.")
+            for inicio in range(0, len(catalogo), 3):
+                colunas_catalogo = st.columns(3)
+                for coluna, (_, produto) in zip(colunas_catalogo, catalogo.iloc[inicio:inicio + 3].iterrows()):
+                    with coluna:
+                        foto_src = foto_produto_data_uri(produto.get("foto", ""))
+                        if foto_src:
+                            st.markdown(
+                                f'<img src="{foto_src}" style="width:100%;height:180px;object-fit:cover;border-radius:14px;border:1px solid #e9e5df;">',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div style="height:180px;border:1px solid #e9e5df;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#777;">Sem foto</div>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(f"**{produto.get('nome', '')}**")
+                        categoria = str(produto.get("categoria", "") or "Sem categoria")
+                        st.caption(categoria)
+                        st.write(f"**Preço por unidade:** {real(n(produto.get('preco_escolhido', 0)) or n(produto.get('preco_sugerido', 0)))}")
+                        descricao = str(produto.get("descricao_catalogo", "") or "").strip()
+                        if descricao:
+                            st.caption(descricao)
+                        st.divider()
+
+    with abas[2]:
         hist = consultar("SELECT * FROM historico_precificacoes_simuladas ORDER BY id DESC LIMIT 300")
         if hist.empty:
             st.info("Nenhuma simulação salva.")
@@ -17414,7 +17540,7 @@ def tela_precificacao_profissional():
                     mem = {}
                 st.json(mem, expanded=False)
 
-    with abas[2]:
+    with abas[3]:
         st.subheader("Diagnóstico dos custos cadastrados")
         fix = resumo_custos_fixos()
         dfe = consultar("SELECT nome, valor_pago, vida_util_meses, producao_mensal FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
