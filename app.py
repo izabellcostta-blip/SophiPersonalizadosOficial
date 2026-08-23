@@ -17860,9 +17860,31 @@ def tela_precificacao_profissional():
                 st.download_button("📥 Baixar catálogo em PDF", data=pdf_catalogo, file_name=nome_pdf, mime="application/pdf", use_container_width=True)
                 if whatsapp_cliente_envio.strip():
                     numero = "".join(c for c in whatsapp_cliente_envio if c.isdigit())
-                    saudacao = f"Olá, {nome_cliente_envio.strip()}! " if nome_cliente_envio.strip() else "Olá! "
-                    msg = saudacao + "Separei este catálogo da Sophi Personalizados para você. Escolha os produtos que mais gostar e me chame para personalizarmos seu pedido."
-                    link = link_whatsapp(numero, msg)
+
+                    # Usa EXATAMENTE a mensagem salva em "Mensagem padrão".
+                    # Não acrescenta saudação nem substitui o texto salvo.
+                    mensagem_salva_catalogo = obter_config(
+                        "catalogo_mensagem_padrao",
+                        "Olá! 🖤\\n\\nPreparei nosso catálogo com algumas opções de produtos personalizados que podem combinar com o que você está procurando.\\n\\nDá uma olhadinha e, se gostar de algum, me chama que preparo seu orçamento personalizado. 😊\\n\\nSophi Personalizados\\nEternizando momentos desde 2018."
+                    )
+
+                    # Permite uma personalização pontual antes do envio, sem alterar a mensagem padrão.
+                    mensagem_cliente_catalogo = st.text_area(
+                        "💬 Mensagem que será enviada ao cliente",
+                        value=mensagem_salva_catalogo,
+                        height=150,
+                        key="prof_catalogo_mensagem_cliente_envio",
+                        help="Esta caixa começa exatamente com a mensagem salva acima. Você pode alterar somente este envio, se quiser."
+                    )
+
+                    # Se a mensagem tiver {cliente}, preenche apenas esse marcador.
+                    if "{cliente}" in mensagem_cliente_catalogo:
+                        mensagem_cliente_catalogo = mensagem_cliente_catalogo.replace(
+                            "{cliente}",
+                            nome_cliente_envio.strip() or "cliente"
+                        )
+
+                    link = link_whatsapp(numero, mensagem_cliente_catalogo)
                     st.link_button("💬 Abrir WhatsApp e enviar catálogo", link, use_container_width=True)
                     st.caption("O PDF é baixado pelo botão acima para você anexar na conversa do WhatsApp.")
                 else:
