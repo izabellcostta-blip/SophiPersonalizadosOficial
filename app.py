@@ -15278,14 +15278,23 @@ def aplicar_css_login_premium():
     }
 
     .login-forgot-wrap {
+        width: min(430px, 100%);
+        box-sizing: border-box;
         text-align: center;
-        margin-top: 10px;
+        margin: 10px auto 0 !important;
+    }
+
+    /* Mantém o botão de recuperação exatamente centralizado com o login. */
+    .login-forgot-wrap + div[data-testid="stButton"] {
+        width: min(430px, 100%) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
     }
 
     .login-footer {
         width: min(430px, 100%);
         box-sizing: border-box;
-        margin-top: 20px;
+        margin: 20px auto 0 !important;
         padding-top: 14px;
         border-top: 1px solid rgba(0,0,0,0.08);
         color: #777777;
@@ -15294,6 +15303,14 @@ def aplicar_css_login_premium():
         line-height: 1.5;
     }
     .login-footer strong { color: #111111; }
+
+    /* Os elementos de login que o Streamlit renderiza fora do HTML
+       também ficam presos à mesma largura e ao mesmo centro do cartão. */
+    div[data-testid="stButton"] {
+        width: min(430px, 100%) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
