@@ -263,7 +263,7 @@ def real4(valor):
 
 
 def hoje_iso():
-    return date.today().isoformat()
+    return agora_brasil().date().isoformat()
 
 
 def obter_config(chave, padrao=""):
@@ -1718,9 +1718,9 @@ def gerar_html_orcamento(orc_id):
     try:
         ano_orc = pd.to_datetime(o["data_orcamento"], errors="coerce").year
         if pd.isna(ano_orc):
-            ano_orc = datetime.now().year
+            ano_orc = agora_brasil().year
     except Exception:
-        ano_orc = datetime.now().year
+        ano_orc = agora_brasil().year
     codigo_orcamento = codigo_visual("ORC", orc_id, ano=int(ano_orc))
     itens = consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=?", (int(orc_id),))
 
@@ -1747,9 +1747,9 @@ def gerar_html_orcamento(orc_id):
     empresa = obter_config("nome_empresa", EMPRESA)
     validade = obter_config("validade_orcamento", "7")
     try:
-        prazo_entrega = (datetime.now().date() + timedelta(days=int(n(validade, 7)))).strftime("%d/%m/%Y")
+        prazo_entrega = (agora_brasil().date() + timedelta(days=int(n(validade, 7)))).strftime("%d/%m/%Y")
     except Exception:
-        prazo_entrega = (datetime.now().date() + timedelta(days=7)).strftime("%d/%m/%Y")
+        prazo_entrega = (agora_brasil().date() + timedelta(days=7)).strftime("%d/%m/%Y")
     instagram = obter_config("instagram", "")
     whatsapp = obter_config("whatsapp", "")
     pix = obter_config("pix", "")
@@ -2087,7 +2087,7 @@ def produtos_favoritos_df():
 
 
 def aniversariantes_mes_df():
-    mes_atual = f"{datetime.now().month:02d}"
+    mes_atual = f"{agora_brasil().month:02d}"
     clientes = consultar("""
     SELECT id, nome, whatsapp, aniversario
     FROM clientes
@@ -2778,7 +2778,7 @@ def tela_tarefas_dia():
 
     with aba_calendario:
         st.subheader("🗓️ Escolha um dia")
-        dia_escolhido = st.date_input("Ver tarefas de", value=hoje_dt, key="tarefas_dia_calendario")
+        dia_escolhido = st.date_input("Ver tarefas de", value=hoje_dt, format="DD/MM/YYYY", key="tarefas_dia_calendario")
         dia_iso = dia_escolhido.strftime("%Y-%m-%d")
         df_dia = consultar("SELECT * FROM tarefas_dia WHERE data_tarefa=? ORDER BY CASE WHEN COALESCE(hora,'')='' THEN '99:99' ELSE hora END ASC, id DESC", (dia_iso,))
         st.caption(f"{len(df_dia)} tarefa(s) em {dia_escolhido.strftime('%d/%m/%Y')}")
@@ -6451,7 +6451,7 @@ def tela_vendas_pdv():
             k1,k2,k3=st.columns(3); k1.metric("Recebido",real(valor_aplicado)); k2.metric("Saldo",real(saldo)); k3.metric("Troco",real(troco))
             st.caption(f"Taxas: {real(taxa_cartao)} • Líquido previsto: {real(valor_aplicado-taxa_cartao)} • {status}")
             status_prod=st.selectbox("Status do pedido",["Aguardando","Em produção","Pronto","Entregue","Não se aplica"])
-            data_entrega=st.date_input("Previsão de entrega",value=date.today())
+            data_entrega=st.date_input("Previsão de entrega", value=agora_brasil().date(), format="DD/MM/YYYY")
             observacoes=st.text_area("Observações gerais",height=80)
             salvar_cliente=st.checkbox("Salvar cliente no cadastro",value=False,disabled=cliente_id is not None)
 
