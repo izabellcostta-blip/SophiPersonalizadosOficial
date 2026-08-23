@@ -17204,6 +17204,98 @@ def _status_preco(margem_real, lucro):
     return "🟢 Excelente", "O preço cobre os custos e mantém uma margem forte."
 
 
+
+
+def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
+    """Gera um PDF comercial simples do catálogo selecionado, sem alterar o banco."""
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    import base64
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    largura, altura = A4
+    margem = 15 * mm
+
+    def desenhar_cabecalho():
+        c.setFillColor(colors.black)
+        c.rect(0, altura - 34 * mm, largura, 34 * mm, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 19)
+        c.drawString(margem, altura - 15 * mm, "SOPHI PERSONALIZADOS")
+        c.setFont("Helvetica", 10)
+        c.drawString(margem, altura - 22 * mm, titulo)
+        c.setFillColor(colors.black)
+
+    desenhar_cabecalho()
+    y = altura - 48 * mm
+
+    for idx, (_, produto) in enumerate(produtos_df.iterrows()):
+        card_h = 66 * mm
+        if y - card_h < 15 * mm:
+            c.showPage()
+            desenhar_cabecalho()
+            y = altura - 48 * mm
+
+        x = margem
+        w = largura - 2 * margem
+        c.setStrokeColor(colors.HexColor("#dddddd"))
+        c.roundRect(x, y-card_h, w, card_h, 8, fill=0, stroke=1)
+
+        foto = foto_produto_data_uri(produto.get("foto", ""))
+        if foto:
+            try:
+                if foto.startswith("data:image"):
+                    raw = base64.b64decode(foto.split(",", 1)[1])
+                    img = ImageReader(BytesIO(raw))
+                else:
+                    img = ImageReader(foto)
+                c.drawImage(img, x+5*mm, y-card_h+5*mm, width=48*mm, height=48*mm, preserveAspectRatio=True, anchor='c', mask='auto')
+            except Exception:
+                pass
+
+        tx = x + 58 * mm
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(tx, y - 12 * mm, str(produto.get("nome", "Produto"))[:58])
+        c.setFont("Helvetica", 9.5)
+        c.drawString(tx, y - 20 * mm, f"Categoria: {str(produto.get('categoria', '') or 'Sem categoria')[:45]}")
+        preco = n(produto.get("preco_escolhido", 0)) or n(produto.get("preco_sugerido", 0))
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(tx, y - 29 * mm, f"A partir de {real(preco)}")
+        desc = str(produto.get("descricao_catalogo", "") or "").strip()
+        if desc:
+            c.setFont("Helvetica", 9)
+            palavras = desc.split()
+            linha = ""
+            yy = y - 38 * mm
+            for palavra in palavras:
+                teste = (linha + " " + palavra).strip()
+                if len(teste) > 55:
+                    c.drawString(tx, yy, teste)
+                    yy -= 4.5 * mm
+                    linha = palavra
+                    if yy < y - 58 * mm:
+                        break
+                else:
+                    linha = teste
+            if linha and yy >= y - 58 * mm:
+                c.drawString(tx, yy, linha)
+
+        y -= card_h + 7 * mm
+
+    c.setFont("Helvetica", 8)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.drawCentredString(largura/2, 8*mm, "Produtos personalizados sob encomenda • Consulte disponibilidade e personalização.")
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def tela_precificacao_profissional():
     _garantir_tabelas_gestao_ia()
     st.markdown("""
@@ -17545,9 +17637,15 @@ def tela_precificacao_profissional():
                     st.rerun()
 
     with abas[1]:
-        st.subheader("Catálogo de produtos salvos")
-        busca_catalogo = st.text_input("🔎 Buscar produto no catálogo", placeholder="Digite o nome ou categoria", key="prof_busca_catalogo")
-        catalogo = consultar("SELECT * FROM produtos WHERE ativo='Sim' ORDER BY categoria, nome")
+        st.subheader("📚 Catálogo de produtos")
+        st.caption("Sua vitrine interna de produtos. Edite, oculte, exclua ou prepare um catálogo para enviar ao cliente.")
+
+        busca_catalogo = st.text_input(
+            "🔎 Buscar produto no catálogo",
+            placeholder="Digite nome ou categoria",
+            key="prof_busca_catalogo",
+        )
+        catalogo = consultar("SELECT * FROM produtos ORDER BY categoria, nome")
         if busca_catalogo.strip() and not catalogo.empty:
             termo = busca_catalogo.strip()
             mask = (
@@ -17556,32 +17654,134 @@ def tela_precificacao_profissional():
             )
             catalogo = catalogo[mask]
 
+        # ---------------- EDITAR PRODUTO ----------------
+        editar_id = st.session_state.get("prof_catalogo_editar_id")
+        if editar_id:
+            edit_df = consultar("SELECT * FROM produtos WHERE id=?", (int(editar_id),))
+            if not edit_df.empty:
+                produto_edit = edit_df.iloc[0]
+                st.markdown("### ✏️ Editar produto")
+                with st.form(f"form_editar_produto_{int(editar_id)}"):
+                    e1, e2 = st.columns([2, 1])
+                    nome_edit = e1.text_input("Nome do produto", value=str(produto_edit.get("nome", "")))
+                    categoria_edit = e2.text_input("Categoria", value=str(produto_edit.get("categoria", "")))
+                    d1, d2, d3 = st.columns(3)
+                    qtd_lote_edit = d1.number_input("Quantidade por lote", min_value=0.0, value=n(produto_edit.get("qtd_por_lote", 0)), step=1.0)
+                    qtd_folha_edit = d2.number_input("Rendimento por folha/base", min_value=0.0, value=n(produto_edit.get("qtd_por_folha", 0)), step=1.0)
+                    preco_edit = d3.number_input("Preço escolhido / unidade", min_value=0.0, value=n(produto_edit.get("preco_escolhido", 0)), step=0.01, format="%.2f")
+                    p1, p2, p3 = st.columns(3)
+                    custo_edit = p1.number_input("Custo unitário", min_value=0.0, value=n(produto_edit.get("custo_unitario", 0)), step=0.01, format="%.2f")
+                    sugerido_edit = p2.number_input("Preço sugerido / unidade", min_value=0.0, value=n(produto_edit.get("preco_sugerido", 0)), step=0.01, format="%.2f")
+                    margem_edit = p3.number_input("Margem real (%)", min_value=-1000.0, value=n(produto_edit.get("margem_real", 0)), step=0.1, format="%.2f")
+                    desc_edit = st.text_area("Descrição do produto", value=str(produto_edit.get("descricao_catalogo", "") or ""), height=100)
+                    q1, q2, q3 = st.columns(3)
+                    ativo_edit = q1.selectbox("Disponível para orçamentos?", ["Sim", "Não"], index=0 if str(produto_edit.get("ativo", "Sim")) == "Sim" else 1)
+                    favorito_edit = q2.selectbox("Favorito?", ["Não", "Sim"], index=1 if str(produto_edit.get("favorito", "Não")) == "Sim" else 0)
+                    status_edit = q3.selectbox("Status do catálogo", ["Disponível", "Oculto", "Destaque"], index=["Disponível", "Oculto", "Destaque"].index(str(produto_edit.get("status_catalogo", "Disponível"))) if str(produto_edit.get("status_catalogo", "Disponível")) in ["Disponível", "Oculto", "Destaque"] else 0)
+                    nova_foto = st.file_uploader("Trocar foto do produto (opcional)", type=["png", "jpg", "jpeg", "webp"], key=f"prof_edit_foto_{int(editar_id)}")
+                    salvar_edicao = st.form_submit_button("💾 Salvar alterações", use_container_width=True)
+
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    if salvar_edicao:
+                        foto_edit = salvar_upload_produto_data_uri(nova_foto) if nova_foto else str(produto_edit.get("foto", "") or "")
+                        lucro_edit = preco_edit - custo_edit
+                        executar("""
+                            UPDATE produtos
+                            SET nome=?, categoria=?, qtd_por_lote=?, qtd_por_folha=?,
+                                custo_unitario=?, preco_sugerido=?, preco_escolhido=?,
+                                lucro_unitario=?, margem_real=?, ativo=?, favorito=?,
+                                status_catalogo=?, descricao_catalogo=?, foto=?
+                            WHERE id=?
+                        """, (
+                            nome_edit.strip(), categoria_edit.strip(), qtd_lote_edit, qtd_folha_edit,
+                            custo_edit, sugerido_edit, preco_edit, lucro_edit, margem_edit,
+                            ativo_edit, favorito_edit, status_edit, desc_edit.strip(), foto_edit, int(editar_id)
+                        ))
+                        st.session_state.pop("prof_catalogo_editar_id", None)
+                        st.success("Produto atualizado com sucesso.")
+                        st.rerun()
+                with ec2:
+                    if st.button("✖️ Cancelar edição", use_container_width=True, key=f"cancelar_edicao_{int(editar_id)}"):
+                        st.session_state.pop("prof_catalogo_editar_id", None)
+                        st.rerun()
+                st.divider()
+
         if catalogo.empty:
-            st.info("Nenhum produto salvo no catálogo ainda. Faça uma precificação e clique em “Salvar produto no catálogo”.")
+            st.info("Nenhum produto cadastrado no catálogo.")
         else:
-            st.caption(f"{len(catalogo)} produto(s) salvo(s). Eles também ficam disponíveis para seleção nos Orçamentos.")
+            ativos = int((catalogo["ativo"].astype(str) == "Sim").sum()) if "ativo" in catalogo.columns else len(catalogo)
+            st.caption(f"{len(catalogo)} produto(s) cadastrado(s) • {ativos} disponível(is) para orçamento.")
+
+            # ---------------- SELEÇÃO PARA CATÁLOGO AO CLIENTE ----------------
+            st.markdown("### 📤 Enviar catálogo ao cliente")
+            opcoes_envio = {f"#{int(r['id'])} — {r['nome']}": int(r['id']) for _, r in catalogo.iterrows()}
+            selecionados = st.multiselect(
+                "Escolha os produtos que deseja apresentar",
+                list(opcoes_envio.keys()),
+                key="prof_catalogo_envio_selecionados",
+            )
+            if selecionados:
+                cenv1, cenv2 = st.columns([1, 1])
+                nome_cliente_envio = cenv1.text_input("Nome do cliente (opcional)", key="prof_catalogo_cliente_envio")
+                whatsapp_cliente_envio = cenv2.text_input("WhatsApp do cliente (com DDD)", placeholder="(13) 99999-9999", key="prof_catalogo_whatsapp_envio")
+                produtos_envio = catalogo[catalogo["id"].isin([opcoes_envio[x] for x in selecionados])]
+                pdf_catalogo = _catalogo_pdf_produtos(produtos_envio, "Catálogo personalizado")
+                nome_pdf = "catalogo_sophi_personalizados.pdf"
+                st.download_button("📥 Baixar catálogo em PDF", data=pdf_catalogo, file_name=nome_pdf, mime="application/pdf", use_container_width=True)
+                if whatsapp_cliente_envio.strip():
+                    numero = "".join(c for c in whatsapp_cliente_envio if c.isdigit())
+                    saudacao = f"Olá, {nome_cliente_envio.strip()}! " if nome_cliente_envio.strip() else "Olá! "
+                    msg = saudacao + "Separei este catálogo da Sophi Personalizados para você. Escolha os produtos que mais gostar e me chame para personalizarmos seu pedido."
+                    link = link_whatsapp(numero, msg)
+                    st.link_button("💬 Abrir WhatsApp e enviar catálogo", link, use_container_width=True)
+                    st.caption("O PDF é baixado pelo botão acima para você anexar na conversa do WhatsApp.")
+                else:
+                    st.info("Informe o WhatsApp do cliente para abrir a conversa já com a mensagem pronta.")
+
+            st.divider()
+            st.markdown("### 🗂️ Seus produtos")
             for inicio in range(0, len(catalogo), 3):
                 colunas_catalogo = st.columns(3)
                 for coluna, (_, produto) in zip(colunas_catalogo, catalogo.iloc[inicio:inicio + 3].iterrows()):
                     with coluna:
                         foto_src = foto_produto_data_uri(produto.get("foto", ""))
                         if foto_src:
-                            st.markdown(
-                                f'<img src="{foto_src}" style="width:100%;height:180px;object-fit:cover;border-radius:14px;border:1px solid #e9e5df;">',
-                                unsafe_allow_html=True,
-                            )
+                            st.markdown(f'<img src="{foto_src}" style="width:100%;height:180px;object-fit:cover;border-radius:14px;border:1px solid #e9e5df;">', unsafe_allow_html=True)
                         else:
-                            st.markdown(
-                                '<div style="height:180px;border:1px solid #e9e5df;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#777;">Sem foto</div>',
-                                unsafe_allow_html=True,
-                            )
+                            st.markdown('<div style="height:180px;border:1px solid #e9e5df;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#777;">Sem foto</div>', unsafe_allow_html=True)
                         st.markdown(f"**{produto.get('nome', '')}**")
-                        categoria = str(produto.get("categoria", "") or "Sem categoria")
-                        st.caption(categoria)
-                        st.write(f"**Preço por unidade:** {real(n(produto.get('preco_escolhido', 0)) or n(produto.get('preco_sugerido', 0)))}")
-                        descricao = str(produto.get("descricao_catalogo", "") or "").strip()
-                        if descricao:
-                            st.caption(descricao)
+                        st.caption(str(produto.get("categoria", "") or "Sem categoria"))
+                        preco = n(produto.get('preco_escolhido', 0)) or n(produto.get('preco_sugerido', 0))
+                        st.write(f"**Preço por unidade:** {real(preco)}")
+                        desc = str(produto.get('descricao_catalogo', '') or '').strip()
+                        if desc:
+                            st.caption(desc)
+                        status = str(produto.get("status_catalogo", "Disponível") or "Disponível")
+                        st.caption(f"Status: {status} • Orçamentos: {produto.get('ativo', 'Sim')}")
+                        b1, b2 = st.columns(2)
+                        with b1:
+                            if st.button("✏️ Editar", key=f"editar_produto_catalogo_{int(produto['id'])}", use_container_width=True):
+                                st.session_state["prof_catalogo_editar_id"] = int(produto["id"])
+                                st.rerun()
+                        with b2:
+                            if st.button("🗑️ Excluir", key=f"excluir_produto_catalogo_{int(produto['id'])}", use_container_width=True):
+                                st.session_state["prof_catalogo_excluir_id"] = int(produto["id"])
+                                st.rerun()
+
+                        if st.session_state.get("prof_catalogo_excluir_id") == int(produto["id"]):
+                            st.warning("Tem certeza que deseja excluir este produto? Essa ação não poderá ser desfeita.")
+                            x1, x2 = st.columns(2)
+                            with x1:
+                                if st.button("Sim, excluir", key=f"confirmar_exclusao_{int(produto['id'])}", use_container_width=True):
+                                    executar("DELETE FROM produtos WHERE id=?", (int(produto["id"]),))
+                                    st.session_state.pop("prof_catalogo_excluir_id", None)
+                                    st.success("Produto excluído do catálogo.")
+                                    st.rerun()
+                            with x2:
+                                if st.button("Cancelar", key=f"cancelar_exclusao_{int(produto['id'])}", use_container_width=True):
+                                    st.session_state.pop("prof_catalogo_excluir_id", None)
+                                    st.rerun()
                         st.divider()
 
     with abas[2]:
