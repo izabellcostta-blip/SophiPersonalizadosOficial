@@ -18812,6 +18812,81 @@ def _sexta_da_black_friday(ano):
     return date(ano, 11, primeira_sexta + 21)
 
 
+
+# ========================= CATÁLOGO COMERCIAL DE BOTTONS =========================
+# Esta estrutura pertence somente ao Calendário Comercial.
+CATALOGO_BOTTONS_SOPHI = {
+    "Cliente final": {
+        "🔘 Bottons personalizados": [
+            "Botton com frase", "Botton de casal", "Botton de família",
+            "Botton com foto", "Botton de formatura", "Botton personalizado por tema",
+            "Botton para fãs", "Botton comemorativo", "Botton como lembrancinha",
+        ],
+        "📌 Broches personalizados": [
+            "Broche personalizado", "Broche com frase", "Broche com foto",
+            "Broche para fãs", "Broche personalizado por tema", "Broche com ímã",
+            "Broche para prender", "Broche pendurado em cordão", "Broche para coleção",
+        ],
+        "🔑 Chaveiros personalizados": [
+            "Chaveiro personalizado", "Chaveiro com foto", "Chaveiro com frase",
+            "Chaveiro com tema", "Chaveiro com abridor de garrafa",
+            "Chaveiro com abridor de garrafa na parte traseira", "Chaveiro para lembrancinhas",
+        ],
+        "🧲 Ímãs personalizados": [
+            "Ímã de geladeira com foto", "Ímã com frase", "Ímã de casal",
+            "Ímã de família", "Ímã de pet", "Ímã comemorativo",
+            "Ímã personalizado por tema",
+        ],
+        "🎁 Outros usos": [
+            "Lembrancinhas", "Bottons para festas", "Bottons para eventos",
+            "Bottons comemorativos", "Bottons temáticos", "Kits personalizados de bottons",
+        ],
+    },
+    "Empresas": {
+        "🪪 Crachás e identificação": [
+            "Crachá personalizado", "Crachá redondo", "Crachá com foto do funcionário",
+            "Crachá com logo da empresa", "Crachá para identificação",
+            "Crachá com ioiô retrátil", "Porta-crachá retrátil",
+            "Identificador para cordão de crachá",
+        ],
+        "📌 Broches corporativos": [
+            "Broche corporativo", "Broche com logo da empresa", "Broche de identificação",
+            "Broche para equipes", "Broche para eventos", "Broche comemorativo",
+            "Broche institucional", "Broche promocional",
+        ],
+        "🔑 Chaveiros corporativos": [
+            "Chaveiro corporativo", "Chaveiro com logo", "Chaveiro com foto",
+            "Chaveiro promocional", "Chaveiro para eventos", "Chaveiro para brindes",
+            "Chaveiro com abridor de garrafa",
+        ],
+        "🧲 Ímãs para empresas": [
+            "Ímã com logo da empresa", "Ímã promocional", "Ímã para divulgação",
+            "Ímã institucional", "Ímã para brindes", "Ímã para eventos",
+        ],
+        "📣 Bottons promocionais": [
+            "Bottons promocionais", "Bottons para campanhas", "Bottons para eventos",
+            "Bottons comemorativos", "Bottons institucionais", "Bottons para equipes",
+            "Bottons de identificação", "Bottons para divulgação de empresas",
+            "Bottons para ações promocionais", "Bottons para campanhas internas",
+        ],
+        "🏷️ Identificação e produtos": [
+            "Identificadores de produtos", "Identificadores para embalagens",
+            "Identificação personalizada", "Aplicações promocionais em embalagens",
+            "Brindes comerciais", "Brindes corporativos",
+            "Lembrancinhas empresariais", "Materiais promocionais para divulgação",
+        ],
+    },
+}
+
+FORMATOS_BOTTONS_SOPHI = [
+    "Redondo 32 mm",
+    "Redondo 44 mm",
+    "Redondo 58 mm",
+    "Quadrado 50 × 50 mm",
+]
+# =================================================================================
+
+
 def _datas_comerciais_sophi(ano):
     """Calendário comercial calculado para o ano escolhido, com datas brasileiras atualizadas."""
     pascoa = _pascoa(ano)
@@ -18878,6 +18953,19 @@ def tela_calendario_comercial():
         prazo=(data_evento-timedelta(days=d["prazo"])) if data_evento else None
         linhas.append({**d,"pensar_data":pensar,"divulg_data":divulg,"encom_data":encom,"prazo_data":prazo})
 
+    # O catálogo de bottons entra como uma camada adicional de ideias comerciais,
+    # preservando integralmente as sugestões originais de cada data.
+    bottons_resumo = (
+        "Bottons/itens redondos e quadrados: "
+        "bottons com foto, frase, casal, família, fãs, formatura e comemorativos; "
+        "broches, broches com ímã, broches em cordão, chaveiros com foto/frase, "
+        "chaveiros com abridor, ímãs de geladeira, crachás, crachás com ioiô retrátil, "
+        "identificadores, brindes e materiais promocionais. "
+        "Formatos: 32 mm, 44 mm, 58 mm e quadrado 50 × 50 mm."
+    )
+    for _linha in linhas:
+        _linha["produtos"] = f"{_linha['produtos']} | {bottons_resumo}"
+
     df=pd.DataFrame(linhas)
     df["Data"] = df["data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
     df["Começar"] = df["pensar_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir conforme evento")
@@ -18897,6 +18985,47 @@ def tela_calendario_comercial():
     if opps: exib=exib[exib["oportunidade"].isin(opps)]
     if periodo=="Apenas com data": exib=exib[exib["data"].notna()]
     if periodo=="Próximas campanhas": exib=exib[(exib["data"].notna()) & (exib["data"]>=agora.date())]
+
+    st.markdown("### 🔘 Catálogo comercial — Bottons e produtos da prensa")
+    st.caption("Escolha o público, a família de produto e o formato para encontrar ideias de venda para cada campanha.")
+
+    cat_col1, cat_col2, cat_col3 = st.columns(3)
+    publico_bot = cat_col1.selectbox(
+        "Público",
+        list(CATALOGO_BOTTONS_SOPHI.keys()),
+        key="cal_bot_publico",
+    )
+    familias_bot = list(CATALOGO_BOTTONS_SOPHI[publico_bot].keys())
+    familia_bot = cat_col2.selectbox(
+        "Tipo de produto",
+        ["Todos"] + familias_bot,
+        key="cal_bot_familia",
+    )
+    formato_bot = cat_col3.selectbox(
+        "Formato",
+        ["Todos"] + FORMATOS_BOTTONS_SOPHI,
+        key="cal_bot_formato",
+    )
+
+    if familia_bot == "Todos":
+        itens_bot = []
+        for _familia, _itens in CATALOGO_BOTTONS_SOPHI[publico_bot].items():
+            for _item_bot in _itens:
+                itens_bot.append((_familia, _item_bot))
+    else:
+        itens_bot = [(familia_bot, x) for x in CATALOGO_BOTTONS_SOPHI[publico_bot][familia_bot]]
+
+    st.markdown(f"**{publico_bot} · {len(itens_bot)} ideias de produto**")
+    colunas_bot = st.columns(2)
+    for _i, (_familia, _item_bot) in enumerate(itens_bot):
+        with colunas_bot[_i % 2]:
+            st.markdown(f"**{_item_bot}**  \n`{formato_bot if formato_bot != 'Todos' else '32 / 44 / 58 mm ou 50 × 50 mm'}`")
+            st.caption(_familia)
+
+    st.info(
+        "💡 Os formatos redondos são 32 mm, 44 mm e 58 mm. "
+        "O formato quadrado é 50 × 50 mm. Escolha o formato conforme o acessório/produto."
+    )
 
     st.markdown("### 🗓️ Visão anual")
     st.dataframe(exib[["nome","categoria","oportunidade","Começar","Divulgação","Encomendas até","Prazo","Data"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade","Data":"Data do evento"}),use_container_width=True,hide_index=True)
@@ -18919,7 +19048,16 @@ def tela_calendario_comercial():
             st.info("Essa é uma campanha contínua/variável. Defina a data assim que o cliente ou evento confirmar.")
 
         st.markdown("### 💡 Ideias para vender")
+        st.caption("As sugestões abaixo mantêm as ideias originais da data e incluem as possibilidades do catálogo de bottons.")
         st.write(linha["produtos"])
+        st.markdown("#### 🔘 Aplicações de bottons para esta campanha")
+        st.write(
+            "Cliente final: bottons com foto/frase, casal, família, fãs, formatura, broches, "
+            "broches com ímã, broches em cordão, chaveiros, chaveiros com abridor, ímãs e lembrancinhas. "
+            "Empresas: crachás, crachás com foto/logo, crachás com ioiô retrátil, broches corporativos, "
+            "identificadores, chaveiros corporativos, ímãs promocionais, bottons de campanhas, eventos, "
+            "datas comemorativas, equipes, instituições, divulgação, produtos e embalagens."
+        )
         st.markdown("### 📱 Ideias de conteúdo")
         st.write(linha["conteudo"])
         st.markdown("### 🧠 Roteiro de campanha")
