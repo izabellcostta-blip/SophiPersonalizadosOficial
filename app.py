@@ -18986,46 +18986,8 @@ def tela_calendario_comercial():
     if periodo=="Apenas com data": exib=exib[exib["data"].notna()]
     if periodo=="Próximas campanhas": exib=exib[(exib["data"].notna()) & (exib["data"]>=agora.date())]
 
-    st.markdown("### 🔘 Catálogo comercial — Bottons e produtos da prensa")
-    st.caption("Escolha o público, a família de produto e o formato para encontrar ideias de venda para cada campanha.")
-
-    cat_col1, cat_col2, cat_col3 = st.columns(3)
-    publico_bot = cat_col1.selectbox(
-        "Público",
-        list(CATALOGO_BOTTONS_SOPHI.keys()),
-        key="cal_bot_publico",
-    )
-    familias_bot = list(CATALOGO_BOTTONS_SOPHI[publico_bot].keys())
-    familia_bot = cat_col2.selectbox(
-        "Tipo de produto",
-        ["Todos"] + familias_bot,
-        key="cal_bot_familia",
-    )
-    formato_bot = cat_col3.selectbox(
-        "Formato",
-        ["Todos"] + FORMATOS_BOTTONS_SOPHI,
-        key="cal_bot_formato",
-    )
-
-    if familia_bot == "Todos":
-        itens_bot = []
-        for _familia, _itens in CATALOGO_BOTTONS_SOPHI[publico_bot].items():
-            for _item_bot in _itens:
-                itens_bot.append((_familia, _item_bot))
-    else:
-        itens_bot = [(familia_bot, x) for x in CATALOGO_BOTTONS_SOPHI[publico_bot][familia_bot]]
-
-    st.markdown(f"**{publico_bot} · {len(itens_bot)} ideias de produto**")
-    colunas_bot = st.columns(2)
-    for _i, (_familia, _item_bot) in enumerate(itens_bot):
-        with colunas_bot[_i % 2]:
-            st.markdown(f"**{_item_bot}**  \n`{formato_bot if formato_bot != 'Todos' else '32 / 44 / 58 mm ou 50 × 50 mm'}`")
-            st.caption(_familia)
-
-    st.info(
-        "💡 Os formatos redondos são 32 mm, 44 mm e 58 mm. "
-        "O formato quadrado é 50 × 50 mm. Escolha o formato conforme o acessório/produto."
-    )
+    # Catálogo comercial unificado: tudo fica no mesmo fluxo do calendário.
+    # Bottons é uma opção de produto, não um bloco separado do calendário.
 
     st.markdown("### 🗓️ Visão anual")
     st.dataframe(exib[["nome","categoria","oportunidade","Começar","Divulgação","Encomendas até","Prazo","Data"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade","Data":"Data do evento"}),use_container_width=True,hide_index=True)
@@ -19047,17 +19009,59 @@ def tela_calendario_comercial():
         else:
             st.info("Essa é uma campanha contínua/variável. Defina a data assim que o cliente ou evento confirmar.")
 
-        st.markdown("### 💡 Ideias para vender")
-        st.caption("As sugestões abaixo mantêm as ideias originais da data e incluem as possibilidades do catálogo de bottons.")
-        st.write(linha["produtos"])
-        st.markdown("#### 🔘 Aplicações de bottons para esta campanha")
-        st.write(
-            "Cliente final: bottons com foto/frase, casal, família, fãs, formatura, broches, "
-            "broches com ímã, broches em cordão, chaveiros, chaveiros com abridor, ímãs e lembrancinhas. "
-            "Empresas: crachás, crachás com foto/logo, crachás com ioiô retrátil, broches corporativos, "
-            "identificadores, chaveiros corporativos, ímãs promocionais, bottons de campanhas, eventos, "
-            "datas comemorativas, equipes, instituições, divulgação, produtos e embalagens."
+        st.markdown("### 💡 Ideias e produtos para esta data")
+        st.caption("Agora tudo fica junto: escolha o público e depois selecione os produtos que você quer oferecer nesta campanha.")
+
+        publico_data = st.radio(
+            "👥 Esta campanha será para",
+            ["Cliente final", "Empresa", "Ambos"],
+            horizontal=True,
+            key=f"cal_publico_{ano}_{linha['nome']}"
         )
+
+        # Monta uma única lista de produtos: Bottons aparece como a primeira opção,
+        # seguido pelas demais possibilidades comerciais, sem criar um catálogo separado.
+        opcoes_unificadas = ["🔘 Bottons"]
+        if publico_data in ["Cliente final", "Ambos"]:
+            for _familia, _itens in CATALOGO_BOTTONS_SOPHI["Cliente final"].items():
+                opcoes_unificadas.extend([f"{_item}" for _item in _itens])
+        if publico_data in ["Empresa", "Ambos"]:
+            for _familia, _itens in CATALOGO_BOTTONS_SOPHI["Empresas"].items():
+                opcoes_unificadas.extend([f"{_item}" for _item in _itens])
+
+        # Todas as ideias de produtos já existentes no calendário também entram na mesma lista.
+        for _linha_catalogo in linhas:
+            for _produto in str(_linha_catalogo["produtos"]).split(" | "):
+                for _parte in _produto.split(","):
+                    _parte = _parte.strip()
+                    if _parte and _parte not in opcoes_unificadas and "Bottons/itens redondos" not in _parte:
+                        opcoes_unificadas.append(_parte)
+
+        # Remove duplicidades preservando a ordem e mantém Bottons no topo.
+        opcoes_unificadas = list(dict.fromkeys(opcoes_unificadas))
+
+        p1, p2 = st.columns([3, 1])
+        produtos_escolhidos = p1.multiselect(
+            "🛍️ O que vou oferecer nesta data",
+            opcoes_unificadas,
+            default=["🔘 Bottons"] if "🔘 Bottons" in opcoes_unificadas else [],
+            key=f"cal_produtos_{ano}_{linha['nome']}",
+            help="Você pode selecionar vários produtos. Bottons é uma opção como qualquer outra."
+        )
+        formato_data = p2.selectbox(
+            "📐 Formato dos bottons",
+            ["Não se aplica"] + FORMATOS_BOTTONS_SOPHI,
+            key=f"cal_formato_{ano}_{linha['nome']}"
+        )
+
+        st.markdown("**Sugestões originais desta data:**")
+        st.write(linha["produtos"].replace(" | " + bottons_resumo, ""))
+
+        if "🔘 Bottons" in produtos_escolhidos:
+            st.info(
+                "🔘 Bottons selecionado. Você pode trabalhar com redondo 32 mm, 44 mm, 58 mm "
+                "ou quadrado 50 × 50 mm. Os demais produtos também podem ser combinados na mesma campanha."
+            )
         st.markdown("### 📱 Ideias de conteúdo")
         st.write(linha["conteudo"])
         st.markdown("### 🧠 Roteiro de campanha")
@@ -19078,7 +19082,7 @@ def tela_calendario_comercial():
         st.markdown("### 🚀 Minha campanha")
         with st.form(f"form_campanha_{ano}_{linha['nome']}"):
             meta=st.number_input("Meta de vendas (R$)",min_value=0.0,value=0.0,step=50.0)
-            produtos_camp=st.text_area("Produtos que vou oferecer",value=linha["produtos"])
+            produtos_camp=st.text_area("Produtos que vou oferecer",value="; ".join(produtos_escolhidos) if produtos_escolhidos else linha["produtos"].replace(" | " + bottons_resumo, ""))
             observ=st.text_area("Estratégia / observações",placeholder="Ex.: começar 45 dias antes, abrir encomendas 20 dias antes e encerrar 5 dias antes.")
             status=st.selectbox("Status da campanha",["Planejada","Em preparação","Divulgando","Encomendas abertas","Encerrada"])
             if st.form_submit_button("Salvar campanha"):
