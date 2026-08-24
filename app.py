@@ -19950,7 +19950,20 @@ st.sidebar.markdown("""
 
 botao_sair()
 # Central de notificações do Portal — somente leitura/atalho; não altera os demais módulos.
-mostrar_notificacoes_portal_erp()
+# Central de notificações: atualização automática da própria área de notificações.
+# Isso faz o ERP consultar novamente o banco sem exigir F5 ou clicar em outro menu.
+try:
+    if hasattr(st, "fragment"):
+        @st.fragment(run_every="3s")
+        def _notificacoes_portal_auto_refresh():
+            mostrar_notificacoes_portal_erp()
+        _notificacoes_portal_auto_refresh()
+    else:
+        # Compatibilidade com versões antigas do Streamlit: mantém o comportamento existente.
+        mostrar_notificacoes_portal_erp()
+except Exception as _notif_refresh_err:
+    print(f"[PORTAL NOTIFICACAO] Falha no auto-refresh: {_notif_refresh_err}")
+    mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
