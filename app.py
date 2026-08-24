@@ -18802,6 +18802,19 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Compatibilidade com instalações anteriores: garante que a tabela de
+    # notificações tenha todos os campos usados pelas notificações atuais.
+    try:
+        _cols_notif = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+        if "versao" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN versao INTEGER")
+        if "lida" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN lida TEXT DEFAULT 'Não'")
+        if "data" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
+    except Exception:
+        pass
+
     # Permite que cada arte tenha sua própria aprovação/alteração quando houver várias artes no mesmo pedido.
     try:
         colunas_aprov = consultar("PRAGMA table_info(portal_aprovacoes)")["name"].astype(str).tolist()
@@ -18845,12 +18858,23 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
         # Cada ocorrência gera um registro novo, inclusive para novas versões da mesma arte.
         eventos_cliente = {"Arte aprovada", "Alteração de arte", "Pedido aprovado"}
         if str(evento) in eventos_cliente:
-            executar("""
-                INSERT INTO portal_notificacoes
-                    (orcamento_id, token, evento, descricao, versao, lida, data)
-                VALUES (?, ?, ?, ?, ?, 'Não', ?)
-            """, (int(orcamento_id), str(token), str(evento), str(descricao),
-                  int(versao) if versao is not None else None, data_evento))
+            try:
+                executar("""
+                    INSERT INTO portal_notificacoes
+                        (orcamento_id, token, evento, descricao, versao, lida, data)
+                    VALUES (?, ?, ?, ?, ?, 'Não', ?)
+                """, (
+                    int(orcamento_id), str(token), str(evento), str(descricao),
+                    int(versao) if versao is not None else None, data_evento
+                ))
+            except Exception:
+                executar("""
+                    INSERT INTO portal_notificacoes
+                        (orcamento_id, token, evento, descricao, lida, data)
+                    VALUES (?, ?, ?, ?, 'Não', ?)
+                """, (
+                    int(orcamento_id), str(token), str(evento), str(descricao), data_evento
+                ))
     except Exception:
         pass
 
@@ -18870,60 +18894,76 @@ def marcar_notificacao_portal_lida(notificacao_id):
 
 def mostrar_notificacoes_portal_erp():
     import urllib.parse
-    """Mostra no ERP todas as ações do cliente recebidas pelo Portal."""
+    """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
     try:
         garantir_portal_v2()
         notas = consultar("""
             SELECT n.*, o.cliente_nome
             FROM portal_notificacoes n
             LEFT JOIN orcamentos o ON o.id=n.orcamento_id
+            WHERE COALESCE(LOWER(n.lida), 'não') <> 'sim'
             ORDER BY n.id DESC
             LIMIT 50
         """)
-        pendentes = notas[notas['lida'].astype(str).str.lower() != 'sim'] if not notas.empty else notas
-        qtd = len(pendentes)
 
+        qtd = len(notas) if not notas.empty else 0
         st.sidebar.markdown(
-            f'<div style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
+            f'<div id="sophi-notificacoes-titulo" style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
             unsafe_allow_html=True
         )
+
         if notas.empty:
             st.sidebar.caption("Nenhuma notificação do Portal.")
             return
 
         for _, nrow in notas.head(15).iterrows():
-            evento = str(nrow.get('evento') or 'Atualização do Portal')
-            cliente = str(nrow.get('cliente_nome') or 'Cliente')
-            vers = nrow.get('versao')
+            _notif_id_btn = int(nrow["id"])
+            _token_btn = str(nrow.get("token") or "")
+            evento = str(nrow.get("evento") or "Atualização do Portal")
+            cliente = str(nrow.get("cliente_nome") or "Cliente")
+            vers = nrow.get("versao")
             vers_txt = f" · Versão {int(vers)}" if pd.notna(vers) else ""
-            lida = str(nrow.get('lida') or 'Não').lower() == 'sim'
-            prefixo = '✓' if lida else '🔔'
-            st.sidebar.markdown(
-                f'<div style="font-size:11px;font-weight:800;margin-top:7px;">{prefixo} {html.escape(evento)}{html.escape(vers_txt)}</div>'
-                f'<div style="font-size:10px;color:#aaa;margin-bottom:3px;">{html.escape(cliente)}</div>',
-                unsafe_allow_html=True
-            )
-            # Abre o Portal em uma NOVA guia. A própria URL leva o ID da
-            # notificação; ao entrar no Portal, o ERP marca a notificação
-            # como lida. Assim a guia do ERP permanece aberta.
-            _notif_id_btn = int(nrow['id'])
-            _token_btn = str(nrow['token'])
+
             _portal_base_btn = APP_URL_OFICIAL.rstrip("/")
             _portal_link_btn = (
                 f"{_portal_base_btn}/?portal=cliente"
                 f"&token={urllib.parse.quote(_token_btn)}"
                 f"&notificacao={_notif_id_btn}"
             )
+
+            _wrapper_id = f"sophi-notif-{_notif_id_btn}"
             st.sidebar.markdown(
-                f'<a href="{html.escape(_portal_link_btn, quote=True)}" '
-                f'target="_blank" rel="noopener noreferrer" '
-                f'style="display:block;text-align:center;background:#050505;color:#fff;'
-                f'padding:11px 12px;border-radius:12px;font-weight:900;font-size:11px;'
-                f'text-decoration:none;margin:5px 0 9px;">Abrir Portal deste cliente</a>',
+                f"""
+                <div id="{_wrapper_id}" style="margin:7px 0 10px;">
+                    <div style="font-size:11px;font-weight:800;margin-top:7px;">
+                        🔔 {html.escape(evento)}{html.escape(vers_txt)}
+                    </div>
+                    <div style="font-size:10px;color:#aaa;margin-bottom:3px;">
+                        {html.escape(cliente)}
+                    </div>
+                    <a href="{html.escape(_portal_link_btn, quote=True)}"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       onclick="
+                           try {{
+                               this.closest('#{_wrapper_id}').style.display='none';
+                               const t=document.getElementById('sophi-notificacoes-titulo');
+                               if(t) {{
+                                   const m=t.textContent.match(/(\\d+)/);
+                                   if(m) t.textContent='🔔 Notificações ('+Math.max(0,parseInt(m[1],10)-1)+')';
+                               }}
+                           }} catch(e) {{}}
+                       "
+                       style="display:block;text-align:center;background:#050505;color:#fff;
+                              padding:11px 12px;border-radius:12px;font-weight:900;font-size:11px;
+                              text-decoration:none;margin:5px 0 9px;">
+                        Abrir Portal deste cliente
+                    </a>
+                </div>
+                """,
                 unsafe_allow_html=True
             )
     except Exception:
-        # A central de notificações nunca pode impedir a abertura do restante do ERP.
         pass
 
 
