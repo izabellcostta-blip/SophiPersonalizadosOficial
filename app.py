@@ -19956,18 +19956,18 @@ try:
     if hasattr(st, "fragment"):
         @st.fragment(run_every="3s")
         def _notificacoes_portal_auto_refresh():
-            # Dentro de um fragment do Streamlit, a sidebar precisa ser
-            # explicitamente o contexto de escrita. Sem isso, a central
-            # pode desaparecer da barra lateral.
-            with st.sidebar:
-                mostrar_notificacoes_portal_erp()
-        _notificacoes_portal_auto_refresh()
+            mostrar_notificacoes_portal_erp()
+
+        # IMPORTANTE: o contexto da sidebar precisa envolver a CHAMADA
+        # do fragment, e não ficar dentro da função fragment.
+        with st.sidebar:
+            _notificacoes_portal_auto_refresh()
     else:
         # Compatibilidade com versões antigas do Streamlit.
         mostrar_notificacoes_portal_erp()
 except Exception as _notif_refresh_err:
-    # Se o fragment não estiver disponível/compatível, NUNCA esconder
-    # a central: volta imediatamente ao modo normal.
+    # Se o fragment não estiver disponível/compatível, mantém a central
+    # funcionando pelo modo normal.
     print(f"[PORTAL NOTIFICACAO] Auto-refresh indisponível: {_notif_refresh_err}")
     mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
