@@ -18875,6 +18875,8 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
                 """, (
                     int(orcamento_id), str(token), str(evento), str(descricao), data_evento
                 ))
+            enviar_banco_para_nuvem(force=True)
+
     except Exception:
         pass
 
@@ -18888,6 +18890,7 @@ def marcar_notificacao_portal_lida(notificacao_id):
     try:
         if notificacao_id:
             executar("UPDATE portal_notificacoes SET lida='Sim' WHERE id=?", (int(notificacao_id),))
+            enviar_banco_para_nuvem(force=True)
     except Exception:
         pass
 
@@ -18897,6 +18900,10 @@ def mostrar_notificacoes_portal_erp():
     """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
     try:
         garantir_portal_v2()
+        try:
+            baixar_banco_da_nuvem()
+        except Exception:
+            pass
         notas = consultar("""
             SELECT n.*, o.cliente_nome
             FROM portal_notificacoes n
