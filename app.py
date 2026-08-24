@@ -18750,6 +18750,22 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Fila persistente de notificações do Portal para o ERP.
+    # A aprovação do cliente gera uma entrada aqui, independente de o operador
+    # estar ou não com a tela do Portal aberta.
+    executar("""
+    CREATE TABLE IF NOT EXISTS erp_notificacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT DEFAULT 'Portal do Cliente',
+        titulo TEXT NOT NULL,
+        mensagem TEXT NOT NULL,
+        orcamento_id INTEGER,
+        referencia_id INTEGER,
+        lida INTEGER DEFAULT 0,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        chave_unica TEXT UNIQUE
+    )
+    """)
     executar("""
     CREATE TABLE IF NOT EXISTS portal_aprovacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18793,13 +18809,91 @@ def garantir_portal_v2():
     """)
 
 
+def registrar_notificacao_portal(orcamento_id, evento, descricao, referencia_id=None):
+    """Cria uma notificação persistente no ERP para decisões tomadas pelo cliente."""
+    try:
+        oid = int(orcamento_id)
+        evento = str(evento or '').strip()
+        if evento not in {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}:
+            return False
+
+        cliente_nome = "Cliente"
+        try:
+            d = consultar("""
+                SELECT COALESCE(NULLIF(o.cliente_nome,''), c.nome, 'Cliente') AS cliente_nome
+                FROM orcamentos o LEFT JOIN clientes c ON c.id=o.cliente_id
+                WHERE o.id=? LIMIT 1
+            """, (oid,))
+            if not d.empty and str(d.iloc[0].get('cliente_nome') or '').strip():
+                cliente_nome = str(d.iloc[0]['cliente_nome']).strip()
+        except Exception:
+            pass
+
+        if evento == "Arte aprovada":
+            titulo = "✅ Arte aprovada pelo cliente"
+        elif evento == "Alteração de arte":
+            titulo = "✏️ Cliente solicitou alteração na arte"
+        elif evento == "Pedido aprovado":
+            titulo = "✅ Pedido aprovado pelo cliente"
+        else:
+            titulo = "❌ Pedido reprovado pelo cliente"
+
+        mensagem = f"{cliente_nome} — {descricao}"
+        chave = f"portal:{oid}:{evento}:{int(referencia_id) if referencia_id is not None else descricao}"
+        # INSERT OR IGNORE evita duplicar a mesma decisão quando o Streamlit rerodar.
+        executar(
+            "INSERT OR IGNORE INTO erp_notificacoes(tipo,titulo,mensagem,orcamento_id,referencia_id,lida,data,chave_unica) VALUES(?,?,?,?,?,?,?,?)",
+            ("Portal do Cliente", titulo, mensagem, oid, int(referencia_id) if referencia_id is not None else None, 0, agora_brasil().isoformat(), chave)
+        )
+        return True
+    except Exception:
+        return False
+
+
 def portal_evento(orcamento_id, token, evento, descricao):
     try:
         garantir_portal_v2()
         executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
                  (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
+        # Somente decisões do cliente viram notificações no ERP.
+        if str(evento) in {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}:
+            registrar_notificacao_portal(orcamento_id, evento, descricao)
     except Exception:
         pass
+
+
+def contar_notificacoes_portal_nao_lidas():
+    try:
+        garantir_portal_v2()
+        d = consultar("SELECT COUNT(*) AS total FROM erp_notificacoes WHERE COALESCE(lida,0)=0")
+        return int(d.iloc[0]['total']) if not d.empty else 0
+    except Exception:
+        return 0
+
+
+def renderizar_notificacoes_portal():
+    try:
+        garantir_portal_v2()
+        d = consultar("SELECT * FROM erp_notificacoes ORDER BY id DESC LIMIT 50")
+        if d.empty:
+            st.info("Nenhuma notificação do Portal do Cliente.")
+            return
+        for _, r in d.iterrows():
+            lida = int(r.get('lida') or 0) == 1
+            caixa = st.container(border=True) if hasattr(st, 'container') else st
+            with caixa:
+                st.markdown(f"**{r.get('titulo','Notificação')}**")
+                st.write(str(r.get('mensagem') or ''))
+                try:
+                    st.caption(datetime.fromisoformat(str(r.get('data'))).strftime('%d/%m/%Y %H:%M'))
+                except Exception:
+                    st.caption(str(r.get('data') or ''))
+                if not lida:
+                    if st.button("Marcar como lida", key=f"notif_lida_{int(r['id'])}"):
+                        executar("UPDATE erp_notificacoes SET lida=1 WHERE id=?", (int(r['id']),))
+                        st.rerun()
+    except Exception as e:
+        st.warning(f"Não foi possível carregar as notificações: {e}")
 
 
 def _portal_token_v2():
@@ -18967,7 +19061,7 @@ def tela_portal_cliente_publico():
                 b1,b2 = st.columns(2)
                 with b1:
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
-                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
+                        aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
                         portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
                         st.success("Arte aprovada com sucesso!")
@@ -18978,7 +19072,7 @@ def tela_portal_cliente_publico():
                 if st.session_state.get(f"alterar_arte_{a['id']}"):
                     comentario = st.text_area("O que deseja alterar?", key=f"coment_arte_{a['id']}")
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
-                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
+                        aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
                         portal_evento(oid,token,"Alteração de arte",comentario)
                         st.success("Sua solicitação foi enviada para a Sophi.")
@@ -18993,7 +19087,7 @@ def tela_portal_cliente_publico():
     else:
         st.write("Confira os itens, valores e prazo antes de confirmar.")
         if st.button("✅ APROVAR PEDIDO", type="primary", use_container_width=True):
-            executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Pedido","Aprovado","Cliente aprovou o pedido pelo portal"))
+            aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Pedido","Aprovado","Cliente aprovou o pedido pelo portal"))
             try:
                 executar("UPDATE orcamentos SET status='Aprovado' WHERE id=?", (oid,))
             except Exception: pass
@@ -19717,6 +19811,21 @@ st.sidebar.markdown("""
 
 botao_sair()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
+
+# ============================================================
+# NOTIFICAÇÕES — decisões do Portal do Cliente
+# ============================================================
+_notif_qtd = contar_notificacoes_portal_nao_lidas()
+_notif_label = f"🔔 Notificações ({_notif_qtd})" if _notif_qtd else "🔔 Notificações"
+if st.sidebar.button(_notif_label, use_container_width=True, key="abrir_notificacoes_portal"):
+    st.session_state["mostrar_notificacoes_portal"] = True
+
+if st.session_state.get("mostrar_notificacoes_portal"):
+    st.sidebar.markdown("### 🔔 Notificações do Portal")
+    renderizar_notificacoes_portal()
+    if st.sidebar.button("Fechar notificações", use_container_width=True, key="fechar_notificacoes_portal"):
+        st.session_state["mostrar_notificacoes_portal"] = False
+        st.rerun()
 
 menu = st.sidebar.radio(
     "Menu",
