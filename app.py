@@ -18789,7 +18789,10 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
-    # Notificações internas do ERP: um registro independente para cada ação do cliente.
+    # Notificações internas do ERP: UM registro independente para CADA ação do cliente.
+    # A coluna portal_evento_id vincula a notificação ao evento exato do Portal.
+    # Isso permite que o MESMO Portal gere quantas notificações forem necessárias,
+    # inclusive várias aprovações/alterações em versões diferentes da arte.
     executar("""
     CREATE TABLE IF NOT EXISTS portal_notificacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18799,11 +18802,12 @@ def garantir_portal_v2():
         descricao TEXT,
         versao INTEGER,
         lida TEXT DEFAULT 'Não',
-        data TEXT DEFAULT CURRENT_TIMESTAMP
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        portal_evento_id INTEGER
     )
     """)
-    # Compatibilidade com instalações anteriores: garante que a tabela de
-    # notificações tenha todos os campos usados pelas notificações atuais.
+    # Compatibilidade com instalações anteriores: adiciona somente os campos
+    # necessários, sem apagar ou alterar os dados existentes.
     try:
         _cols_notif = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
         if "versao" not in _cols_notif:
@@ -18812,6 +18816,8 @@ def garantir_portal_v2():
             executar("ALTER TABLE portal_notificacoes ADD COLUMN lida TEXT DEFAULT 'Não'")
         if "data" not in _cols_notif:
             executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
+        if "portal_evento_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN portal_evento_id INTEGER")
     except Exception:
         pass
 
@@ -18848,37 +18854,72 @@ def garantir_portal_v2():
 
 
 def portal_evento(orcamento_id, token, evento, descricao, versao=None):
+    """
+    Registra um evento do Portal e, quando for uma ação do cliente, cria
+    uma NOTIFICAÇÃO NOVA e independente no ERP.
+
+    Importante: não existe deduplicação por portal, token, evento ou versão.
+    Portanto, o mesmo Portal pode gerar várias notificações ao longo do tempo:
+    aprovação da versão 1, alteração, aprovação da versão 2, nova alteração,
+    aprovação do pedido etc.
+    """
     try:
         garantir_portal_v2()
+        oid = int(orcamento_id)
+        tok = str(token)
+        evt = str(evento or "").strip()
+        desc = str(descricao or "")
         data_evento = agora_brasil().isoformat()
-        executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
-                 (int(orcamento_id), str(token), str(evento), str(descricao), data_evento))
 
-        # Somente ações feitas pelo CLIENTE no Portal geram notificação no ERP.
-        # Cada ocorrência gera um registro novo, inclusive para novas versões da mesma arte.
-        eventos_cliente = {"Arte aprovada", "Alteração de arte", "Pedido aprovado"}
-        if str(evento) in eventos_cliente:
-            try:
-                executar("""
+        eventos_cliente = {
+            "Arte aprovada",
+            "Alteração de arte",
+            "Pedido aprovado",
+            "Pedido reprovado",
+        }
+
+        # Uma única transação grava primeiro o evento e, se for uma ação
+        # do cliente, a notificação correspondente. Assim cada notificação
+        # fica ligada ao ID EXATO daquele evento, mesmo usando o mesmo Portal.
+        with conectar() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
+                (oid, tok, evt, desc, data_evento),
+            )
+            portal_evento_id = cur.lastrowid
+
+            if evt in eventos_cliente:
+                cur.execute(
+                    """
                     INSERT INTO portal_notificacoes
-                        (orcamento_id, token, evento, descricao, versao, lida, data)
-                    VALUES (?, ?, ?, ?, ?, 'Não', ?)
-                """, (
-                    int(orcamento_id), str(token), str(evento), str(descricao),
-                    int(versao) if versao is not None else None, data_evento
-                ))
-            except Exception:
-                executar("""
-                    INSERT INTO portal_notificacoes
-                        (orcamento_id, token, evento, descricao, lida, data)
-                    VALUES (?, ?, ?, ?, 'Não', ?)
-                """, (
-                    int(orcamento_id), str(token), str(evento), str(descricao), data_evento
-                ))
+                        (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
+                    VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
+                    """,
+                    (
+                        oid,
+                        tok,
+                        evt,
+                        desc,
+                        int(versao) if versao is not None else None,
+                        data_evento,
+                        int(portal_evento_id),
+                    ),
+                )
+
+            conn.commit()
+
+        # Sincroniza somente depois que a transação terminou.
+        # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
+        # confirmada pelo cliente gera uma nova notificação.
+        if evt in eventos_cliente:
             enviar_banco_para_nuvem(force=True)
 
+        return int(portal_evento_id)
+
     except Exception:
-        pass
+        # Mantém o comportamento do ERP sem interromper a tela do Portal.
+        return None
 
 
 def _url_notificacao_portal(notificacao_id, token):
