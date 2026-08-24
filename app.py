@@ -113,10 +113,15 @@ def baixar_banco_da_nuvem():
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         dados = sb.storage.from_(bucket_supabase()).download(SUPABASE_DB_ARQUIVO)
         if dados:
-            DB_PATH.write_bytes(dados)
+            _tmp_db = DB_PATH.with_suffix(DB_PATH.suffix + ".sync_tmp")
+            _tmp_db.write_bytes(dados)
+            if _tmp_db.stat().st_size <= 0:
+                raise RuntimeError("Banco baixado vazio.")
+            _tmp_db.replace(DB_PATH)
             _SYNC_NUVEM_ATIVO = True
             return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao baixar banco: {_sync_err}')
         # Primeira execução: ainda não existe banco na nuvem. O app cria e depois envia.
         _SYNC_NUVEM_ATIVO = True
         return False
@@ -156,7 +161,8 @@ def enviar_banco_para_nuvem(force=False):
             )
         _ULTIMO_UPLOAD_NUVEM = agora
         return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao enviar banco: {_sync_err}')
         return False
 
 
@@ -18914,7 +18920,9 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
         # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
         # confirmada pelo cliente gera uma nova notificação.
         if evt in eventos_cliente:
-            enviar_banco_para_nuvem(force=True)
+            _sync_ok = enviar_banco_para_nuvem(force=True)
+            if _sync_ok is False:
+                print("[PORTAL NOTIFICACAO] Evento gravado, mas o banco não foi sincronizado.")
 
         return int(portal_evento_id)
 
