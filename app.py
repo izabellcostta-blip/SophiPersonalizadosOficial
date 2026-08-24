@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 import base64
 import hashlib
