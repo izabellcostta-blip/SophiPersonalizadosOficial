@@ -15250,43 +15250,185 @@ def obter_credenciais_login():
 
 def tela_login():
     aplicar_css_login_premium()
+
+    # Tela de entrada centralizada — alteração somente visual/layout.
     st.markdown(
         """
         <style>
-        .login-card {
-            max-width: 430px;
-            margin: 7vh auto 0 auto;
+        .login-page {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+        }
+        .login-brand-card {
+            width: 430px;
+            box-sizing: border-box;
+            margin: 0 auto 14px auto;
             background: #ffffff;
             border: 1px solid #e9e9e9;
+            border-top: 2px solid #171717;
             border-radius: 22px;
-            padding: 34px 32px;
+            padding: 28px 24px 22px 24px;
             box-shadow: 0 18px 45px rgba(0,0,0,0.08);
             text-align: center;
         }
+        .login-logo-img {
+            width: 62px;
+            height: 62px;
+            object-fit: contain;
+            border-radius: 16px;
+            display: block;
+            margin: 0 auto 12px auto;
+        }
+        .login-logo-fallback {
+            width: 62px;
+            height: 62px;
+            border-radius: 16px;
+            background: #111;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px auto;
+            font-family: Georgia, serif;
+            font-size: 22px;
+        }
         .login-title {
-            font-family: 'Playfair Display', serif;
-            font-size: 38px;
-            font-weight: 700;
-            color: #000000;
-            margin-bottom: 4px;
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 32px;
+            font-weight: 800;
+            color: #111;
+            line-height: 1;
+            margin: 0;
         }
         .login-subtitle {
-            font-size: 12px;
-            letter-spacing: 2.2px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2.8px;
             text-transform: uppercase;
-            color: #777777;
-            margin-bottom: 18px;
+            color: #111;
+            margin-top: 7px;
         }
         .login-caption {
-            font-size: 13px;
-            color: #777777;
-            margin-bottom: 22px;
+            font-size: 11px;
+            color: #888;
+            margin-top: 7px;
+        }
+        .login-access-box {
+            margin-top: 20px;
+            padding: 15px 14px;
+            background: #f7f7f7;
+            border: 1px solid #e8e8e8;
+            border-radius: 14px;
+            text-align: left;
+        }
+        .login-access-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: #111;
+            margin-bottom: 6px;
+        }
+        .login-access-sub {
+            font-size: 10px;
+            line-height: 1.45;
+            color: #777;
+        }
+        div[data-testid="stForm"] {
+            width: 430px !important;
+            max-width: 430px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box;
+            background: #fff;
+            border: 1px solid #e9e9e9;
+            border-radius: 22px;
+            padding: 20px 20px 14px 20px !important;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
+        }
+        div[data-testid="stTextInput"] input {
+            border-radius: 12px !important;
+            border: 1px solid #e3e3e3 !important;
+            padding: 10px 12px !important;
+            background: #fff !important;
+        }
+        div[data-testid="stFormSubmitButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-forgot-wrap {
+            width: 430px;
+            max-width: 430px;
+            margin: 14px auto 0 auto;
+        }
+        .login-forgot-wrap + div[data-testid="stButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-footer {
+            width: 430px;
+            max-width: 430px;
+            box-sizing: border-box;
+            margin: 18px auto 0 auto;
+            padding: 14px 10px 0 10px;
+            border-top: 1px solid #e5e5e5;
+            text-align: center;
+            color: #777;
+            font-size: 10px;
+            line-height: 1.6;
+        }
+        .login-footer strong {
+            color: #111;
+            font-weight: 700;
+        }
+        @media (max-width: 520px) {
+            .login-brand-card,
+            div[data-testid="stForm"],
+            .login-forgot-wrap,
+            .login-footer { width: min(430px, calc(100vw - 28px)) !important; max-width: min(430px, calc(100vw - 28px)) !important; }
         }
         </style>
-        <div class="login-card">
+        """,
+        unsafe_allow_html=True,
+    )
+
+    logo = obter_config("logo_path", "")
+    logo_html = ""
+    try:
+        if logo and Path(str(logo)).exists():
+            import base64 as _b64
+            _mime = "image/png"
+            _suf = Path(str(logo)).suffix.lower()
+            if _suf in [".jpg", ".jpeg"]:
+                _mime = "image/jpeg"
+            elif _suf == ".webp":
+                _mime = "image/webp"
+            _dados_logo = _b64.b64encode(Path(str(logo)).read_bytes()).decode("ascii")
+            logo_html = f'<img class="login-logo-img" src="data:{_mime};base64,{_dados_logo}" />'
+    except Exception:
+        logo_html = ""
+    if not logo_html:
+        logo_html = '<div class="login-logo-fallback">S</div>'
+
+    st.markdown(
+        f"""
+        <div class="login-brand-card">
+            {logo_html}
             <div class="login-title">Sophi ERP</div>
             <div class="login-subtitle">Personalizados Oficial</div>
-            <div class="login-caption">Acesso restrito ao sistema</div>
+            <div class="login-caption">Eternizando momentos desde 2018</div>
+            <div class="login-access-box">
+                <div class="login-access-title">Acesso ao Sistema</div>
+                <div class="login-access-sub">Entre com seu usuário e sua senha para acessar seu ERP.</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -15299,9 +15441,9 @@ def tela_login():
         st.stop()
 
     with st.form("form_login"):
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar")
+        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", label_visibility="visible")
+        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha", label_visibility="visible")
+        entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
 
         if entrar:
             if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
@@ -15316,6 +15458,23 @@ def tela_login():
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
+    st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
+    esqueci = st.button("Esqueci minha senha", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if esqueci:
+        st.info("Para redefinir sua senha, entre em contato com o administrador do Sophi ERP.")
+
+    st.markdown(
+        """
+        <div class="login-footer">
+            <strong>Sophi Personalizados Oficial</strong><br>
+            Sistema interno • Acesso exclusivo e seguro
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
@@ -18660,21 +18819,6 @@ def garantir_portal_v2():
         ativo TEXT DEFAULT 'Sim'
     )
     """)
-    executar("""
-    CREATE TABLE IF NOT EXISTS portal_notificacoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        orcamento_id INTEGER,
-        token TEXT,
-        arte_id INTEGER,
-        versao INTEGER,
-        evento TEXT,
-        titulo TEXT,
-        mensagem TEXT,
-        portal_url TEXT,
-        lida TEXT DEFAULT 'Não',
-        data TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
 
 
 def portal_evento(orcamento_id, token, evento, descricao):
@@ -18682,74 +18826,6 @@ def portal_evento(orcamento_id, token, evento, descricao):
         garantir_portal_v2()
         executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
                  (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
-        try:
-            ultimo = consultar("SELECT id FROM portal_eventos WHERE orcamento_id=? AND token=? AND evento=? ORDER BY id DESC LIMIT 1", (int(orcamento_id), str(token), str(evento)))
-            return int(ultimo.iloc[0]["id"]) if not ultimo.empty else None
-        except Exception:
-            return None
-    except Exception:
-        return None
-
-
-def registrar_notificacao_portal(orcamento_id, token, evento, titulo, mensagem, arte_id=None, versao=None):
-    """Cria uma notificação ÚNICA para cada ação do cliente no Portal."""
-    try:
-        garantir_portal_v2()
-        oid = int(orcamento_id)
-        tok = str(token or gerar_token_portal("Orçamento", oid))
-        portal_url = f"{APP_URL_OFICIAL.rstrip('/')}/?portal=cliente&token={urllib.parse.quote(tok)}"
-        executar("INSERT INTO portal_notificacoes(orcamento_id,token,arte_id,versao,evento,titulo,mensagem,portal_url,lida,data) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                 (oid, tok, int(arte_id) if arte_id is not None else None, int(versao) if versao is not None else None, str(evento), str(titulo), str(mensagem), portal_url, "Não", agora_brasil().isoformat()))
-        return True
-    except Exception:
-        return False
-
-
-def marcar_notificacao_portal_lida(notificacao_id):
-    try:
-        garantir_portal_v2()
-        executar("UPDATE portal_notificacoes SET lida='Sim' WHERE id=?", (int(notificacao_id),))
-    except Exception:
-        pass
-
-
-def tratar_notificacao_portal_aberta():
-    """Quando o ERP abre o Portal por uma notificação, marca somente aquela como lida."""
-    try:
-        nid = str(st.query_params.get("notificacao_id", "") or "").strip()
-        if nid.isdigit():
-            marcar_notificacao_portal_lida(int(nid))
-            try:
-                st.query_params.pop("notificacao_id", None)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
-def mostrar_notificacoes_portal_erp():
-    """Central de notificações persistentes das ações do cliente no Portal."""
-    try:
-        garantir_portal_v2()
-        pend = consultar("SELECT * FROM portal_notificacoes WHERE COALESCE(lida,'Não')='Não' ORDER BY id DESC LIMIT 30")
-        total = int(len(pend)) if not pend.empty else 0
-        if total:
-            st.sidebar.markdown(f"### 🔔 Notificações ({total})")
-            for _, n in pend.iterrows():
-                titulo = html.escape(str(n.get('titulo') or 'Nova atividade do cliente'))
-                mensagem = html.escape(str(n.get('mensagem') or ''))
-                url = str(n.get('portal_url') or '')
-                nid = int(n.get('id'))
-                url_completa = url + ("&" if "?" in url else "?") + f"notificacao_id={nid}"
-                st.sidebar.markdown(
-                    f"<div style='padding:10px 0;border-bottom:1px solid rgba(255,255,255,.15)'>"
-                    f"<a href='{html.escape(url_completa, quote=True)}' target='_blank' style='text-decoration:none;color:inherit'>"
-                    f"<b>🔔 {titulo}</b><br><small>{mensagem}</small><br><small>↗ Abrir Portal deste cliente</small>"
-                    f"</a></div>",
-                    unsafe_allow_html=True
-                )
-        else:
-            st.sidebar.caption("🔔 Nenhuma nova notificação do Portal.")
     except Exception:
         pass
 
@@ -18811,7 +18887,6 @@ def tela_portal_cliente_publico():
     aplicar_visual_publico_limpo()
     garantir_portal_v2()
     token = _portal_token_v2()
-    tratar_notificacao_portal_aberta()
     t, orc, _ = _portal_contexto_v2(token)
     if t is None or orc is None or orc.empty:
         st.error("Link inválido ou pedido não encontrado.")
@@ -18922,13 +18997,7 @@ def tela_portal_cliente_publico():
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
-                        portal_evento(oid,token,"Arte aprovada",f"Cliente aprovou a arte versão {int(a.get('versao') or 1)}.")
-                        registrar_notificacao_portal(
-                            oid, token, "Arte aprovada",
-                            f"Arte aprovada — versão {int(a.get('versao') or 1)}",
-                            f"O cliente {nome} aprovou a arte versão {int(a.get('versao') or 1)}.",
-                            arte_id=int(a['id']), versao=int(a.get('versao') or 1)
-                        )
+                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
                         st.success("Arte aprovada com sucesso!")
                         st.rerun()
                 with b2:
@@ -18940,12 +19009,6 @@ def tela_portal_cliente_publico():
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
                         portal_evento(oid,token,"Alteração de arte",comentario)
-                        registrar_notificacao_portal(
-                            oid, token, "Alteração de arte",
-                            f"Alteração solicitada — versão {int(a.get('versao') or 1)}",
-                            f"O cliente {nome} solicitou alteração na arte versão {int(a.get('versao') or 1)}. Comentário: {comentario or 'Sem comentário.'}",
-                            arte_id=int(a['id']), versao=int(a.get('versao') or 1)
-                        )
                         st.success("Sua solicitação foi enviada para a Sophi.")
                         st.rerun()
 
@@ -18963,11 +19026,6 @@ def tela_portal_cliente_publico():
                 executar("UPDATE orcamentos SET status='Aprovado' WHERE id=?", (oid,))
             except Exception: pass
             portal_evento(oid,token,"Pedido aprovado","Cliente aprovou o pedido pelo portal.")
-            registrar_notificacao_portal(
-                oid, token, "Pedido aprovado",
-                "Pedido aprovado pelo cliente",
-                f"O cliente {nome} aprovou o pedido {codigo} pelo Portal do Cliente."
-            )
             st.success("Pedido aprovado! A Sophi recebeu a confirmação.")
             st.rerun()
 
@@ -19686,7 +19744,6 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 botao_sair()
-mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
