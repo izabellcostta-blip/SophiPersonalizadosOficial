@@ -18869,6 +18869,7 @@ def marcar_notificacao_portal_lida(notificacao_id):
 
 
 def mostrar_notificacoes_portal_erp():
+    import urllib.parse
     """Mostra no ERP todas as ações do cliente recebidas pelo Portal."""
     try:
         garantir_portal_v2()
@@ -18902,31 +18903,25 @@ def mostrar_notificacoes_portal_erp():
                 f'<div style="font-size:10px;color:#aaa;margin-bottom:3px;">{html.escape(cliente)}</div>',
                 unsafe_allow_html=True
             )
-            # O botão precisa executar uma ação no servidor ANTES de abrir o Portal.
-            # st.sidebar.link_button() apenas navega para a URL e, por isso, não
-            # consegue garantir que a notificação seja marcada como lida.
-            # Aqui marcamos primeiro e só depois direcionamos para o Portal.
+            # Abre o Portal em uma NOVA guia. A própria URL leva o ID da
+            # notificação; ao entrar no Portal, o ERP marca a notificação
+            # como lida. Assim a guia do ERP permanece aberta.
             _notif_id_btn = int(nrow['id'])
             _token_btn = str(nrow['token'])
-            if st.sidebar.button(
-                "Abrir Portal deste cliente",
-                use_container_width=True,
-                key=f"abrir_not_portal_{_notif_id_btn}"
-            ):
-                marcar_notificacao_portal_lida(_notif_id_btn)
-                try:
-                    st.query_params.clear()
-                    st.query_params["portal"] = "cliente"
-                    st.query_params["token"] = _token_btn
-                    st.query_params["notificacao"] = str(_notif_id_btn)
-                    st.rerun()
-                except Exception:
-                    # Fallback para instalações Streamlit antigas.
-                    st.session_state["abrir_portal_notificacao"] = {
-                        "id": _notif_id_btn,
-                        "token": _token_btn,
-                    }
-                    st.rerun()
+            _portal_base_btn = APP_URL_OFICIAL.rstrip("/")
+            _portal_link_btn = (
+                f"{_portal_base_btn}/?portal=cliente"
+                f"&token={urllib.parse.quote(_token_btn)}"
+                f"&notificacao={_notif_id_btn}"
+            )
+            st.sidebar.markdown(
+                f'<a href="{html.escape(_portal_link_btn, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer" '
+                f'style="display:block;text-align:center;background:#050505;color:#fff;'
+                f'padding:11px 12px;border-radius:12px;font-weight:900;font-size:11px;'
+                f'text-decoration:none;margin:5px 0 9px;">Abrir Portal deste cliente</a>',
+                unsafe_allow_html=True
+            )
     except Exception:
         # A central de notificações nunca pode impedir a abertura do restante do ERP.
         pass
@@ -19831,6 +19826,12 @@ def tela_impressao_etiquetas():
 # Acesso público do Portal do Cliente sem login.
 try:
     if st.query_params.get("portal", "") == "cliente":
+        try:
+            _notif_publico = st.query_params.get("notificacao", "")
+            if _notif_publico:
+                marcar_notificacao_portal_lida(int(_notif_publico))
+        except Exception:
+            pass
         tela_portal_cliente_publico()
         st.stop()
 except Exception:
