@@ -18789,6 +18789,19 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Notificações internas do ERP: um registro independente para cada ação do cliente.
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_notificacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        token TEXT,
+        evento TEXT NOT NULL,
+        descricao TEXT,
+        versao INTEGER,
+        lida TEXT DEFAULT 'Não',
+        data TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
     # Permite que cada arte tenha sua própria aprovação/alteração quando houver várias artes no mesmo pedido.
     try:
         colunas_aprov = consultar("PRAGMA table_info(portal_aprovacoes)")["name"].astype(str).tolist()
@@ -18821,12 +18834,83 @@ def garantir_portal_v2():
     """)
 
 
-def portal_evento(orcamento_id, token, evento, descricao):
+def portal_evento(orcamento_id, token, evento, descricao, versao=None):
     try:
         garantir_portal_v2()
+        data_evento = agora_brasil().isoformat()
         executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
-                 (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
+                 (int(orcamento_id), str(token), str(evento), str(descricao), data_evento))
+
+        # Somente ações feitas pelo CLIENTE no Portal geram notificação no ERP.
+        # Cada ocorrência gera um registro novo, inclusive para novas versões da mesma arte.
+        eventos_cliente = {"Arte aprovada", "Alteração de arte", "Pedido aprovado"}
+        if str(evento) in eventos_cliente:
+            executar("""
+                INSERT INTO portal_notificacoes
+                    (orcamento_id, token, evento, descricao, versao, lida, data)
+                VALUES (?, ?, ?, ?, ?, 'Não', ?)
+            """, (int(orcamento_id), str(token), str(evento), str(descricao),
+                  int(versao) if versao is not None else None, data_evento))
     except Exception:
+        pass
+
+
+def _url_notificacao_portal(notificacao_id, token):
+    base = APP_URL_OFICIAL.rstrip('/')
+    return f"{base}/?portal=cliente&token={token}&notificacao={int(notificacao_id)}"
+
+
+def marcar_notificacao_portal_lida(notificacao_id):
+    try:
+        if notificacao_id:
+            executar("UPDATE portal_notificacoes SET lida='Sim' WHERE id=?", (int(notificacao_id),))
+    except Exception:
+        pass
+
+
+def mostrar_notificacoes_portal_erp():
+    """Mostra no ERP todas as ações do cliente recebidas pelo Portal."""
+    try:
+        garantir_portal_v2()
+        notas = consultar("""
+            SELECT n.*, o.cliente_nome
+            FROM portal_notificacoes n
+            LEFT JOIN orcamentos o ON o.id=n.orcamento_id
+            ORDER BY n.id DESC
+            LIMIT 50
+        """)
+        pendentes = notas[notas['lida'].astype(str).str.lower() != 'sim'] if not notas.empty else notas
+        qtd = len(pendentes)
+
+        st.sidebar.markdown(
+            f'<div style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
+            unsafe_allow_html=True
+        )
+        if notas.empty:
+            st.sidebar.caption("Nenhuma notificação do Portal.")
+            return
+
+        for _, nrow in notas.head(15).iterrows():
+            evento = str(nrow.get('evento') or 'Atualização do Portal')
+            cliente = str(nrow.get('cliente_nome') or 'Cliente')
+            vers = nrow.get('versao')
+            vers_txt = f" · Versão {int(vers)}" if pd.notna(vers) else ""
+            lida = str(nrow.get('lida') or 'Não').lower() == 'sim'
+            prefixo = '✓' if lida else '🔔'
+            st.sidebar.markdown(
+                f'<div style="font-size:11px;font-weight:800;margin-top:7px;">{prefixo} {html.escape(evento)}{html.escape(vers_txt)}</div>'
+                f'<div style="font-size:10px;color:#aaa;margin-bottom:3px;">{html.escape(cliente)}</div>',
+                unsafe_allow_html=True
+            )
+            url = _url_notificacao_portal(int(nrow['id']), str(nrow['token']))
+            st.sidebar.link_button(
+                "Abrir Portal deste cliente",
+                url,
+                use_container_width=True,
+                key=f"abrir_not_portal_{int(nrow['id'])}"
+            )
+    except Exception:
+        # A central de notificações nunca pode impedir a abertura do restante do ERP.
         pass
 
 
@@ -18887,6 +18971,12 @@ def tela_portal_cliente_publico():
     aplicar_visual_publico_limpo()
     garantir_portal_v2()
     token = _portal_token_v2()
+    try:
+        _notif_id = st.query_params.get("notificacao", "")
+        if _notif_id:
+            marcar_notificacao_portal_lida(int(_notif_id))
+    except Exception:
+        pass
     t, orc, _ = _portal_contexto_v2(token)
     if t is None or orc is None or orc.empty:
         st.error("Link inválido ou pedido não encontrado.")
@@ -18997,7 +19087,7 @@ def tela_portal_cliente_publico():
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
-                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
+                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.", versao=int(a.get("versao") or 1))
                         st.success("Arte aprovada com sucesso!")
                         st.rerun()
                 with b2:
@@ -19008,7 +19098,7 @@ def tela_portal_cliente_publico():
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
-                        portal_evento(oid,token,"Alteração de arte",comentario)
+                        portal_evento(oid,token,"Alteração de arte",comentario, versao=int(a.get("versao") or 1))
                         st.success("Sua solicitação foi enviada para a Sophi.")
                         st.rerun()
 
@@ -19744,6 +19834,8 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 botao_sair()
+# Central de notificações do Portal — somente leitura/atalho; não altera os demais módulos.
+mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
