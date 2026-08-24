@@ -18920,8 +18920,7 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
     except Exception:
         # Mantém o comportamento do ERP sem interromper a tela do Portal.
         return None
-
-
+    return True
 def _url_notificacao_portal(notificacao_id, token):
     base = APP_URL_OFICIAL.rstrip('/')
     return f"{base}/?portal=cliente&token={token}&notificacao={int(notificacao_id)}"
