@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 import base64
 import hashlib
@@ -102,6 +103,112 @@ def bucket_supabase():
         return SUPABASE_BUCKET_PADRAO
 
 
+def _sincronizar_notificacao_portal_nuvem(orcamento_id, token, evento, descricao, versao, data_evento, portal_evento_id):
+    """Envia UMA notificação do Portal como arquivo independente no Storage.
+
+    É um canal complementar somente para notificações. Não substitui nem
+    altera o banco principal do ERP.
+    """
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return False
+
+        sync_id = uuid.uuid4().hex
+        payload = {
+            "sync_id": sync_id,
+            "orcamento_id": int(orcamento_id),
+            "token": str(token),
+            "evento": str(evento or ""),
+            "descricao": str(descricao or ""),
+            "versao": int(versao) if versao is not None else None,
+            "data": str(data_evento or ""),
+            "portal_evento_id": int(portal_evento_id) if portal_evento_id is not None else None,
+        }
+        caminho = f"portal_notificacoes/{sync_id}.json"
+        conteudo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        sb.storage.from_(bucket_supabase()).upload(
+            caminho,
+            conteudo,
+            {"content-type": "application/json", "upsert": "false"},
+        )
+        return sync_id
+    except Exception as _notif_upload_err:
+        print(f"[PORTAL NOTIFICACAO] Falha no canal de notificação: {_notif_upload_err}")
+        return False
+
+
+def _importar_notificacoes_portal_nuvem():
+    """Importa do Storage as notificações que ainda não estão no SQLite local."""
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return 0
+
+        garantir_portal_v2()
+
+        # Campo técnico apenas para impedir duplicação durante a sincronização.
+        try:
+            cols = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+            if "sync_id" not in cols:
+                executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+                executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+        except Exception:
+            pass
+
+        arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes")
+        if not arquivos:
+            return 0
+
+        importados = 0
+        for item in arquivos:
+            nome = str((item or {}).get("name") or "")
+            if not nome.lower().endswith(".json"):
+                continue
+
+            try:
+                raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
+                if not raw:
+                    continue
+                dados = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
+                sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
+                if not sync_id:
+                    continue
+
+                ja_existe = consultar(
+                    "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
+                    (sync_id,)
+                )
+                if not ja_existe.empty:
+                    continue
+
+                executar(
+                    """INSERT INTO portal_notificacoes
+                       (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
+                       VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
+                    (
+                        int(dados.get("orcamento_id") or 0),
+                        str(dados.get("token") or ""),
+                        str(dados.get("evento") or "Atualização do Portal"),
+                        str(dados.get("descricao") or ""),
+                        int(dados["versao"]) if dados.get("versao") is not None else None,
+                        str(dados.get("data") or agora_brasil().isoformat()),
+                        int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
+                        sync_id,
+                    ),
+                )
+                importados += 1
+            except Exception as _one_notif_err:
+                print(f"[PORTAL NOTIFICACAO] Falha ao importar uma notificação: {_one_notif_err}")
+                continue
+
+        return importados
+    except Exception as _notif_list_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao consultar notificações remotas: {_notif_list_err}")
+        return 0
+
+
 def baixar_banco_da_nuvem():
     """Baixa o banco salvo no Supabase Storage antes do app criar tabelas."""
     global _SYNC_NUVEM_ATIVO
@@ -112,10 +219,15 @@ def baixar_banco_da_nuvem():
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         dados = sb.storage.from_(bucket_supabase()).download(SUPABASE_DB_ARQUIVO)
         if dados:
-            DB_PATH.write_bytes(dados)
+            _tmp_db = DB_PATH.with_suffix(DB_PATH.suffix + ".sync_tmp")
+            _tmp_db.write_bytes(dados)
+            if _tmp_db.stat().st_size <= 0:
+                raise RuntimeError("Banco baixado vazio.")
+            _tmp_db.replace(DB_PATH)
             _SYNC_NUVEM_ATIVO = True
             return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao baixar banco: {_sync_err}')
         # Primeira execução: ainda não existe banco na nuvem. O app cria e depois envia.
         _SYNC_NUVEM_ATIVO = True
         return False
@@ -155,7 +267,8 @@ def enviar_banco_para_nuvem(force=False):
             )
         _ULTIMO_UPLOAD_NUVEM = agora
         return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao enviar banco: {_sync_err}')
         return False
 
 
@@ -263,7 +376,7 @@ def real4(valor):
 
 
 def hoje_iso():
-    return date.today().isoformat()
+    return agora_brasil().date().isoformat()
 
 
 def obter_config(chave, padrao=""):
@@ -1718,9 +1831,9 @@ def gerar_html_orcamento(orc_id):
     try:
         ano_orc = pd.to_datetime(o["data_orcamento"], errors="coerce").year
         if pd.isna(ano_orc):
-            ano_orc = datetime.now().year
+            ano_orc = agora_brasil().year
     except Exception:
-        ano_orc = datetime.now().year
+        ano_orc = agora_brasil().year
     codigo_orcamento = codigo_visual("ORC", orc_id, ano=int(ano_orc))
     itens = consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=?", (int(orc_id),))
 
@@ -1747,9 +1860,9 @@ def gerar_html_orcamento(orc_id):
     empresa = obter_config("nome_empresa", EMPRESA)
     validade = obter_config("validade_orcamento", "7")
     try:
-        prazo_entrega = (datetime.now().date() + timedelta(days=int(n(validade, 7)))).strftime("%d/%m/%Y")
+        prazo_entrega = (agora_brasil().date() + timedelta(days=int(n(validade, 7)))).strftime("%d/%m/%Y")
     except Exception:
-        prazo_entrega = (datetime.now().date() + timedelta(days=7)).strftime("%d/%m/%Y")
+        prazo_entrega = (agora_brasil().date() + timedelta(days=7)).strftime("%d/%m/%Y")
     instagram = obter_config("instagram", "")
     whatsapp = obter_config("whatsapp", "")
     pix = obter_config("pix", "")
@@ -2087,7 +2200,7 @@ def produtos_favoritos_df():
 
 
 def aniversariantes_mes_df():
-    mes_atual = f"{datetime.now().month:02d}"
+    mes_atual = f"{agora_brasil().month:02d}"
     clientes = consultar("""
     SELECT id, nome, whatsapp, aniversario
     FROM clientes
@@ -2581,158 +2694,222 @@ def garantir_tarefas_dia():
         prazo TEXT,
         observacoes TEXT,
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-        concluido_em TEXT
+        concluido_em TEXT,
+        hora TEXT,
+        repetir TEXT DEFAULT 'Não repetir'
     )
     """)
+    # Compatibilidade com instalações antigas: acrescenta somente os campos da área Tarefas do Dia.
+    try:
+        cols = consultar("PRAGMA table_info(tarefas_dia)")
+        existentes = set(cols["name"].astype(str).tolist()) if not cols.empty else set()
+        if "hora" not in existentes:
+            executar("ALTER TABLE tarefas_dia ADD COLUMN hora TEXT")
+        if "repetir" not in existentes:
+            executar("ALTER TABLE tarefas_dia ADD COLUMN repetir TEXT DEFAULT 'Não repetir'")
+    except Exception:
+        pass
 
 
 def tela_tarefas_dia():
     garantir_tarefas_dia()
 
     st.title("Tarefas do Dia")
-    st.write("Anote e acompanhe tudo que precisa resolver hoje: WhatsApp, orçamento, arte, pagamento, produção, entrega e pós-venda.")
+    st.caption("Seu lugar para lembrar de tudo que precisa fazer na Sophi Personalizados.")
 
-    hoje = datetime.now().strftime("%Y-%m-%d")
+    hoje_dt = agora_brasil().date()
+    hoje = hoje_dt.strftime("%Y-%m-%d")
 
-    tarefas_hoje = consultar("""
-    SELECT *
-    FROM tarefas_dia
-    WHERE data_tarefa=? AND COALESCE(status, 'Pendente') <> 'Concluída'
-    ORDER BY id DESC
+    # Dados para o painel principal.
+    todas_pendentes = consultar("""
+        SELECT * FROM tarefas_dia
+        WHERE COALESCE(status, 'Pendente') <> 'Concluída'
+        ORDER BY data_tarefa ASC, CASE WHEN COALESCE(hora,'')='' THEN '99:99' ELSE hora END ASC, id DESC
+    """)
+    tarefas_hoje = todas_pendentes[todas_pendentes["data_tarefa"].astype(str) == hoje].copy() if not todas_pendentes.empty else todas_pendentes
+    datas = pd.to_datetime(todas_pendentes["data_tarefa"], errors="coerce").dt.date if not todas_pendentes.empty else pd.Series(dtype=object)
+    atrasadas = todas_pendentes[(datas < hoje_dt)] if not todas_pendentes.empty else todas_pendentes
+    proximas = todas_pendentes[(datas > hoje_dt)] if not todas_pendentes.empty else todas_pendentes
+
+    concluidas_hoje = consultar("""
+        SELECT * FROM tarefas_dia
+        WHERE status='Concluída' AND substr(COALESCE(concluido_em,''),1,10)=?
     """, (hoje,))
 
-    tarefas_pendentes = consultar("""
-    SELECT *
-    FROM tarefas_dia
-    WHERE COALESCE(status, 'Pendente') <> 'Concluída'
-    ORDER BY data_tarefa, id DESC
-    """)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("☀️ Para hoje", len(tarefas_hoje))
+    c2.metric("🔴 Atrasadas", len(atrasadas))
+    c3.metric("📅 Próximas", len(proximas))
+    c4.metric("🟢 Feitas hoje", len(concluidas_hoje))
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Tarefas de hoje", len(tarefas_hoje))
-    c2.metric("Pendentes", len(tarefas_pendentes))
-    c3.metric(
-        "Urgentes",
-        len(tarefas_pendentes[tarefas_pendentes["prioridade"] == "Urgente"])
-        if not tarefas_pendentes.empty and "prioridade" in tarefas_pendentes.columns
-        else 0
-    )
+    total_hoje = len(tarefas_hoje) + len(concluidas_hoje)
+    if total_hoje:
+        progresso = len(concluidas_hoje) / total_hoje
+        st.progress(progresso, text=f"{len(concluidas_hoje)} de {total_hoje} tarefas de hoje concluídas")
 
-    # Visão rápida para o dia a dia: vencidas, hoje e próximas, sem alterar o cadastro existente.
-    hoje_dt = agora_brasil().date()
-    vencidas = tarefas_pendentes[pd.to_datetime(tarefas_pendentes["data_tarefa"], errors="coerce").dt.date < hoje_dt] if not tarefas_pendentes.empty else tarefas_pendentes
-    c4, c5 = st.columns(2)
-    c4.metric("⚠️ Atrasadas", len(vencidas))
-    c5.metric("📅 Próximas", len(tarefas_pendentes) - len(tarefas_hoje) - len(vencidas))
+    # Atalhos de navegação.
+    aba_nova, aba_hoje, aba_atrasadas, aba_proximas, aba_calendario, aba_historico = st.tabs([
+        "➕ Nova tarefa", "☀️ Hoje", "🔴 Atrasadas", "📅 Próximas", "🗓️ Calendário", "🟢 Concluídas"
+    ])
 
-    st.divider()
+    def executar_tarefa(t, acao):
+        tid = int(t["id"])
+        if acao == "concluir":
+            executar("UPDATE tarefas_dia SET status='Concluída', concluido_em=CURRENT_TIMESTAMP WHERE id=?", (tid,))
+            repetir = str(t.get("repetir", "Não repetir") or "Não repetir")
+            if repetir != "Não repetir":
+                try:
+                    base = pd.to_datetime(str(t.get("data_tarefa")), errors="coerce")
+                    if pd.isna(base):
+                        base = pd.Timestamp(hoje_dt)
+                    if repetir == "Todos os dias":
+                        nova_data = base + pd.Timedelta(days=1)
+                    elif repetir == "Toda semana":
+                        nova_data = base + pd.Timedelta(days=7)
+                    elif repetir == "Todo mês":
+                        nova_data = base + pd.DateOffset(months=1)
+                    else:
+                        nova_data = None
+                    if nova_data is not None:
+                        executar("""
+                        INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes, hora, repetir)
+                        VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?, ?, ?)
+                        """, (
+                            str(t.get("titulo", "")), str(t.get("cliente", "") or ""), str(t.get("whatsapp", "") or ""),
+                            str(t.get("tipo", "Outro") or "Outro"), str(t.get("prioridade", "Normal") or "Normal"),
+                            nova_data.strftime("%Y-%m-%d"), str(t.get("prazo", "") or ""), str(t.get("observacoes", "") or ""),
+                            str(t.get("hora", "") or ""), repetir,
+                        ))
+                except Exception:
+                    pass
+        elif acao == "andamento":
+            executar("UPDATE tarefas_dia SET status='Em andamento' WHERE id=?", (tid,))
+        elif acao == "amanha":
+            nova_data = hoje_dt + timedelta(days=1)
+            executar("UPDATE tarefas_dia SET data_tarefa=?, status='Pendente' WHERE id=?", (nova_data.strftime("%Y-%m-%d"), tid))
+        elif acao == "excluir":
+            executar("DELETE FROM tarefas_dia WHERE id=?", (tid,))
+        st.rerun()
 
-    st.subheader("Nova tarefa")
-    with st.form("nova_tarefa_form"):
-        col1, col2 = st.columns(2)
-        titulo = col1.text_input("O que precisa fazer?", placeholder="Ex: responder cliente sobre orçamento da arte")
-        cliente = col2.text_input("Cliente", placeholder="Nome do cliente")
+    def mostrar_tarefas(df, prefixo):
+        if df is None or df.empty:
+            st.info("Nenhuma tarefa nesta lista.")
+            return
+        for _, t in df.iterrows():
+            data_str = str(t.get("data_tarefa", ""))
+            try:
+                data_fmt = pd.to_datetime(data_str).strftime("%d/%m/%Y")
+            except Exception:
+                data_fmt = data_str
+            prioridade = str(t.get("prioridade", "Normal") or "Normal")
+            icone = "🔴" if prioridade == "Urgente" else ("🟠" if prioridade == "Alta" else "⚪")
+            with st.container(border=True):
+                st.markdown(f"### {icone} {str(t.get('titulo',''))}")
+                info = [f"📅 {data_fmt}"]
+                if str(t.get("hora", "") or "").strip():
+                    info.append(f"🕐 {t.get('hora')}")
+                if str(t.get("tipo", "") or "").strip():
+                    info.append(f"🏷️ {t.get('tipo')}")
+                if str(t.get("cliente", "") or "").strip():
+                    info.append(f"👤 {t.get('cliente')}")
+                if str(t.get("repetir", "") or "") != "Não repetir":
+                    info.append(f"🔁 {t.get('repetir')}")
+                st.caption("  •  ".join(info))
+                if str(t.get("prazo", "") or "").strip():
+                    st.write(f"**Prazo:** {t.get('prazo')}")
+                if str(t.get("observacoes", "") or "").strip():
+                    st.write(str(t.get("observacoes")))
 
-        col3, col4 = st.columns(2)
-        whatsapp = col3.text_input("WhatsApp", placeholder="Ex: 13999999999")
-        tipo = col4.selectbox(
-            "Tipo",
-            [
-                "Responder WhatsApp",
-                "Enviar orçamento",
-                "Criar arte",
-                "Ajustar arte",
-                "Aguardando aprovação",
-                "Solicitar pagamento",
-                "Conferir comprovante",
-                "Produção",
-                "Entrega / retirada",
-                "Pós-venda",
-                "Outro",
-            ],
-        )
+                b1, b2, b3, b4, b5 = st.columns(5)
+                with b1:
+                    if st.button("✅ Concluir", key=f"td_concluir_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "concluir")
+                with b2:
+                    if st.button("🔄 Em andamento", key=f"td_andamento_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "andamento")
+                with b3:
+                    if st.button("📅 Amanhã", key=f"td_amanha_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "amanha")
+                with b4:
+                    numero = str(t.get("whatsapp", "") or "")
+                    if numero.strip():
+                        msg = "Olá " + str(t.get("cliente") or "") + "! 🤍\\n\\nPassando para falar sobre: " + str(t.get("titulo") or "") + "\\n\\nEquipe Sophi Personalizados Oficial"
+                        link = link_whatsapp(numero, msg)
+                        if link:
+                            st.link_button("💬 WhatsApp", link, use_container_width=True)
+                    else:
+                        st.empty()
+                with b5:
+                    if st.button("🗑️ Excluir", key=f"td_excluir_{prefixo}_{int(t['id'])}", use_container_width=True):
+                        executar_tarefa(t, "excluir")
 
-        col5, col6, col7 = st.columns(3)
-        prioridade = col5.selectbox("Prioridade", ["Normal", "Alta", "Urgente", "Baixa"])
-        data_tarefa = col6.date_input("Data", value=datetime.now().date())
-        prazo = col7.text_input("Prazo/horário", placeholder="Ex: até 18h")
+    with aba_nova:
+        st.subheader("➕ O que você precisa fazer?")
+        st.caption("Cliente é opcional. Se não tiver cliente, a tarefa continua sendo apenas uma lembrança sua.")
+        with st.form("nova_tarefa_form_intuitiva"):
+            titulo = st.text_input("Tarefa", placeholder="Ex: Comprar papel fotográfico")
+            c1, c2, c3 = st.columns(3)
+            data_tarefa = c1.date_input("📅 Quando?", value=hoje_dt)
+            hora = c2.text_input("🕐 Horário / lembrete", placeholder="Ex: 14:00")
+            prioridade = c3.selectbox("Prioridade", ["Normal", "Alta", "Urgente"])
 
-        observacoes = st.text_area("Observações", placeholder="Detalhes da pendência, resposta, arte, prazo ou pedido.")
+            c4, c5 = st.columns(2)
+            tipo = c4.selectbox("🏷️ Categoria", [
+                "Atendimento", "Orçamento", "Arte", "Produção", "Embalagem", "Entrega / retirada",
+                "Compras", "Financeiro", "Marketing", "Administrativo", "Organização", "Outro"
+            ])
+            repetir = c5.selectbox("🔁 Repetir", ["Não repetir", "Todos os dias", "Toda semana", "Todo mês"])
 
-        salvar = st.form_submit_button("Salvar tarefa")
-        if salvar:
-            if not titulo.strip():
-                st.error("Digite a tarefa.")
-            else:
-                executar("""
-                INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes)
-                VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)
-                """, (titulo, cliente, whatsapp, tipo, prioridade, str(data_tarefa), prazo, observacoes))
-                st.success("Tarefa salva.")
-                st.rerun()
+            c6, c7 = st.columns(2)
+            cliente = c6.text_input("👤 Cliente (opcional)", placeholder="Nome do cliente")
+            whatsapp = c7.text_input("💬 WhatsApp (opcional)", placeholder="13999999999")
+            prazo = st.text_input("Prazo", placeholder="Ex: entregar até 18h")
+            observacoes = st.text_area("Observações", placeholder="Detalhes que você não pode esquecer...")
 
-    st.divider()
-
-    st.subheader("Lista de tarefas")
-    filtro = st.radio("Mostrar", ["Hoje", "Todas pendentes", "Concluídas"], horizontal=True)
-
-    if filtro == "Hoje":
-        df = tarefas_hoje
-    elif filtro == "Todas pendentes":
-        df = tarefas_pendentes
-    else:
-        df = consultar("SELECT * FROM tarefas_dia WHERE status='Concluída' ORDER BY concluido_em DESC LIMIT 200")
-
-    if df.empty:
-        st.info("Nenhuma tarefa encontrada.")
-        return
-
-    for _, t in df.iterrows():
-        with st.container(border=True):
-            st.markdown(f"### {t['titulo']}")
-
-            linha = []
-            if str(t.get("cliente", "") or "").strip():
-                linha.append(f"Cliente: {t.get('cliente')}")
-            if str(t.get("tipo", "") or "").strip():
-                linha.append(f"Tipo: {t.get('tipo')}")
-            if str(t.get("prioridade", "") or "").strip():
-                linha.append(f"Prioridade: {t.get('prioridade')}")
-            if str(t.get("status", "") or "").strip():
-                linha.append(f"Status: {t.get('status')}")
-            if str(t.get("prazo", "") or "").strip():
-                linha.append(f"Prazo: {t.get('prazo')}")
-            if linha:
-                st.write(" | ".join(linha))
-
-            if str(t.get("observacoes", "") or "").strip():
-                st.caption(t.get("observacoes"))
-
-            b1, b2, b3, b4 = st.columns(4)
-
-            with b1:
-                if st.button("Concluir", key=f"tarefa_concluir_{int(t['id'])}", use_container_width=True):
-                    executar("UPDATE tarefas_dia SET status='Concluída', concluido_em=CURRENT_TIMESTAMP WHERE id=?", (int(t["id"]),))
+            if st.form_submit_button("💾 Salvar tarefa", use_container_width=True):
+                if not titulo.strip():
+                    st.error("Digite o que você precisa fazer.")
+                else:
+                    executar("""
+                    INSERT INTO tarefas_dia(titulo, cliente, whatsapp, tipo, prioridade, status, data_tarefa, prazo, observacoes, hora, repetir)
+                    VALUES (?, ?, ?, ?, ?, 'Pendente', ?, ?, ?, ?, ?)
+                    """, (titulo.strip(), cliente.strip(), whatsapp.strip(), tipo, prioridade, str(data_tarefa), prazo.strip(), observacoes.strip(), hora.strip(), repetir))
+                    st.success("Tarefa salva para " + data_tarefa.strftime("%d/%m/%Y") + ".")
                     st.rerun()
 
-            with b2:
-                if st.button("Em andamento", key=f"tarefa_andamento_{int(t['id'])}", use_container_width=True):
-                    executar("UPDATE tarefas_dia SET status='Em andamento' WHERE id=?", (int(t["id"]),))
-                    st.rerun()
+    with aba_hoje:
+        st.subheader(f"☀️ Tarefas de hoje — {hoje_dt.strftime('%d/%m/%Y')}")
+        mostrar_tarefas(tarefas_hoje, "hoje")
 
-            with b3:
-                numero = str(t.get("whatsapp", "") or "")
-                if numero.strip():
-                    msg = "Olá " + str(t.get("cliente") or "") + "! 🤍\\n\\nPassando para falar sobre: " + str(t.get("titulo") or "") + "\\n\\nEquipe Sophi Personalizados Oficial"
-                    link = link_whatsapp(numero, msg)
-                    if link:
-                        st.link_button("WhatsApp", link, use_container_width=True)
+    with aba_atrasadas:
+        st.subheader("🔴 O que ficou para trás")
+        mostrar_tarefas(atrasadas, "atrasadas")
 
-            with b4:
-                if st.button("Excluir", key=f"tarefa_excluir_{int(t['id'])}", use_container_width=True):
-                    executar("DELETE FROM tarefas_dia WHERE id=?", (int(t["id"]),))
-                    st.rerun()
+    with aba_proximas:
+        st.subheader("📅 Próximas tarefas")
+        mostrar_tarefas(proximas, "proximas")
 
+    with aba_calendario:
+        st.subheader("🗓️ Escolha um dia")
+        dia_escolhido = st.date_input("Ver tarefas de", value=hoje_dt, format="DD/MM/YYYY", key="tarefas_dia_calendario")
+        dia_iso = dia_escolhido.strftime("%Y-%m-%d")
+        df_dia = consultar("SELECT * FROM tarefas_dia WHERE data_tarefa=? ORDER BY CASE WHEN COALESCE(hora,'')='' THEN '99:99' ELSE hora END ASC, id DESC", (dia_iso,))
+        st.caption(f"{len(df_dia)} tarefa(s) em {dia_escolhido.strftime('%d/%m/%Y')}")
+        mostrar_tarefas(df_dia, "calendario")
+
+    with aba_historico:
+        st.subheader("🟢 Tarefas concluídas")
+        busca = st.text_input("🔎 Pesquisar tarefa concluída", placeholder="Ex: papel, cliente, pedido...")
+        if busca.strip():
+            termo = f"%{busca.strip()}%"
+            df_conc = consultar("""
+                SELECT * FROM tarefas_dia
+                WHERE status='Concluída' AND (titulo LIKE ? OR cliente LIKE ? OR observacoes LIKE ?)
+                ORDER BY concluido_em DESC LIMIT 300
+            """, (termo, termo, termo))
+        else:
+            df_conc = consultar("SELECT * FROM tarefas_dia WHERE status='Concluída' ORDER BY concluido_em DESC LIMIT 300")
+        mostrar_tarefas(df_conc, "concluidas")
 
 def tela_clientes():
     st.title("Clientes")
@@ -6387,7 +6564,7 @@ def tela_vendas_pdv():
             k1,k2,k3=st.columns(3); k1.metric("Recebido",real(valor_aplicado)); k2.metric("Saldo",real(saldo)); k3.metric("Troco",real(troco))
             st.caption(f"Taxas: {real(taxa_cartao)} • Líquido previsto: {real(valor_aplicado-taxa_cartao)} • {status}")
             status_prod=st.selectbox("Status do pedido",["Aguardando","Em produção","Pronto","Entregue","Não se aplica"])
-            data_entrega=st.date_input("Previsão de entrega",value=date.today())
+            data_entrega=st.date_input("Previsão de entrega", value=agora_brasil().date(), format="DD/MM/YYYY")
             observacoes=st.text_area("Observações gerais",height=80)
             salvar_cliente=st.checkbox("Salvar cliente no cadastro",value=False,disabled=cliente_id is not None)
 
@@ -13162,19 +13339,21 @@ def _gerar_pdf_moldes_bottons(
     background_image_mime="image/jpeg", border_fill_mode="Mesma foto",
     corner_radius_mm=3.0, inner_override_mm=None,
 ):
-    """Exporta para PDF exatamente a composição da prévia A4.
+    """Gera o PDF a partir da MESMA arte SVG usada na prévia.
 
-    A prévia continua sendo gerada pela _botton_svg_preview sem nenhuma
-    alteração. Para o download, o MESMO SVG da prévia é renderizado primeiro
-    como uma imagem PNG de alta resolução e essa única imagem é colocada em
-    uma página A4 física. Assim o PDF não depende da interpretação SVG/PDF
-    do CairoSVG e não fica em branco, sem recalcular ou reposicionar nada.
+    Não redesenha o molde em ReportLab. A única fonte da arte é
+    ``_botton_svg_preview``; o SVG é rasterizado em 300 DPI e colocado
+    em uma página A4 de tamanho físico exato. Isso evita qualquer
+    recalculo/reposicionamento de foto, faixa ou @ durante a exportação.
     """
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
 
+    # Normaliza os parâmetros numéricos antes de exportar.
+    # Alguns widgets/estados do Streamlit podem devolver texto; o SVG aceita,
+    # mas o exportador PDF/CairoSVG não deve receber uma sequência onde espera float.
     def _pdf_float(value, default=0.0):
         try:
             return float(value)
@@ -13189,7 +13368,6 @@ def _gerar_pdf_moldes_bottons(
     if inner_override_mm is not None:
         inner_override_mm = max(_pdf_float(inner_override_mm), 1.0)
 
-    # IMPORTANTE: esta é a mesma função usada para a prévia exibida na tela.
     svg, layout, qty = _botton_svg_preview(
         molde_key, fotos, border_color, bleed_mm, gap_mm, margin_mm,
         legenda_text, legenda_color, legenda_size_mm, show_cut, show_bleed,
@@ -13204,44 +13382,29 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # Remove somente o CSS responsivo do SVG raiz. Nenhuma coordenada, foto,
-    # faixa, borda, marca, corte ou posicionamento da prévia é alterado.
-    svg_export = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
-    svg_export = re.sub(
-        r"<svg([^>]*)>",
-        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
-        svg_export, count=1
-    )
-
-    # Renderiza o MESMO SVG em PNG de alta resolução. Diferentemente de
-    # svg2pdf, isso mantém a renderização completa das imagens incorporadas,
-    # clipPaths, textPath e demais elementos usados pela prévia.
-    png_bytes = cairosvg.svg2png(
-        bytestring=svg_export.encode("utf-8"),
+    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
+    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
-    if not png_bytes:
-        raise RuntimeError("Não foi possível renderizar a prévia para o PDF.")
 
-    # Uma única imagem ocupa exatamente uma página A4. Não há novo cálculo
-    # de posições: a página recebe a folha inteira que acabou de ser renderizada.
-    pdf_buffer = BytesIO()
-    pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
-    pdf.drawImage(
-        ImageReader(BytesIO(png_bytes)),
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(f"Sophi Personalizados - Moldes {molde_key}")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
         0, 0,
         width=A4[0],
         height=A4[1],
         preserveAspectRatio=False,
         mask="auto",
     )
-    pdf.showPage()
-    pdf.save()
-    result = pdf_buffer.getvalue()
-    if len(result) < 1000:
-        raise RuntimeError("O PDF gerado ficou inválido ou vazio.")
-    return result, layout, qty
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _botton_mixed_layout(items, gap_mm=3.0, margin_mm=5.0, a4_w=210.0, a4_h=297.0):
@@ -13318,12 +13481,19 @@ def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
 
 def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm=3.0, margin_mm=5.0,
                                      legenda_text="", legenda_color="#000000", legenda_size_mm=2.5, show_cut=True):
-    """Exporta a folha mista exatamente como a prévia A4 exibida na tela."""
+    """PDF-espelho da prévia mista: usa a própria arte SVG da tela.
+
+    A prévia é a única fonte de verdade. O PDF não redesenha, não calcula
+    posições e não reposiciona o @. A arte é rasterizada em 300 DPI e
+    colocada inteira em uma página A4 física, preservando exatamente a
+    composição que a usuária vê na prévia.
+    """
     from io import BytesIO
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
 
+    # Normaliza os valores numéricos antes da rasterização do PDF.
     def _pdf_float(value, default=0.0):
         try:
             return float(value)
@@ -13334,7 +13504,6 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     margin_mm = max(_pdf_float(margin_mm), 0.0)
     legenda_size_mm = _pdf_float(legenda_size_mm, 2.5)
 
-    # Mesma fonte visual usada na prévia mista. Nenhuma posição é recalculada.
     svg, layout, qty = _botton_mixed_svg_preview(
         items, fotos, border_color, gap_mm, margin_mm,
         legenda_text, legenda_color, legenda_size_mm, show_cut
@@ -13347,37 +13516,28 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    svg_export = re.sub(r"\sstyle='[^']*'", "", svg, count=1)
-    svg_export = re.sub(
-        r"<svg([^>]*)>",
-        r"<svg\1 width='210mm' height='297mm' preserveAspectRatio='none'>",
-        svg_export, count=1
-    )
-
-    png_bytes = cairosvg.svg2png(
-        bytestring=svg_export.encode("utf-8"),
+    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    png = cairosvg.svg2png(
+        bytestring=svg.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
-    if not png_bytes:
-        raise RuntimeError("Não foi possível renderizar a prévia mista para o PDF.")
 
-    pdf_buffer = BytesIO()
-    pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
-    pdf.drawImage(
-        ImageReader(BytesIO(png_bytes)),
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    c.setTitle("Sophi Personalizados - Moldes Mistos")
+    c.drawImage(
+        ImageReader(BytesIO(png)),
         0, 0,
         width=A4[0],
         height=A4[1],
         preserveAspectRatio=False,
         mask="auto",
     )
-    pdf.showPage()
-    pdf.save()
-    result = pdf_buffer.getvalue()
-    if len(result) < 1000:
-        raise RuntimeError("O PDF misto gerado ficou inválido ou vazio.")
-    return result, layout, qty
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue(), layout, qty
 
 
 def _tela_gerador_moldes_mistos():
@@ -13632,6 +13792,54 @@ def tela_gerador_moldes_bottons():
                 st.caption("PDF em A4, tamanho real. Na impressão: 100% / tamanho real e desative 'ajustar à página'.")
         except Exception as exc:
             st.error(f"Não foi possível gerar o PDF: {exc}")
+
+    st.divider()
+    st.subheader("👁️ Visualização da aplicação para o cliente")
+    st.caption("A arte do molde pode ser apresentada aplicada ao produto antes da impressão.")
+
+    aplic_molde = st.selectbox(
+        "Como você quer mostrar este produto?",
+        ["Broche", "Ímã de geladeira", "Crachá retrátil", "Broche com cordão", "Chaveiro"],
+        key="gm_aplicacao_cliente_v1"
+    )
+
+    if fotos:
+        try:
+            from PIL import Image
+            from io import BytesIO
+            imagem_molde = Image.open(BytesIO(fotos[0][0])).convert("RGB")
+            mockup_molde = _mockup_aplicacao_sophi(imagem_molde, aplic_molde)
+            buf_mock = BytesIO()
+            mockup_molde.save(buf_mock, format="PNG")
+            mockup_bytes = buf_mock.getvalue()
+            st.image(mockup_bytes, caption=f"Prévia aplicada — {aplic_molde}", use_container_width=True)
+
+            st.markdown("### 📤 Enviar esta prévia para aprovação")
+            orc_molde = _clientes_com_orcamentos()
+            if not orc_molde.empty:
+                op_molde = {}
+                for _, row in orc_molde.iterrows():
+                    oid = int(row["orcamento_id"])
+                    nome = str(row.get("cliente_nome") or "Cliente")
+                    op_molde[f"#{oid} — {nome} — {str(row.get('data_orcamento') or '')[:10]}"] = oid
+
+                sel_molde = st.selectbox("Orçamento / cliente", list(op_molde.keys()), key="gm_orcamento_aprovacao_v1")
+                obs_molde = st.text_area("Observação para o cliente", value=f"Prévia do seu {aplic_molde}. Confira a arte antes da produção.", height=80, key="gm_obs_aprovacao_v1")
+                if st.button("📤 Enviar prévia do botton para o Portal", use_container_width=True, key="gm_enviar_portal_v1"):
+                    try:
+                        versao = _portal_enviar_arquivo_aprovacao(
+                            op_molde[sel_molde],
+                            mockup_bytes,
+                            f"previa_{molde_key.replace(' ', '_')}_{aplic_molde.replace(' ', '_')}.png",
+                            obs_molde
+                        )
+                        st.success(f"Prévia enviada para o Portal — versão {versao}.")
+                    except Exception as exc:
+                        st.error(f"Não foi possível enviar a prévia: {exc}")
+            else:
+                st.info("Cadastre um orçamento para enviar a prévia ao Portal do Cliente.")
+        except Exception as exc:
+            st.warning(f"Não foi possível gerar a visualização da aplicação: {exc}")
 
     st.divider()
     st.subheader("3. Conferência rápida")
@@ -15155,43 +15363,185 @@ def obter_credenciais_login():
 
 def tela_login():
     aplicar_css_login_premium()
+
+    # Tela de entrada centralizada — alteração somente visual/layout.
     st.markdown(
         """
         <style>
-        .login-card {
-            max-width: 430px;
-            margin: 7vh auto 0 auto;
+        .login-page {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+        }
+        .login-brand-card {
+            width: 430px;
+            box-sizing: border-box;
+            margin: 0 auto 14px auto;
             background: #ffffff;
             border: 1px solid #e9e9e9;
+            border-top: 2px solid #171717;
             border-radius: 22px;
-            padding: 34px 32px;
+            padding: 28px 24px 22px 24px;
             box-shadow: 0 18px 45px rgba(0,0,0,0.08);
             text-align: center;
         }
+        .login-logo-img {
+            width: 62px;
+            height: 62px;
+            object-fit: contain;
+            border-radius: 16px;
+            display: block;
+            margin: 0 auto 12px auto;
+        }
+        .login-logo-fallback {
+            width: 62px;
+            height: 62px;
+            border-radius: 16px;
+            background: #111;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px auto;
+            font-family: Georgia, serif;
+            font-size: 22px;
+        }
         .login-title {
-            font-family: 'Playfair Display', serif;
-            font-size: 38px;
-            font-weight: 700;
-            color: #000000;
-            margin-bottom: 4px;
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 32px;
+            font-weight: 800;
+            color: #111;
+            line-height: 1;
+            margin: 0;
         }
         .login-subtitle {
-            font-size: 12px;
-            letter-spacing: 2.2px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2.8px;
             text-transform: uppercase;
-            color: #777777;
-            margin-bottom: 18px;
+            color: #111;
+            margin-top: 7px;
         }
         .login-caption {
-            font-size: 13px;
-            color: #777777;
-            margin-bottom: 22px;
+            font-size: 11px;
+            color: #888;
+            margin-top: 7px;
+        }
+        .login-access-box {
+            margin-top: 20px;
+            padding: 15px 14px;
+            background: #f7f7f7;
+            border: 1px solid #e8e8e8;
+            border-radius: 14px;
+            text-align: left;
+        }
+        .login-access-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: #111;
+            margin-bottom: 6px;
+        }
+        .login-access-sub {
+            font-size: 10px;
+            line-height: 1.45;
+            color: #777;
+        }
+        div[data-testid="stForm"] {
+            width: 430px !important;
+            max-width: 430px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box;
+            background: #fff;
+            border: 1px solid #e9e9e9;
+            border-radius: 22px;
+            padding: 20px 20px 14px 20px !important;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
+        }
+        div[data-testid="stTextInput"] input {
+            border-radius: 12px !important;
+            border: 1px solid #e3e3e3 !important;
+            padding: 10px 12px !important;
+            background: #fff !important;
+        }
+        div[data-testid="stFormSubmitButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-forgot-wrap {
+            width: 430px;
+            max-width: 430px;
+            margin: 14px auto 0 auto;
+        }
+        .login-forgot-wrap + div[data-testid="stButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-footer {
+            width: 430px;
+            max-width: 430px;
+            box-sizing: border-box;
+            margin: 18px auto 0 auto;
+            padding: 14px 10px 0 10px;
+            border-top: 1px solid #e5e5e5;
+            text-align: center;
+            color: #777;
+            font-size: 10px;
+            line-height: 1.6;
+        }
+        .login-footer strong {
+            color: #111;
+            font-weight: 700;
+        }
+        @media (max-width: 520px) {
+            .login-brand-card,
+            div[data-testid="stForm"],
+            .login-forgot-wrap,
+            .login-footer { width: min(430px, calc(100vw - 28px)) !important; max-width: min(430px, calc(100vw - 28px)) !important; }
         }
         </style>
-        <div class="login-card">
+        """,
+        unsafe_allow_html=True,
+    )
+
+    logo = obter_config("logo_path", "")
+    logo_html = ""
+    try:
+        if logo and Path(str(logo)).exists():
+            import base64 as _b64
+            _mime = "image/png"
+            _suf = Path(str(logo)).suffix.lower()
+            if _suf in [".jpg", ".jpeg"]:
+                _mime = "image/jpeg"
+            elif _suf == ".webp":
+                _mime = "image/webp"
+            _dados_logo = _b64.b64encode(Path(str(logo)).read_bytes()).decode("ascii")
+            logo_html = f'<img class="login-logo-img" src="data:{_mime};base64,{_dados_logo}" />'
+    except Exception:
+        logo_html = ""
+    if not logo_html:
+        logo_html = '<div class="login-logo-fallback">S</div>'
+
+    st.markdown(
+        f"""
+        <div class="login-brand-card">
+            {logo_html}
             <div class="login-title">Sophi ERP</div>
             <div class="login-subtitle">Personalizados Oficial</div>
-            <div class="login-caption">Acesso restrito ao sistema</div>
+            <div class="login-caption">Eternizando momentos desde 2018</div>
+            <div class="login-access-box">
+                <div class="login-access-title">Acesso ao Sistema</div>
+                <div class="login-access-sub">Entre com seu usuário e sua senha para acessar seu ERP.</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -15204,9 +15554,9 @@ def tela_login():
         st.stop()
 
     with st.form("form_login"):
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar")
+        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", label_visibility="visible")
+        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha", label_visibility="visible")
+        entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
 
         if entrar:
             if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
@@ -15221,6 +15571,23 @@ def tela_login():
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
+    st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
+    esqueci = st.button("Esqueci minha senha", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if esqueci:
+        st.info("Para redefinir sua senha, entre em contato com o administrador do Sophi ERP.")
+
+    st.markdown(
+        """
+        <div class="login-footer">
+            <strong>Sophi Personalizados Oficial</strong><br>
+            Sistema interno • Acesso exclusivo e seguro
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
@@ -17157,6 +17524,147 @@ def _status_preco(margem_real, lucro):
     return "🟢 Excelente", "O preço cobre os custos e mantém uma margem forte."
 
 
+
+
+def _catalogo_pdf_produtos(produtos_df, titulo="Catálogo de Produtos"):
+    """Gera o PDF comercial usando as informações configuradas pela Sophi."""
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    import base64
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    largura, altura = A4
+    margem = 15 * mm
+
+    empresa = obter_config("catalogo_nome_empresa", obter_config("catalogo_titulo", "Sophi Personalizados"))
+    slogan = obter_config("catalogo_frase", obter_config("catalogo_slogan", "Eternizando momentos desde 2018"))
+    instagram = obter_config("catalogo_instagram", "@sophipersonalizadosoficial")
+    whatsapp = obter_config("catalogo_whatsapp", obter_config("whatsapp_empresa", ""))
+    site = obter_config("catalogo_site", "")
+    endereco = obter_config("catalogo_endereco", "")
+    email = obter_config("catalogo_email", "")
+    rodape = obter_config("catalogo_rodape", "Entre em contato para personalizar seu pedido.")
+    logo_path = obter_config("catalogo_logo_path", obter_config("logo_path", ""))
+
+    def desenhar_cabecalho():
+        c.setFillColor(colors.black)
+        c.rect(0, altura - 42 * mm, largura, 42 * mm, fill=1, stroke=0)
+
+        # Logo configurada pela loja, quando disponível.
+        if logo_path and Path(str(logo_path)).exists():
+            try:
+                c.drawImage(
+                    str(logo_path), margem, altura - 35 * mm,
+                    width=22 * mm, height=22 * mm,
+                    preserveAspectRatio=True, anchor="c", mask="auto"
+                )
+                x_texto = margem + 27 * mm
+            except Exception:
+                x_texto = margem
+        else:
+            x_texto = margem
+
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(x_texto, altura - 14 * mm, str(empresa)[:42])
+        c.setFont("Helvetica", 9.5)
+        c.drawString(x_texto, altura - 20 * mm, str(slogan)[:75])
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_texto, altura - 28 * mm, str(titulo)[:65])
+
+        contatos = " • ".join(
+            [x for x in [instagram, whatsapp, site] if str(x).strip()]
+        )
+        if contatos:
+            c.setFont("Helvetica", 8)
+            c.drawString(x_texto, altura - 34 * mm, contatos[:115])
+
+    desenhar_cabecalho()
+    y = altura - 56 * mm
+
+    for _, produto in produtos_df.iterrows():
+        card_h = 66 * mm
+        if y - card_h < 18 * mm:
+            c.showPage()
+            desenhar_cabecalho()
+            y = altura - 56 * mm
+
+        x = margem
+        w = largura - 2 * margem
+        c.setStrokeColor(colors.HexColor("#dddddd"))
+        c.roundRect(x, y-card_h, w, card_h, 8, fill=0, stroke=1)
+
+        foto = foto_produto_data_uri(produto.get("foto", ""))
+        if foto:
+            try:
+                if foto.startswith("data:image"):
+                    raw = base64.b64decode(foto.split(",", 1)[1])
+                    img = ImageReader(BytesIO(raw))
+                else:
+                    img = ImageReader(foto)
+                c.drawImage(
+                    img, x+5*mm, y-card_h+5*mm,
+                    width=48*mm, height=48*mm,
+                    preserveAspectRatio=True, anchor="c", mask="auto"
+                )
+            except Exception:
+                pass
+
+        tx = x + 58 * mm
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(tx, y - 12 * mm, str(produto.get("nome", "Produto"))[:58])
+
+        c.setFont("Helvetica", 9.5)
+        c.drawString(tx, y - 20 * mm, f"Categoria: {str(produto.get('categoria', '') or 'Sem categoria')[:45]}")
+
+        preco = n(produto.get("preco_escolhido", 0)) or n(produto.get("preco_sugerido", 0))
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(tx, y - 29 * mm, f"A partir de {real(preco)}")
+
+        desc = str(produto.get("descricao_catalogo", "") or "").strip()
+        if desc:
+            c.setFont("Helvetica", 9)
+            palavras = desc.split()
+            linha = ""
+            yy = y - 38 * mm
+            for palavra in palavras:
+                teste = (linha + " " + palavra).strip()
+                if len(teste) > 55:
+                    c.drawString(tx, yy, teste)
+                    yy -= 4.5 * mm
+                    linha = palavra
+                    if yy < y - 58 * mm:
+                        break
+                else:
+                    linha = teste
+            if linha and yy >= y - 58 * mm:
+                c.drawString(tx, yy, linha)
+
+        y -= card_h + 7 * mm
+
+    # Rodapé comercial configurado pela loja.
+    c.setStrokeColor(colors.HexColor("#dddddd"))
+    c.line(margem, 15 * mm, largura - margem, 15 * mm)
+    c.setFillColor(colors.HexColor("#555555"))
+    c.setFont("Helvetica", 7.5)
+
+    contato_final = " • ".join(
+        [x for x in [instagram, whatsapp, site, email, endereco] if str(x).strip()]
+    )
+    if contato_final:
+        c.drawCentredString(largura / 2, 10.5 * mm, contato_final[:145])
+    c.drawCentredString(largura / 2, 6.5 * mm, str(rodape)[:145])
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def tela_precificacao_profissional():
     _garantir_tabelas_gestao_ia()
     st.markdown("""
@@ -17170,15 +17678,32 @@ def tela_precificacao_profissional():
     </div>
     """, unsafe_allow_html=True)
 
-    abas = st.tabs(["Nova simulação", "Histórico", "Diagnóstico rápido"])
+    abas = st.tabs(["Nova simulação", "Catálogo de produtos", "Histórico", "Diagnóstico rápido"])
 
     with abas[0]:
         c0, c1, c2 = st.columns([2.4, 1, 1])
-        nome_simulacao = c0.text_input("Nome da simulação", placeholder="Ex.: 1.000 cartões de visita laminados")
+        nome_simulacao = c0.text_input("Nome da simulação / produto", placeholder="Ex.: 1.000 cartões de visita laminados")
         qtd_total_lote = c1.number_input("Quantidade final", min_value=1.0, value=1000.0, step=1.0, key="prof_qtd_lote")
         qtd_por_folha = c2.number_input("Rendimento por folha/base", min_value=1.0, value=10.0, step=1.0, key="prof_rend_folha")
         folhas_estimadas = int((qtd_total_lote + qtd_por_folha - 1) // qtd_por_folha)
         st.info(f"Produção estimada: {folhas_estimadas} folhas/bases para {qtd_total_lote:.0f} unidades finais.")
+
+        st.subheader("Dados do produto para o catálogo")
+        ccat1, ccat2 = st.columns([1, 2])
+        with ccat1:
+            foto_upload = st.file_uploader(
+                "Foto do produto",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="prof_foto_produto",
+                help="A foto será salva junto ao produto para reutilização no catálogo e em orçamentos.",
+            )
+        with ccat2:
+            descricao_catalogo = st.text_area(
+                "Descrição do produto",
+                placeholder="Ex.: Botton personalizado 32 mm, acabamento profissional...",
+                height=110,
+                key="prof_descricao_catalogo",
+            )
 
         st.subheader("1. Materiais utilizados")
 
@@ -17409,9 +17934,328 @@ def tela_precificacao_profissional():
                 margem, preco_sugerido, preco_escolhido, lucro_lote, margem_real, concorrente,
                 json.dumps(memoria, ensure_ascii=False), "Simulação interna para atualização no Offstore"
             ))
-            st.success("Simulação salva. Agora você pode atualizar o preço no Offstore.")
+            st.success("Simulação salva no histórico.")
+
+        st.divider()
+        st.subheader("Salvar produto para reutilizar depois")
+        st.caption("Salve a precificação como produto do seu ERP. O produto ficará disponível para novos orçamentos e no catálogo interno da Precificação.")
+        p1, p2, p3 = st.columns([2, 1, 1])
+        with p1:
+            categoria_catalogo = st.text_input(
+                "Categoria do produto",
+                placeholder="Ex.: Bottons, Papelaria, Kits, Adesivos...",
+                key="prof_categoria_catalogo",
+            )
+        with p2:
+            ativo_catalogo = st.selectbox("Disponível para orçamentos?", ["Sim", "Não"], index=0, key="prof_ativo_catalogo")
+        with p3:
+            favorito_catalogo = st.selectbox("Favorito?", ["Não", "Sim"], index=0, key="prof_favorito_catalogo")
+
+        if st.button("💾 Salvar produto no catálogo", type="primary", use_container_width=True, key="prof_salvar_produto_catalogo"):
+            if not nome_simulacao.strip():
+                st.error("Digite o nome do produto antes de salvar.")
+            else:
+                foto_path = salvar_upload_produto_data_uri(foto_upload) if foto_upload else ""
+                dados_produto = {
+                    "nome": nome_simulacao.strip(),
+                    "categoria": categoria_catalogo.strip(),
+                    "qtd_por_lote": qtd_total_lote,
+                    "qtd_por_folha": qtd_por_folha,
+                    "receita_json": json.dumps(receita, ensure_ascii=False),
+                    "tintas_json": json.dumps(tintas, ensure_ascii=False),
+                    "equipamentos_json": json.dumps(equipamentos, ensure_ascii=False),
+                    "tempo_min": tempo_min,
+                    "valor_hora": valor_hora,
+                    "reserva_erro": reserva,
+                    "margem_lucro": margem,
+                    "custo_insumos": custo_insumos_total,
+                    "custo_tintas": custo_tintas_total,
+                    "custo_equipamentos": custo_equip_total,
+                    "custo_fixos": custo_fixos_total,
+                    "custo_mao_obra": custo_mao_obra,
+                    "custo_total_lote": custo_total,
+                    "custo_unitario": custo_unitario,
+                    "preco_sugerido": preco_sugerido_unit,
+                    "preco_escolhido": preco_escolhido_unit,
+                    "lucro_unitario": preco_escolhido_unit - custo_unitario,
+                    "margem_real": margem_real,
+                    "ativo": ativo_catalogo,
+                    "foto": foto_path,
+                    "favorito": favorito_catalogo,
+                    "status_catalogo": "Disponível",
+                    "descricao_catalogo": descricao_catalogo.strip(),
+                }
+
+                # Usa somente colunas que realmente existem no banco, sem alterar outras áreas do ERP.
+                try:
+                    colunas_banco = consultar("PRAGMA table_info(produtos)")["name"].tolist()
+                except Exception:
+                    colunas_banco = []
+
+                dados_produto = {k: v for k, v in dados_produto.items() if k in colunas_banco}
+                if not dados_produto:
+                    st.error("Não foi possível localizar a estrutura de produtos do ERP.")
+                else:
+                    colunas = ", ".join(dados_produto.keys())
+                    placeholders = ", ".join(["?"] * len(dados_produto))
+                    executar(
+                        f"INSERT INTO produtos ({colunas}) VALUES ({placeholders})",
+                        tuple(dados_produto.values()),
+                    )
+                    st.success("Produto salvo no catálogo e disponível para próximos orçamentos.")
+                    st.rerun()
 
     with abas[1]:
+        st.subheader("📚 Catálogo de produtos")
+        st.caption("Sua vitrine interna de produtos. Edite, oculte, exclua ou prepare um catálogo para enviar ao cliente.")
+
+        with st.expander("⚙️ Informações que aparecem no PDF e mensagem para o cliente", expanded=False):
+            st.markdown("#### 🖤 Informações da Sophi no catálogo")
+            s1, s2 = st.columns(2)
+            cat_nome = s1.text_input(
+                "Nome da empresa",
+                value=obter_config("catalogo_nome_empresa", obter_config("catalogo_titulo", "Sophi Personalizados")),
+                key="cat_envio_nome_empresa",
+            )
+            cat_instagram = s1.text_input(
+                "Instagram",
+                value=obter_config("catalogo_instagram", "@sophipersonalizadosoficial"),
+                key="cat_envio_instagram",
+            )
+            cat_whatsapp = s1.text_input(
+                "WhatsApp",
+                value=obter_config("catalogo_whatsapp", obter_config("whatsapp_empresa", "")),
+                key="cat_envio_whatsapp",
+            )
+            cat_site = s1.text_input(
+                "Site",
+                value=obter_config("catalogo_site", ""),
+                key="cat_envio_site",
+            )
+            cat_endereco = s2.text_input(
+                "Endereço",
+                value=obter_config("catalogo_endereco", ""),
+                key="cat_envio_endereco",
+            )
+            cat_email = s2.text_input(
+                "E-mail",
+                value=obter_config("catalogo_email", ""),
+                key="cat_envio_email",
+            )
+            cat_frase = s2.text_input(
+                "Frase de apresentação",
+                value=obter_config("catalogo_frase", obter_config("catalogo_slogan", "Eternizando momentos desde 2018")),
+                key="cat_envio_frase",
+            )
+            cat_rodape = s2.text_area(
+                "Texto de rodapé",
+                value=obter_config("catalogo_rodape", "Entre em contato para personalizar seu pedido."),
+                height=80,
+                key="cat_envio_rodape",
+            )
+            logo_envio = st.file_uploader(
+                "Logo do catálogo (opcional)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="cat_envio_logo",
+            )
+
+            st.markdown("#### 💬 Mensagem padrão para enviar ao cliente")
+            cat_msg = st.text_area(
+                "Mensagem padrão",
+                value=obter_config(
+                    "catalogo_mensagem_padrao",
+                    "Olá! 🖤\n\nPreparei nosso catálogo com algumas opções de produtos personalizados que podem combinar com o que você está procurando.\n\nDá uma olhadinha e, se gostar de algum, me chama que preparo seu orçamento personalizado. 😊\n\nSophi Personalizados\nEternizando momentos desde 2018."
+                ),
+                height=150,
+                key="cat_envio_msg_padrao",
+            )
+
+            if st.button("💾 Salvar informações e mensagem", use_container_width=True, key="cat_envio_salvar_config"):
+                salvar_config("catalogo_nome_empresa", cat_nome.strip())
+                salvar_config("catalogo_instagram", cat_instagram.strip())
+                salvar_config("catalogo_whatsapp", cat_whatsapp.strip())
+                salvar_config("catalogo_site", cat_site.strip())
+                salvar_config("catalogo_endereco", cat_endereco.strip())
+                salvar_config("catalogo_email", cat_email.strip())
+                salvar_config("catalogo_frase", cat_frase.strip())
+                salvar_config("catalogo_rodape", cat_rodape.strip())
+                salvar_config("catalogo_mensagem_padrao", cat_msg.strip())
+
+                if logo_envio is not None:
+                    caminho_logo = salvar_upload(logo_envio, "logo_catalogo_comercial")
+                    salvar_config("catalogo_logo_path", caminho_logo)
+
+                st.success("Informações do catálogo e mensagem salvas.")
+                st.rerun()
+
+
+        busca_catalogo = st.text_input(
+            "🔎 Buscar produto no catálogo",
+            placeholder="Digite nome ou categoria",
+            key="prof_busca_catalogo",
+        )
+        catalogo = consultar("SELECT * FROM produtos ORDER BY categoria, nome")
+        if busca_catalogo.strip() and not catalogo.empty:
+            termo = busca_catalogo.strip()
+            mask = (
+                catalogo["nome"].astype(str).str.contains(termo, case=False, na=False)
+                | catalogo["categoria"].astype(str).str.contains(termo, case=False, na=False)
+            )
+            catalogo = catalogo[mask]
+
+        # ---------------- EDITAR PRODUTO ----------------
+        editar_id = st.session_state.get("prof_catalogo_editar_id")
+        if editar_id:
+            edit_df = consultar("SELECT * FROM produtos WHERE id=?", (int(editar_id),))
+            if not edit_df.empty:
+                produto_edit = edit_df.iloc[0]
+                st.markdown("### ✏️ Editar produto")
+                with st.form(f"form_editar_produto_{int(editar_id)}"):
+                    e1, e2 = st.columns([2, 1])
+                    nome_edit = e1.text_input("Nome do produto", value=str(produto_edit.get("nome", "")))
+                    categoria_edit = e2.text_input("Categoria", value=str(produto_edit.get("categoria", "")))
+                    d1, d2, d3 = st.columns(3)
+                    qtd_lote_edit = d1.number_input("Quantidade por lote", min_value=0.0, value=n(produto_edit.get("qtd_por_lote", 0)), step=1.0)
+                    qtd_folha_edit = d2.number_input("Rendimento por folha/base", min_value=0.0, value=n(produto_edit.get("qtd_por_folha", 0)), step=1.0)
+                    preco_edit = d3.number_input("Preço escolhido / unidade", min_value=0.0, value=n(produto_edit.get("preco_escolhido", 0)), step=0.01, format="%.2f")
+                    p1, p2, p3 = st.columns(3)
+                    custo_edit = p1.number_input("Custo unitário", min_value=0.0, value=n(produto_edit.get("custo_unitario", 0)), step=0.01, format="%.2f")
+                    sugerido_edit = p2.number_input("Preço sugerido / unidade", min_value=0.0, value=n(produto_edit.get("preco_sugerido", 0)), step=0.01, format="%.2f")
+                    margem_edit = p3.number_input("Margem real (%)", min_value=-1000.0, value=n(produto_edit.get("margem_real", 0)), step=0.1, format="%.2f")
+                    desc_edit = st.text_area("Descrição do produto", value=str(produto_edit.get("descricao_catalogo", "") or ""), height=100)
+                    q1, q2, q3 = st.columns(3)
+                    ativo_edit = q1.selectbox("Disponível para orçamentos?", ["Sim", "Não"], index=0 if str(produto_edit.get("ativo", "Sim")) == "Sim" else 1)
+                    favorito_edit = q2.selectbox("Favorito?", ["Não", "Sim"], index=1 if str(produto_edit.get("favorito", "Não")) == "Sim" else 0)
+                    status_edit = q3.selectbox("Status do catálogo", ["Disponível", "Oculto", "Destaque"], index=["Disponível", "Oculto", "Destaque"].index(str(produto_edit.get("status_catalogo", "Disponível"))) if str(produto_edit.get("status_catalogo", "Disponível")) in ["Disponível", "Oculto", "Destaque"] else 0)
+                    nova_foto = st.file_uploader("Trocar foto do produto (opcional)", type=["png", "jpg", "jpeg", "webp"], key=f"prof_edit_foto_{int(editar_id)}")
+                    salvar_edicao = st.form_submit_button("💾 Salvar alterações", use_container_width=True)
+
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    if salvar_edicao:
+                        foto_edit = salvar_upload_produto_data_uri(nova_foto) if nova_foto else str(produto_edit.get("foto", "") or "")
+                        lucro_edit = preco_edit - custo_edit
+                        executar("""
+                            UPDATE produtos
+                            SET nome=?, categoria=?, qtd_por_lote=?, qtd_por_folha=?,
+                                custo_unitario=?, preco_sugerido=?, preco_escolhido=?,
+                                lucro_unitario=?, margem_real=?, ativo=?, favorito=?,
+                                status_catalogo=?, descricao_catalogo=?, foto=?
+                            WHERE id=?
+                        """, (
+                            nome_edit.strip(), categoria_edit.strip(), qtd_lote_edit, qtd_folha_edit,
+                            custo_edit, sugerido_edit, preco_edit, lucro_edit, margem_edit,
+                            ativo_edit, favorito_edit, status_edit, desc_edit.strip(), foto_edit, int(editar_id)
+                        ))
+                        st.session_state.pop("prof_catalogo_editar_id", None)
+                        st.success("Produto atualizado com sucesso.")
+                        st.rerun()
+                with ec2:
+                    if st.button("✖️ Cancelar edição", use_container_width=True, key=f"cancelar_edicao_{int(editar_id)}"):
+                        st.session_state.pop("prof_catalogo_editar_id", None)
+                        st.rerun()
+                st.divider()
+
+        if catalogo.empty:
+            st.info("Nenhum produto cadastrado no catálogo.")
+        else:
+            ativos = int((catalogo["ativo"].astype(str) == "Sim").sum()) if "ativo" in catalogo.columns else len(catalogo)
+            st.caption(f"{len(catalogo)} produto(s) cadastrado(s) • {ativos} disponível(is) para orçamento.")
+
+            # ---------------- SELEÇÃO PARA CATÁLOGO AO CLIENTE ----------------
+            st.markdown("### 📤 Enviar catálogo ao cliente")
+            opcoes_envio = {f"#{int(r['id'])} — {r['nome']}": int(r['id']) for _, r in catalogo.iterrows()}
+            selecionados = st.multiselect(
+                "Escolha os produtos que deseja apresentar",
+                list(opcoes_envio.keys()),
+                key="prof_catalogo_envio_selecionados",
+            )
+            if selecionados:
+                cenv1, cenv2 = st.columns([1, 1])
+                nome_cliente_envio = cenv1.text_input("Nome do cliente (opcional)", key="prof_catalogo_cliente_envio")
+                whatsapp_cliente_envio = cenv2.text_input("WhatsApp do cliente (com DDD)", placeholder="(13) 99999-9999", key="prof_catalogo_whatsapp_envio")
+                produtos_envio = catalogo[catalogo["id"].isin([opcoes_envio[x] for x in selecionados])]
+                pdf_catalogo = _catalogo_pdf_produtos(produtos_envio, "Catálogo personalizado")
+                nome_pdf = "catalogo_sophi_personalizados.pdf"
+                st.download_button("📥 Baixar catálogo em PDF", data=pdf_catalogo, file_name=nome_pdf, mime="application/pdf", use_container_width=True)
+                if whatsapp_cliente_envio.strip():
+                    numero = "".join(c for c in whatsapp_cliente_envio if c.isdigit())
+
+                    # Usa EXATAMENTE a mensagem salva em "Mensagem padrão".
+                    # Não acrescenta saudação nem substitui o texto salvo.
+                    mensagem_salva_catalogo = obter_config(
+                        "catalogo_mensagem_padrao",
+                        "Olá! 🖤\\n\\nPreparei nosso catálogo com algumas opções de produtos personalizados que podem combinar com o que você está procurando.\\n\\nDá uma olhadinha e, se gostar de algum, me chama que preparo seu orçamento personalizado. 😊\\n\\nSophi Personalizados\\nEternizando momentos desde 2018."
+                    )
+
+                    # Permite uma personalização pontual antes do envio, sem alterar a mensagem padrão.
+                    mensagem_cliente_catalogo = st.text_area(
+                        "💬 Mensagem que será enviada ao cliente",
+                        value=mensagem_salva_catalogo,
+                        height=150,
+                        key="prof_catalogo_mensagem_cliente_envio",
+                        help="Esta caixa começa exatamente com a mensagem salva acima. Você pode alterar somente este envio, se quiser."
+                    )
+
+                    # Se a mensagem tiver {cliente}, preenche apenas esse marcador.
+                    if "{cliente}" in mensagem_cliente_catalogo:
+                        mensagem_cliente_catalogo = mensagem_cliente_catalogo.replace(
+                            "{cliente}",
+                            nome_cliente_envio.strip() or "cliente"
+                        )
+
+                    link = link_whatsapp(numero, mensagem_cliente_catalogo)
+                    st.link_button("💬 Abrir WhatsApp e enviar catálogo", link, use_container_width=True)
+                    st.caption("O PDF é baixado pelo botão acima para você anexar na conversa do WhatsApp.")
+                else:
+                    st.info("Informe o WhatsApp do cliente para abrir a conversa já com a mensagem pronta.")
+
+            st.divider()
+            st.markdown("### 🗂️ Seus produtos")
+            for inicio in range(0, len(catalogo), 3):
+                colunas_catalogo = st.columns(3)
+                for coluna, (_, produto) in zip(colunas_catalogo, catalogo.iloc[inicio:inicio + 3].iterrows()):
+                    with coluna:
+                        foto_src = foto_produto_data_uri(produto.get("foto", ""))
+                        if foto_src:
+                            st.markdown(f'<img src="{foto_src}" style="width:100%;height:180px;object-fit:cover;border-radius:14px;border:1px solid #e9e5df;">', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<div style="height:180px;border:1px solid #e9e5df;border-radius:14px;display:flex;align-items:center;justify-content:center;color:#777;">Sem foto</div>', unsafe_allow_html=True)
+                        st.markdown(f"**{produto.get('nome', '')}**")
+                        st.caption(str(produto.get("categoria", "") or "Sem categoria"))
+                        preco = n(produto.get('preco_escolhido', 0)) or n(produto.get('preco_sugerido', 0))
+                        st.write(f"**Preço por unidade:** {real(preco)}")
+                        desc = str(produto.get('descricao_catalogo', '') or '').strip()
+                        if desc:
+                            st.caption(desc)
+                        status = str(produto.get("status_catalogo", "Disponível") or "Disponível")
+                        st.caption(f"Status: {status} • Orçamentos: {produto.get('ativo', 'Sim')}")
+                        b1, b2 = st.columns(2)
+                        with b1:
+                            if st.button("✏️ Editar", key=f"editar_produto_catalogo_{int(produto['id'])}", use_container_width=True):
+                                st.session_state["prof_catalogo_editar_id"] = int(produto["id"])
+                                st.rerun()
+                        with b2:
+                            if st.button("🗑️ Excluir", key=f"excluir_produto_catalogo_{int(produto['id'])}", use_container_width=True):
+                                st.session_state["prof_catalogo_excluir_id"] = int(produto["id"])
+                                st.rerun()
+
+                        if st.session_state.get("prof_catalogo_excluir_id") == int(produto["id"]):
+                            st.warning("Tem certeza que deseja excluir este produto? Essa ação não poderá ser desfeita.")
+                            x1, x2 = st.columns(2)
+                            with x1:
+                                if st.button("Sim, excluir", key=f"confirmar_exclusao_{int(produto['id'])}", use_container_width=True):
+                                    executar("DELETE FROM produtos WHERE id=?", (int(produto["id"]),))
+                                    st.session_state.pop("prof_catalogo_excluir_id", None)
+                                    st.success("Produto excluído do catálogo.")
+                                    st.rerun()
+                            with x2:
+                                if st.button("Cancelar", key=f"cancelar_exclusao_{int(produto['id'])}", use_container_width=True):
+                                    st.session_state.pop("prof_catalogo_excluir_id", None)
+                                    st.rerun()
+                        st.divider()
+
+    with abas[2]:
         hist = consultar("SELECT * FROM historico_precificacoes_simuladas ORDER BY id DESC LIMIT 300")
         if hist.empty:
             st.info("Nenhuma simulação salva.")
@@ -17431,7 +18275,7 @@ def tela_precificacao_profissional():
                     mem = {}
                 st.json(mem, expanded=False)
 
-    with abas[2]:
+    with abas[3]:
         st.subheader("Diagnóstico dos custos cadastrados")
         fix = resumo_custos_fixos()
         dfe = consultar("SELECT nome, valor_pago, vida_util_meses, producao_mensal FROM equipamentos WHERE ativo='Sim' ORDER BY nome")
@@ -17959,8 +18803,44 @@ section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p 
 [data-testid="stTextInput"] input:focus,[data-testid="stNumberInput"] input:focus,[data-testid="stTextArea"] textarea:focus { border-color:#222!important;box-shadow:0 0 0 3px rgba(0,0,0,.06)!important; }
 label[data-testid="stWidgetLabel"] p { color:#3f3f3f!important;font-size:12px!important;font-weight:750!important; }
 
-.stButton button[kind="primary"] { background:linear-gradient(135deg,#d83f5f,#b92849)!important;box-shadow:0 12px 28px rgba(216,63,95,.24)!important; }
-.stButton button[kind="secondary"] { background:#fff!important;color:#111!important;border:1px solid #dedad4!important;box-shadow:none!important; }
+.stButton button[kind="primary"],
+.stButton button[kind="secondary"],
+.stButton button[disabled],
+.stDownloadButton button,
+div[data-testid="stLinkButton"] a {
+    background:#000000 !important;
+    background-color:#000000 !important;
+    background-image:none !important;
+    color:#ffffff !important;
+    border:1px solid #000000 !important;
+    box-shadow:0 10px 24px rgba(0,0,0,.16) !important;
+    font-weight:900 !important;
+    opacity:1 !important;
+    text-shadow:none !important;
+}
+.stButton button[kind="primary"] *,
+.stButton button[kind="secondary"] *,
+.stButton button[disabled] *,
+.stDownloadButton button *,
+div[data-testid="stLinkButton"] a * {
+    color:#ffffff !important;
+    font-weight:900 !important;
+    opacity:1 !important;
+}
+.stButton button:hover,
+.stButton button:focus,
+.stButton button:focus-visible,
+.stButton button:active,
+.stDownloadButton button:hover,
+.stDownloadButton button:focus,
+div[data-testid="stLinkButton"] a:hover {
+    background:#000000 !important;
+    background-color:#000000 !important;
+    background-image:none !important;
+    color:#ffffff !important;
+    border-color:#000000 !important;
+    box-shadow:0 12px 28px rgba(0,0,0,.22) !important;
+}
 
 .stTabs [data-baseweb="tab-list"] { background:rgba(255,255,255,.65);padding:5px;border-radius:16px;border:1px solid rgba(20,20,20,.06);gap:5px; }
 .stTabs [data-baseweb="tab"] { border:0!important;border-radius:11px!important;background:transparent!important;padding:10px 16px; }
@@ -18022,6 +18902,42 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Notificações internas do ERP: UM registro independente para CADA ação do cliente.
+    # A coluna portal_evento_id vincula a notificação ao evento exato do Portal.
+    # Isso permite que o MESMO Portal gere quantas notificações forem necessárias,
+    # inclusive várias aprovações/alterações em versões diferentes da arte.
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_notificacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        token TEXT,
+        evento TEXT NOT NULL,
+        descricao TEXT,
+        versao INTEGER,
+        lida TEXT DEFAULT 'Não',
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        portal_evento_id INTEGER,
+        sync_id TEXT
+    )
+    """)
+    # Compatibilidade com instalações anteriores: adiciona somente os campos
+    # necessários, sem apagar ou alterar os dados existentes.
+    try:
+        _cols_notif = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+        if "versao" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN versao INTEGER")
+        if "lida" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN lida TEXT DEFAULT 'Não'")
+        if "data" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
+        if "portal_evento_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN portal_evento_id INTEGER")
+        if "sync_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+            executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+    except Exception:
+        pass
+
     # Permite que cada arte tenha sua própria aprovação/alteração quando houver várias artes no mesmo pedido.
     try:
         colunas_aprov = consultar("PRAGMA table_info(portal_aprovacoes)")["name"].astype(str).tolist()
@@ -18054,11 +18970,182 @@ def garantir_portal_v2():
     """)
 
 
-def portal_evento(orcamento_id, token, evento, descricao):
+def portal_evento(orcamento_id, token, evento, descricao, versao=None):
+    """
+    Registra um evento do Portal e, quando for uma ação do cliente, cria
+    uma NOTIFICAÇÃO NOVA e independente no ERP.
+
+    Importante: não existe deduplicação por portal, token, evento ou versão.
+    Portanto, o mesmo Portal pode gerar várias notificações ao longo do tempo:
+    aprovação da versão 1, alteração, aprovação da versão 2, nova alteração,
+    aprovação do pedido etc.
+    """
     try:
         garantir_portal_v2()
-        executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
-                 (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
+        oid = int(orcamento_id)
+        tok = str(token)
+        evt = str(evento or "").strip()
+        desc = str(descricao or "")
+        data_evento = agora_brasil().isoformat()
+
+        eventos_cliente = {
+            "Arte aprovada",
+            "Alteração de arte",
+            "Pedido aprovado",
+            "Pedido reprovado",
+        }
+
+        # Uma única transação grava primeiro o evento e, se for uma ação
+        # do cliente, a notificação correspondente. Assim cada notificação
+        # fica ligada ao ID EXATO daquele evento, mesmo usando o mesmo Portal.
+        with conectar() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
+                (oid, tok, evt, desc, data_evento),
+            )
+            portal_evento_id = cur.lastrowid
+
+            if evt in eventos_cliente:
+                cur.execute(
+                    """
+                    INSERT INTO portal_notificacoes
+                        (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
+                    VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
+                    """,
+                    (
+                        oid,
+                        tok,
+                        evt,
+                        desc,
+                        int(versao) if versao is not None else None,
+                        data_evento,
+                        int(portal_evento_id),
+                    ),
+                )
+
+            conn.commit()
+
+        # Sincroniza somente depois que a transação terminou.
+        # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
+        # confirmada pelo cliente gera uma nova notificação.
+        if evt in eventos_cliente:
+            # Canal dedicado: a notificação chega mesmo se a sincronização
+            # do arquivo SQLite estiver atrasada ou em conflito.
+            _notif_sync_id = _sincronizar_notificacao_portal_nuvem(
+                oid, tok, evt, desc, versao, data_evento, portal_evento_id
+            )
+
+            # Mantém também a sincronização tradicional do ERP.
+            _sync_ok = enviar_banco_para_nuvem(force=True)
+            if _sync_ok is False:
+                print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; canal dedicado preservado.")
+            if not _notif_sync_id:
+                print("[PORTAL NOTIFICACAO] Canal dedicado não conseguiu enviar o evento.")
+
+        return int(portal_evento_id)
+
+    except Exception as _portal_evento_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao gravar/sincronizar evento: {_portal_evento_err}")
+        return None
+    return True
+def _url_notificacao_portal(notificacao_id, token):
+    base = APP_URL_OFICIAL.rstrip('/')
+    return f"{base}/?portal=cliente&token={token}&notificacao={int(notificacao_id)}"
+
+
+def marcar_notificacao_portal_lida(notificacao_id):
+    try:
+        if notificacao_id:
+            executar("UPDATE portal_notificacoes SET lida='Sim' WHERE id=?", (int(notificacao_id),))
+            enviar_banco_para_nuvem(force=True)
+    except Exception:
+        pass
+
+
+def mostrar_notificacoes_portal_erp():
+    import urllib.parse
+    """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
+    try:
+        garantir_portal_v2()
+        try:
+            baixar_banco_da_nuvem()
+        except Exception:
+            pass
+
+        # Busca também o canal dedicado. Isso é o que garante a chegada
+        # imediata quando Portal e ERP estão em sessões Railway diferentes.
+        try:
+            _importar_notificacoes_portal_nuvem()
+        except Exception as _notif_import_err:
+            print(f"[PORTAL NOTIFICACAO] Falha na atualização das notificações: {_notif_import_err}")
+
+        notas = consultar("""
+            SELECT n.*, o.cliente_nome
+            FROM portal_notificacoes n
+            LEFT JOIN orcamentos o ON o.id=n.orcamento_id
+            WHERE COALESCE(LOWER(n.lida), 'não') <> 'sim'
+            ORDER BY n.id DESC
+            LIMIT 50
+        """)
+
+        qtd = len(notas) if not notas.empty else 0
+        st.sidebar.markdown(
+            f'<div id="sophi-notificacoes-titulo" style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
+            unsafe_allow_html=True
+        )
+
+        if notas.empty:
+            st.sidebar.caption("Nenhuma notificação do Portal.")
+            return
+
+        for _, nrow in notas.head(15).iterrows():
+            _notif_id_btn = int(nrow["id"])
+            _token_btn = str(nrow.get("token") or "")
+            evento = str(nrow.get("evento") or "Atualização do Portal")
+            cliente = str(nrow.get("cliente_nome") or "Cliente")
+            vers = nrow.get("versao")
+            vers_txt = f" · Versão {int(vers)}" if pd.notna(vers) else ""
+
+            _portal_base_btn = APP_URL_OFICIAL.rstrip("/")
+            _portal_link_btn = (
+                f"{_portal_base_btn}/?portal=cliente"
+                f"&token={urllib.parse.quote(_token_btn)}"
+                f"&notificacao={_notif_id_btn}"
+            )
+
+            _wrapper_id = f"sophi-notif-{_notif_id_btn}"
+            st.sidebar.markdown(
+                f"""
+                <div id="{_wrapper_id}" style="margin:7px 0 10px;">
+                    <div style="font-size:11px;font-weight:800;margin-top:7px;">
+                        🔔 {html.escape(evento)}{html.escape(vers_txt)}
+                    </div>
+                    <div style="font-size:10px;color:#aaa;margin-bottom:3px;">
+                        {html.escape(cliente)}
+                    </div>
+                    <a href="{html.escape(_portal_link_btn, quote=True)}"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       onclick="
+                           try {{
+                               this.closest('#{_wrapper_id}').style.display='none';
+                               const t=document.getElementById('sophi-notificacoes-titulo');
+                               if(t) {{
+                                   const m=t.textContent.match(/(\\d+)/);
+                                   if(m) t.textContent='🔔 Notificações ('+Math.max(0,parseInt(m[1],10)-1)+')';
+                               }}
+                           }} catch(e) {{}}
+                       "
+                       style="display:block;text-align:center;background:#050505;color:#fff;
+                              padding:11px 12px;border-radius:12px;font-weight:900;font-size:11px;
+                              text-decoration:none;margin:5px 0 9px;">
+                        Abrir Portal deste cliente
+                    </a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     except Exception:
         pass
 
@@ -18120,6 +19207,12 @@ def tela_portal_cliente_publico():
     aplicar_visual_publico_limpo()
     garantir_portal_v2()
     token = _portal_token_v2()
+    try:
+        _notif_id = st.query_params.get("notificacao", "")
+        if _notif_id:
+            marcar_notificacao_portal_lida(int(_notif_id))
+    except Exception:
+        pass
     t, orc, _ = _portal_contexto_v2(token)
     if t is None or orc is None or orc.empty:
         st.error("Link inválido ou pedido não encontrado.")
@@ -18230,7 +19323,7 @@ def tela_portal_cliente_publico():
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
-                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
+                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.", versao=int(a.get("versao") or 1))
                         st.success("Arte aprovada com sucesso!")
                         st.rerun()
                 with b2:
@@ -18241,7 +19334,7 @@ def tela_portal_cliente_publico():
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
-                        portal_evento(oid,token,"Alteração de arte",comentario)
+                        portal_evento(oid,token,"Alteração de arte",comentario, versao=int(a.get("versao") or 1))
                         st.success("Sua solicitação foi enviada para a Sophi.")
                         st.rerun()
 
@@ -18603,6 +19696,81 @@ def _sexta_da_black_friday(ano):
     return date(ano, 11, primeira_sexta + 21)
 
 
+
+# ========================= CATÁLOGO COMERCIAL DE BOTTONS =========================
+# Esta estrutura pertence somente ao Calendário Comercial.
+CATALOGO_BOTTONS_SOPHI = {
+    "Cliente final": {
+        "🔘 Bottons personalizados": [
+            "Botton com frase", "Botton de casal", "Botton de família",
+            "Botton com foto", "Botton de formatura", "Botton personalizado por tema",
+            "Botton para fãs", "Botton comemorativo", "Botton como lembrancinha",
+        ],
+        "📌 Broches personalizados": [
+            "Broche personalizado", "Broche com frase", "Broche com foto",
+            "Broche para fãs", "Broche personalizado por tema", "Broche com ímã",
+            "Broche para prender", "Broche pendurado em cordão", "Broche para coleção",
+        ],
+        "🔑 Chaveiros personalizados": [
+            "Chaveiro personalizado", "Chaveiro com foto", "Chaveiro com frase",
+            "Chaveiro com tema", "Chaveiro com abridor de garrafa",
+            "Chaveiro com abridor de garrafa na parte traseira", "Chaveiro para lembrancinhas",
+        ],
+        "🧲 Ímãs personalizados": [
+            "Ímã de geladeira com foto", "Ímã com frase", "Ímã de casal",
+            "Ímã de família", "Ímã de pet", "Ímã comemorativo",
+            "Ímã personalizado por tema",
+        ],
+        "🎁 Outros usos": [
+            "Lembrancinhas", "Bottons para festas", "Bottons para eventos",
+            "Bottons comemorativos", "Bottons temáticos", "Kits personalizados de bottons",
+        ],
+    },
+    "Empresas": {
+        "🪪 Crachás e identificação": [
+            "Crachá personalizado", "Crachá redondo", "Crachá com foto do funcionário",
+            "Crachá com logo da empresa", "Crachá para identificação",
+            "Crachá com ioiô retrátil", "Porta-crachá retrátil",
+            "Identificador para cordão de crachá",
+        ],
+        "📌 Broches corporativos": [
+            "Broche corporativo", "Broche com logo da empresa", "Broche de identificação",
+            "Broche para equipes", "Broche para eventos", "Broche comemorativo",
+            "Broche institucional", "Broche promocional",
+        ],
+        "🔑 Chaveiros corporativos": [
+            "Chaveiro corporativo", "Chaveiro com logo", "Chaveiro com foto",
+            "Chaveiro promocional", "Chaveiro para eventos", "Chaveiro para brindes",
+            "Chaveiro com abridor de garrafa",
+        ],
+        "🧲 Ímãs para empresas": [
+            "Ímã com logo da empresa", "Ímã promocional", "Ímã para divulgação",
+            "Ímã institucional", "Ímã para brindes", "Ímã para eventos",
+        ],
+        "📣 Bottons promocionais": [
+            "Bottons promocionais", "Bottons para campanhas", "Bottons para eventos",
+            "Bottons comemorativos", "Bottons institucionais", "Bottons para equipes",
+            "Bottons de identificação", "Bottons para divulgação de empresas",
+            "Bottons para ações promocionais", "Bottons para campanhas internas",
+        ],
+        "🏷️ Identificação e produtos": [
+            "Identificadores de produtos", "Identificadores para embalagens",
+            "Identificação personalizada", "Aplicações promocionais em embalagens",
+            "Brindes comerciais", "Brindes corporativos",
+            "Lembrancinhas empresariais", "Materiais promocionais para divulgação",
+        ],
+    },
+}
+
+FORMATOS_BOTTONS_SOPHI = [
+    "Redondo 32 mm",
+    "Redondo 44 mm",
+    "Redondo 58 mm",
+    "Quadrado 50 × 50 mm",
+]
+# =================================================================================
+
+
 def _datas_comerciais_sophi(ano):
     """Calendário comercial calculado para o ano escolhido, com datas brasileiras atualizadas."""
     pascoa = _pascoa(ano)
@@ -18669,6 +19837,19 @@ def tela_calendario_comercial():
         prazo=(data_evento-timedelta(days=d["prazo"])) if data_evento else None
         linhas.append({**d,"pensar_data":pensar,"divulg_data":divulg,"encom_data":encom,"prazo_data":prazo})
 
+    # O catálogo de bottons entra como uma camada adicional de ideias comerciais,
+    # preservando integralmente as sugestões originais de cada data.
+    bottons_resumo = (
+        "Bottons/itens redondos e quadrados: "
+        "bottons com foto, frase, casal, família, fãs, formatura e comemorativos; "
+        "broches, broches com ímã, broches em cordão, chaveiros com foto/frase, "
+        "chaveiros com abridor, ímãs de geladeira, crachás, crachás com ioiô retrátil, "
+        "identificadores, brindes e materiais promocionais. "
+        "Formatos: 32 mm, 44 mm, 58 mm e quadrado 50 × 50 mm."
+    )
+    for _linha in linhas:
+        _linha["produtos"] = f"{_linha['produtos']} | {bottons_resumo}"
+
     df=pd.DataFrame(linhas)
     df["Data"] = df["data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Data variável")
     df["Começar"] = df["pensar_data"].apply(lambda x: x.strftime("%d/%m/%Y") if x else "Definir conforme evento")
@@ -18688,6 +19869,9 @@ def tela_calendario_comercial():
     if opps: exib=exib[exib["oportunidade"].isin(opps)]
     if periodo=="Apenas com data": exib=exib[exib["data"].notna()]
     if periodo=="Próximas campanhas": exib=exib[(exib["data"].notna()) & (exib["data"]>=agora.date())]
+
+    # Catálogo comercial unificado: tudo fica no mesmo fluxo do calendário.
+    # Bottons é uma opção de produto, não um bloco separado do calendário.
 
     st.markdown("### 🗓️ Visão anual")
     st.dataframe(exib[["nome","categoria","oportunidade","Começar","Divulgação","Encomendas até","Prazo","Data"]].rename(columns={"nome":"Data/campanha","categoria":"Categoria","oportunidade":"Oportunidade","Data":"Data do evento"}),use_container_width=True,hide_index=True)
@@ -18709,8 +19893,59 @@ def tela_calendario_comercial():
         else:
             st.info("Essa é uma campanha contínua/variável. Defina a data assim que o cliente ou evento confirmar.")
 
-        st.markdown("### 💡 Ideias para vender")
-        st.write(linha["produtos"])
+        st.markdown("### 💡 Ideias e produtos para esta data")
+        st.caption("Agora tudo fica junto: escolha o público e depois selecione os produtos que você quer oferecer nesta campanha.")
+
+        publico_data = st.radio(
+            "👥 Esta campanha será para",
+            ["Cliente final", "Empresa", "Ambos"],
+            horizontal=True,
+            key=f"cal_publico_{ano}_{linha['nome']}"
+        )
+
+        # Monta uma única lista de produtos: Bottons aparece como a primeira opção,
+        # seguido pelas demais possibilidades comerciais, sem criar um catálogo separado.
+        opcoes_unificadas = ["🔘 Bottons"]
+        if publico_data in ["Cliente final", "Ambos"]:
+            for _familia, _itens in CATALOGO_BOTTONS_SOPHI["Cliente final"].items():
+                opcoes_unificadas.extend([f"{_item}" for _item in _itens])
+        if publico_data in ["Empresa", "Ambos"]:
+            for _familia, _itens in CATALOGO_BOTTONS_SOPHI["Empresas"].items():
+                opcoes_unificadas.extend([f"{_item}" for _item in _itens])
+
+        # Todas as ideias de produtos já existentes no calendário também entram na mesma lista.
+        for _linha_catalogo in linhas:
+            for _produto in str(_linha_catalogo["produtos"]).split(" | "):
+                for _parte in _produto.split(","):
+                    _parte = _parte.strip()
+                    if _parte and _parte not in opcoes_unificadas and "Bottons/itens redondos" not in _parte:
+                        opcoes_unificadas.append(_parte)
+
+        # Remove duplicidades preservando a ordem e mantém Bottons no topo.
+        opcoes_unificadas = list(dict.fromkeys(opcoes_unificadas))
+
+        p1, p2 = st.columns([3, 1])
+        produtos_escolhidos = p1.multiselect(
+            "🛍️ O que vou oferecer nesta data",
+            opcoes_unificadas,
+            default=["🔘 Bottons"] if "🔘 Bottons" in opcoes_unificadas else [],
+            key=f"cal_produtos_{ano}_{linha['nome']}",
+            help="Você pode selecionar vários produtos. Bottons é uma opção como qualquer outra."
+        )
+        formato_data = p2.selectbox(
+            "📐 Formato dos bottons",
+            ["Não se aplica"] + FORMATOS_BOTTONS_SOPHI,
+            key=f"cal_formato_{ano}_{linha['nome']}"
+        )
+
+        st.markdown("**Sugestões originais desta data:**")
+        st.write(linha["produtos"].replace(" | " + bottons_resumo, ""))
+
+        if "🔘 Bottons" in produtos_escolhidos:
+            st.info(
+                "🔘 Bottons selecionado. Você pode trabalhar com redondo 32 mm, 44 mm, 58 mm "
+                "ou quadrado 50 × 50 mm. Os demais produtos também podem ser combinados na mesma campanha."
+            )
         st.markdown("### 📱 Ideias de conteúdo")
         st.write(linha["conteudo"])
         st.markdown("### 🧠 Roteiro de campanha")
@@ -18731,7 +19966,7 @@ def tela_calendario_comercial():
         st.markdown("### 🚀 Minha campanha")
         with st.form(f"form_campanha_{ano}_{linha['nome']}"):
             meta=st.number_input("Meta de vendas (R$)",min_value=0.0,value=0.0,step=50.0)
-            produtos_camp=st.text_area("Produtos que vou oferecer",value=linha["produtos"])
+            produtos_camp=st.text_area("Produtos que vou oferecer",value="; ".join(produtos_escolhidos) if produtos_escolhidos else linha["produtos"].replace(" | " + bottons_resumo, ""))
             observ=st.text_area("Estratégia / observações",placeholder="Ex.: começar 45 dias antes, abrir encomendas 20 dias antes e encerrar 5 dias antes.")
             status=st.selectbox("Status da campanha",["Planejada","Em preparação","Divulgando","Encomendas abertas","Encerrada"])
             if st.form_submit_button("Salvar campanha"):
@@ -18814,6 +20049,12 @@ def tela_impressao_etiquetas():
 # Acesso público do Portal do Cliente sem login.
 try:
     if st.query_params.get("portal", "") == "cliente":
+        try:
+            _notif_publico = st.query_params.get("notificacao", "")
+            if _notif_publico:
+                marcar_notificacao_portal_lida(int(_notif_publico))
+        except Exception:
+            pass
         tela_portal_cliente_publico()
         st.stop()
 except Exception:
@@ -18835,6 +20076,27 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 botao_sair()
+# Central de notificações do Portal — somente leitura/atalho; não altera os demais módulos.
+# Central de notificações: atualização automática da própria área de notificações.
+# Isso faz o ERP consultar novamente o banco sem exigir F5 ou clicar em outro menu.
+try:
+    if hasattr(st, "fragment"):
+        @st.fragment(run_every="3s")
+        def _notificacoes_portal_auto_refresh():
+            mostrar_notificacoes_portal_erp()
+
+        # IMPORTANTE: o contexto da sidebar precisa envolver a CHAMADA
+        # do fragment, e não ficar dentro da função fragment.
+        with st.sidebar:
+            _notificacoes_portal_auto_refresh()
+    else:
+        # Compatibilidade com versões antigas do Streamlit.
+        mostrar_notificacoes_portal_erp()
+except Exception as _notif_refresh_err:
+    # Se o fragment não estiver disponível/compatível, mantém a central
+    # funcionando pelo modo normal.
+    print(f"[PORTAL NOTIFICACAO] Auto-refresh indisponível: {_notif_refresh_err}")
+    mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
@@ -18854,6 +20116,7 @@ menu = st.sidebar.radio(
         "🌐 Portal do Cliente",
         "🖨️ Impressão / Etiquetas",
         "✂️ Gerador de Moldes",
+        "🖼️ Gerador de Imagens",
         "📅 Calendário Comercial",
         "⚡ Central de Automação",
         "🎨 Biblioteca de Artes",
@@ -18881,7 +20144,7 @@ try:
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
         "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
-        "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Central de Automação":"⚡",
+        "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Gerador de Imagens":"🖼️", "Central de Automação":"⚡",
         "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
     }.get(menu_limpo, "•")
     st.markdown(f"""
@@ -18895,6 +20158,830 @@ try:
     """, unsafe_allow_html=True)
 except Exception:
     pass
+
+
+
+def _portal_enviar_arquivo_aprovacao(orcamento_id, arquivo_bytes, nome_arquivo, observacao=""):
+    garantir_portal_v2()
+    oid = int(orcamento_id)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_original = Path(nome_arquivo).name.replace(" ", "_")
+    safe_name = f"portal_{oid}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe_original}"
+    caminho = UPLOAD_DIR / safe_name
+    caminho.write_bytes(arquivo_bytes)
+    prev = consultar("SELECT COALESCE(MAX(versao),0) AS v FROM portal_artes WHERE orcamento_id=?", (oid,))
+    versao = int(prev.iloc[0]["v"] or 0) + 1 if not prev.empty else 1
+    executar(
+        "INSERT INTO portal_artes(orcamento_id,nome_arquivo,caminho,versao,status,observacao) VALUES(?,?,?,?,?,?)",
+        (oid, nome_arquivo, str(caminho), versao, "Aguardando aprovação", observacao)
+    )
+    portal_evento(oid, gerar_token_portal("Orçamento", oid), "Arte enviada", f"Versão {versao} enviada para aprovação pelo Gerador.")
+    return versao
+
+
+def _clientes_com_orcamentos():
+    try:
+        df = consultar("""
+            SELECT o.id AS orcamento_id,
+                   o.cliente_id,
+                   COALESCE(NULLIF(o.cliente_nome,''), c.nome) AS cliente_nome,
+                   o.data_orcamento,
+                   o.status
+            FROM orcamentos o
+            LEFT JOIN clientes c ON c.id=o.cliente_id
+            ORDER BY o.id DESC
+        """)
+        return df if not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _mockup_aplicacao_sophi(imagem, aplicacao):
+    """Cria um mockup visual da arte aplicada ao produto selecionado.
+
+    A arte original nunca é alterada. O mockup é somente uma visualização
+    comercial, com superfície, sombra, profundidade e encaixe da arte.
+    """
+    from PIL import Image, ImageDraw, ImageOps, ImageFilter, ImageChops
+    import math
+
+    W, H = 1400, 900
+
+    def gradiente(top, bottom):
+        base = Image.new("RGB", (W, H), top)
+        px = base.load()
+        for y in range(H):
+            t = y / max(H - 1, 1)
+            c = tuple(int(top[i] * (1-t) + bottom[i] * t) for i in range(3))
+            for x in range(W):
+                px[x, y] = c
+        return base
+
+    def sombra_elipse(box, blur=22, opacity=95):
+        layer = Image.new("RGBA", (W, H), (0,0,0,0))
+        dd = ImageDraw.Draw(layer)
+        dd.ellipse(box, fill=(0,0,0,opacity))
+        return layer.filter(ImageFilter.GaussianBlur(blur))
+
+    def sombra_retangulo(box, radius=30, blur=20, opacity=90):
+        layer = Image.new("RGBA", (W, H), (0,0,0,0))
+        dd = ImageDraw.Draw(layer)
+        dd.rounded_rectangle(box, radius=radius, fill=(0,0,0,opacity))
+        return layer.filter(ImageFilter.GaussianBlur(blur))
+
+    def preparar_arte(size, circular=False, radius=0):
+        art = ImageOps.fit(imagem.convert("RGBA"), size, method=Image.Resampling.LANCZOS)
+        mask = Image.new("L", size, 0)
+        md = ImageDraw.Draw(mask)
+        if circular:
+            md.ellipse((0,0,size[0]-1,size[1]-1), fill=255)
+        elif radius:
+            md.rounded_rectangle((0,0,size[0]-1,size[1]-1), radius=radius, fill=255)
+        else:
+            md.rectangle((0,0,size[0]-1,size[1]-1), fill=255)
+        art.putalpha(mask)
+        return art
+
+    def aplicar(base, art, xy, sombra_box=None, sombra_blur=18):
+        if sombra_box:
+            base = Image.alpha_composite(base.convert("RGBA"), sombra_elipse(sombra_box, sombra_blur)).convert("RGB")
+        base = base.convert("RGBA")
+        base.alpha_composite(art, xy)
+        return base.convert("RGB")
+
+    # Cenários desenhados com iluminação, textura e sombras para parecerem
+    # fotografias de produto, em vez de simplesmente exibir a arte isolada.
+    if aplicacao == "Geladeira":
+        base = gradiente((232,235,238), (176,181,186)).convert("RGBA")
+        d = ImageDraw.Draw(base)
+        d.rounded_rectangle((250,90,1150,820), radius=34, fill=(242,243,244,255), outline=(205,208,211,255), width=5)
+        d.rectangle((250,90,1150,160), fill=(220,223,225,255))
+        d.line((700,160,700,820), fill=(214,216,218,255), width=3)
+        d.rounded_rectangle((1110,230,1135,500), radius=10, fill=(190,193,196,255))
+        d.rounded_rectangle((265,180,1135,805), radius=18, outline=(255,255,255,180), width=4)
+        art = preparar_arte((310,310), circular=True)
+        base.alpha_composite(sombra_elipse((535,380,875,720), 25, 85))
+        base.alpha_composite(art, (545,395))
+        # brilho suave sobre a superfície
+        brilho = Image.new("RGBA", (W,H), (255,255,255,0))
+        bd=ImageDraw.Draw(brilho)
+        bd.polygon([(280,190),(430,190),(650,805),(500,805)], fill=(255,255,255,24))
+        base=Image.alpha_composite(base, brilho).convert("RGB")
+
+    elif aplicacao == "Garrafa":
+        base = gradiente((240,242,244), (205,209,213)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((420,690,980,805), 35, 90))
+        d.rounded_rectangle((500,100,900,750), radius=120, fill=(238,239,240,255), outline=(190,193,196,255), width=6)
+        d.rounded_rectangle((610,55,790,155), radius=35, fill=(215,216,218,255), outline=(180,182,184,255), width=5)
+        d.rectangle((625,85,775,125), fill=(245,245,245,255))
+        # rótulo acompanhando a superfície da garrafa
+        label=preparar_arte((285,315), radius=28)
+        label=label.resize((250,300), Image.Resampling.LANCZOS)
+        base.alpha_composite(sombra_retangulo((570,315,830,625), 28, 18, 70))
+        base.alpha_composite(label,(575,320))
+        shine=Image.new("RGBA",(W,H),(255,255,255,0)); sd=ImageDraw.Draw(shine)
+        sd.ellipse((545,140,700,720), fill=(255,255,255,35)); base=Image.alpha_composite(base,shine).convert("RGB")
+
+    elif aplicacao == "Embalagem":
+        base=gradiente((242,240,238),(205,201,197)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_retangulo((260,260,1150,760),35,28,95))
+        d.polygon([(300,190),(1050,190),(1140,280),(210,280)], fill=(232,225,215,255), outline=(190,183,174,255))
+        d.rounded_rectangle((210,270,1140,750), radius=18, fill=(248,244,238,255), outline=(190,183,174,255), width=5)
+        d.line((210,340,1140,340), fill=(220,213,204,255), width=3)
+        art=preparar_arte((330,330), circular=False, radius=35)
+        base.alpha_composite(sombra_retangulo((505,345,845,685),35,18,65))
+        base.alpha_composite(art,(520,360))
+
+    elif aplicacao == "Sacola":
+        base=gradiente((238,239,241),(198,201,205)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_retangulo((270,260,1130,800),28,28,90))
+        d.rounded_rectangle((270,220,1130,760), radius=20, fill=(250,250,250,255), outline=(205,207,210,255), width=5)
+        d.arc((445,80,955,390), 180, 360, fill=(110,112,115,255), width=18)
+        d.arc((490,100,910,365), 180, 360, fill=(225,225,225,255), width=8)
+        art=preparar_arte((320,320), circular=False, radius=18)
+        base.alpha_composite(sombra_retangulo((535,345,865,675),18,20,65))
+        base.alpha_composite(art,(540,350))
+
+    elif aplicacao in ("Caderno","Planner"):
+        base=gradiente((235,237,239),(190,194,198)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_retangulo((305,120,1105,800),30,30,100))
+        d.rounded_rectangle((300,95,1080,770), radius=24, fill=(252,252,250,255), outline=(190,192,194,255), width=6)
+        d.rectangle((300,95,370,770), fill=(32,32,34,255))
+        for y in range(145,730,58): d.ellipse((326,y,352,y+26), fill=(205,205,205,255))
+        art=preparar_arte((370,370), circular=False, radius=14)
+        base.alpha_composite(sombra_retangulo((505,270,875,640),14,20,60))
+        base.alpha_composite(art,(510,275))
+
+    elif aplicacao == "Caneca":
+        base=gradiente((235,237,239),(188,192,196)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((300,665,1090,805),35,95))
+        d.ellipse((340,170,1020,760), fill=(249,249,249,255), outline=(188,190,192,255), width=7)
+        d.arc((880,300,1200,650), 270, 90, fill=(230,230,230,255), width=80)
+        d.arc((895,310,1185,640), 270, 90, fill=(198,200,202,255), width=8)
+        art=preparar_arte((350,350), circular=False, radius=20)
+        base.alpha_composite(sombra_retangulo((500,330,850,680),20,20,60))
+        base.alpha_composite(art,(505,335))
+
+    elif aplicacao == "Chaveiro":
+        base=gradiente((239,240,242),(194,197,201)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((410,640,990,790),35,95))
+        d.ellipse((440,210,960,730), fill=(245,245,245,255), outline=(185,187,190,255), width=8)
+        d.ellipse((620,130,780,290), outline=(135,138,141,255), width=28)
+        d.ellipse((645,155,755,265), outline=(220,221,222,255), width=8)
+        art=preparar_arte((330,330), circular=True)
+        base.alpha_composite(sombra_elipse((530,305,870,645),22,65))
+        base.alpha_composite(art,(535,310))
+
+    elif aplicacao == "Cartão":
+        base=gradiente((236,238,240),(191,195,199)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_retangulo((300,245,1100,690),28,28,105))
+        d.rounded_rectangle((290,220,1080,665), radius=26, fill=(252,252,252,255), outline=(195,197,199,255), width=5)
+        art=preparar_arte((360,300), circular=False, radius=12)
+        base.alpha_composite(sombra_retangulo((500,295,860,595),12,18,55))
+        base.alpha_composite(art,(505,300))
+
+    elif aplicacao == "Etiqueta":
+        base=gradiente((240,239,236),(205,201,196)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_retangulo((300,235,1100,700),28,25,95))
+        d.rounded_rectangle((290,210,1090,675), radius=28, fill=(249,245,238,255), outline=(190,184,177,255), width=5)
+        art=preparar_arte((400,310), circular=False, radius=18)
+        base.alpha_composite(sombra_retangulo((485,290,885,600),18,18,60))
+        base.alpha_composite(art,(495,295))
+
+    elif aplicacao == "Crachá retrátil":
+        base=gradiente((232,234,236),(183,187,191)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((470,630,930,790),32,105))
+        d.ellipse((500,180,900,580), fill=(248,248,248,255), outline=(185,187,190,255), width=8)
+        art=preparar_arte((270,270), circular=True)
+        base.alpha_composite(sombra_elipse((560,250,910,600),22,65))
+        base.alpha_composite(art,(565,255))
+        d.line((700,575,700,690), fill=(55,57,59,255), width=12)
+        d.rounded_rectangle((620,665,780,770), radius=25, fill=(35,36,38,255), outline=(90,92,94,255), width=4)
+        d.ellipse((675,695,725,745), fill=(115,117,119,255))
+
+    elif aplicacao == "Broche com cordão":
+        base=gradiente((235,237,239),(185,189,193)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((470,625,930,790),30,95))
+        d.arc((430,360,970,820), 190, 350, fill=(70,72,74,255), width=18)
+        d.arc((450,375,950,800), 190, 350, fill=(220,220,220,255), width=6)
+        d.ellipse((500,150,900,550), fill=(245,245,245,255), outline=(180,182,184,255), width=8)
+        art=preparar_arte((270,270), circular=True)
+        base.alpha_composite(sombra_elipse((560,220,910,570),22,65))
+        base.alpha_composite(art,(565,225))
+
+    else:
+        # Fallback: visualização do produto em destaque.
+        base=gradiente((238,239,241),(196,199,202)).convert("RGBA")
+        d=ImageDraw.Draw(base)
+        base.alpha_composite(sombra_elipse((430,620,970,790),35,95))
+        d.ellipse((450,150,950,650), fill=(248,248,248,255), outline=(185,187,190,255), width=8)
+        art=preparar_arte((340,340), circular=True)
+        base.alpha_composite(art,(530,230))
+
+    # Moldura e identificação da aplicação.
+    overlay=Image.new("RGBA",(W,H),(0,0,0,0)); od=ImageDraw.Draw(overlay)
+    od.rounded_rectangle((22,22,W-22,H-22), radius=28, outline=(255,255,255,155), width=2)
+    od.rounded_rectangle((48,48,360,98), radius=18, fill=(255,255,255,215))
+    od.text((68,62), f"Aplicação: {aplicacao}", fill=(25,25,25,255))
+    return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
+
+
+
+def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_produto=None):
+    """
+    Gera o mockup do produto.
+    - Com OPENAI_API_KEY: usa geração/edição de imagem.
+    - Sem chave, mas com foto real do produto: faz uma montagem local funcional.
+    - Sem chave e sem foto: informa que não é possível inventar uma fotografia real
+      localmente; o usuário deve enviar a foto do produto.
+    """
+    import base64 as _b64
+    import json as _json
+    import urllib.request as _ureq
+    import urllib.error as _uerr
+    from io import BytesIO
+
+    api_key = ""
+    try:
+        api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
+    except Exception:
+        pass
+
+    # Sem API: nunca deixa o botão "não funcionar" se a foto real foi enviada.
+    # Usa a fotografia real fornecida pelo usuário como base do mockup.
+    if not api_key:
+        if foto_produto is None:
+            raise RuntimeError(
+                "Para gerar a FOTO REAL sem uma chave de API, envie a foto real do produto "
+                "no campo acima. A montagem será feita diretamente nessa fotografia."
+            )
+        resultado = _aplicar_arte_em_foto_real(
+            foto_produto, arte, aplicacao, forma
+        )
+        buf = BytesIO()
+        resultado.save(buf, format="PNG", dpi=(180, 180))
+        return buf.getvalue()
+
+    def _data_url(img, mime="image/png"):
+        buf = BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        return f"data:{mime};base64,{_b64.b64encode(buf.getvalue()).decode('ascii')}"
+
+    arte_url = _data_url(arte)
+
+    nomes = {
+        "Geladeira": "uma geladeira real",
+        "Garrafa": "uma garrafa real de uso cotidiano",
+        "Embalagem": "uma embalagem real de produto",
+        "Sacola": "uma sacola real de papel personalizada",
+        "Caderno": "um caderno real",
+        "Planner": "um planner real",
+        "Caneca": "uma caneca real de cerâmica",
+        "Chaveiro": "um chaveiro real",
+        "Cartão": "um cartão real impresso",
+        "Etiqueta": "uma etiqueta adesiva real aplicada em um produto",
+        "Crachá retrátil": "um crachá retrátil real",
+        "Broche com cordão": "um broche/button real preso a um cordão",
+    }
+    produto = nomes.get(aplicacao, "um produto real personalizado")
+    formato = {
+        "Redondo": "A área personalizada deve ser perfeitamente REDONDA.",
+        "Quadrado": "A área personalizada deve ser perfeitamente QUADRADA.",
+        "Retangular": "A área personalizada deve ser RETANGULAR.",
+        "Personalizado": "A área personalizada deve respeitar exatamente o formato definido pela arte.",
+    }.get(forma, "Respeite exatamente o formato da arte.")
+
+    prompt = f"""
+Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto} com a ARTE FINAL DO CLIENTE aplicada.
+A arte enviada é referência de alta fidelidade. Preserve textos, nomes, logotipos, símbolos,
+cores e detalhes sem redesenhar ou inventar conteúdo.
+
+A arte precisa estar fisicamente aplicada na superfície do produto, seguindo a perspectiva,
+curvatura, textura, iluminação, reflexos e sombras da própria superfície. NÃO mostre a arte
+como uma imagem quadrada/PNG flutuando diante do produto.
+
+{formato}
+
+Mostre o produto inteiro ou quase inteiro, em fotografia comercial realista, pronto para
+apresentação ao cliente. Não transforme em ilustração, desenho ou render 3D.
+
+Se uma foto real do produto foi fornecida, ela é a referência principal: mantenha o mesmo
+produto, ângulo, enquadramento, cor e características físicas e aplique a arte diretamente nele.
+Não substitua a foto por outro produto.
+"""
+
+    content = [
+        {"type": "input_text", "text": prompt},
+        {"type": "input_image", "image_url": arte_url, "detail": "high"},
+    ]
+    if foto_produto is not None:
+        content.append(
+            {"type": "input_image", "image_url": _data_url(foto_produto), "detail": "high"}
+        )
+
+    payload = {
+        "model": "gpt-5",
+        "input": [{"role": "user", "content": content}],
+        "tools": [{
+            "type": "image_generation",
+            "action": "auto",
+            "quality": "high",
+            "size": "1024x1024",
+            "output_format": "png",
+            "input_fidelity": "high",
+        }],
+    }
+
+    req = _ureq.Request(
+        "https://api.openai.com/v1/responses",
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ureq.urlopen(req, timeout=180) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+    except _uerr.HTTPError as exc:
+        detalhe = exc.read().decode("utf-8", errors="ignore")
+        # Se a API falhar e houver foto real, ainda entrega um mockup local.
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError(f"Erro da API de imagens ({exc.code}): {detalhe[:800]}")
+    except Exception as exc:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError(f"Não foi possível gerar o mockup fotográfico: {exc}")
+
+    resultados = []
+    for output in data.get("output", []):
+        if output.get("type") == "image_generation_call":
+            result = output.get("result")
+            if isinstance(result, str) and result:
+                resultados.append(result)
+
+    if not resultados:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError("A API não retornou uma imagem de mockup.")
+    return _b64.b64decode(resultados[0])
+
+
+
+def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
+    """
+    Fallback local: usa a FOTO REAL enviada como base e aplica a arte em perspectiva.
+    Não cria uma falsa foto do produto; trabalha diretamente sobre a fotografia real.
+    """
+    from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+    import numpy as np
+
+    base = foto.convert("RGB")
+    bw, bh = base.size
+
+    # Área de aplicação por produto. Coordenadas normalizadas para fotografias
+    # frontais/semifrontalmente enquadradas.
+    regioes = {
+        "Geladeira": [(0.30,0.25),(0.70,0.25),(0.70,0.62),(0.30,0.62)],
+        "Garrafa": [(0.32,0.30),(0.68,0.30),(0.66,0.66),(0.34,0.66)],
+        "Embalagem": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Sacola": [(0.30,0.30),(0.70,0.30),(0.70,0.70),(0.30,0.70)],
+        "Caderno": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Planner": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Caneca": [(0.24,0.28),(0.76,0.28),(0.72,0.65),(0.28,0.65)],
+        "Chaveiro": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Cartão": [(0.20,0.25),(0.80,0.25),(0.80,0.70),(0.20,0.70)],
+        "Etiqueta": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Crachá retrátil": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Broche com cordão": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+    }
+
+    q = regioes.get(aplicacao, regioes["Caderno"])
+    quad = np.float32([[x*bw, y*bh] for x,y in q])
+
+    # Tamanho base proporcional à área selecionada.
+    minx,maxx = quad[:,0].min(),quad[:,0].max()
+    miny,maxy = quad[:,1].min(),quad[:,1].max()
+    aw=max(80,int(maxx-minx))
+    ah=max(80,int(maxy-miny))
+
+    # Preserva o formato da arte.
+    art=ImageOps.contain(arte.convert("RGBA"),(aw,ah),method=Image.Resampling.LANCZOS)
+    canvas=Image.new("RGBA",(aw,ah),(255,255,255,0))
+    canvas.alpha_composite(art,((aw-art.width)//2,(ah-art.height)//2))
+
+    mask=Image.new("L",(aw,ah),0)
+    md=ImageOps.autocontrast(mask)
+    from PIL import ImageDraw
+    d=ImageDraw.Draw(mask)
+    if forma=="Redondo":
+        d.ellipse((1,1,aw-2,ah-2),fill=255)
+    elif forma=="Retangular":
+        d.rectangle((1,1,aw-2,ah-2),fill=255)
+    else:
+        d.rounded_rectangle((1,1,aw-2,ah-2),radius=max(2,int(min(aw,ah)*0.015)),fill=255)
+    canvas.putalpha(mask)
+
+    try:
+        import cv2
+        src_pts=np.float32([[0,0],[aw-1,0],[aw-1,ah-1],[0,ah-1]])
+        M=cv2.getPerspectiveTransform(src_pts,quad)
+        warped=cv2.warpPerspective(
+            np.array(canvas),M,(bw,bh),
+            flags=cv2.INTER_LANCZOS,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0,0,0,0)
+        )
+        overlay=Image.fromarray(warped,"RGBA")
+
+        # Sombra suave sob a peça.
+        alpha=overlay.getchannel("A")
+        shadow_alpha=alpha.filter(ImageFilter.GaussianBlur(max(2,int(min(bw,bh)*0.006))))
+        shadow_alpha=shadow_alpha.point(lambda p:int(p*0.22))
+        shadow=Image.new("RGBA",(bw,bh),(0,0,0,0))
+        shadow.putalpha(shadow_alpha)
+
+        result=Image.alpha_composite(base.convert("RGBA"),shadow)
+
+        # Integração leve com a iluminação da fotografia: reduz um pouco a
+        # opacidade e mistura textura/luz do produto sem destruir a arte.
+        overlay.putalpha(overlay.getchannel("A").point(lambda p:int(p*0.94)))
+        result=Image.alpha_composite(result,overlay)
+        return result.convert("RGB")
+    except Exception:
+        # Fallback sem OpenCV: aplicação central sem perspectiva.
+        result=base.copy()
+        x=int(minx); y=int(miny)
+        result.paste(canvas.convert("RGB"),(x,y),canvas)
+        return result
+
+
+def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
+                                 margem_mm, espacamento_mm, sangria_mm,
+                                 modo_corte, marcas_registro):
+    """Monta a prévia A4 com a arte realmente no formato escolhido."""
+    from PIL import Image, ImageDraw, ImageOps
+    from io import BytesIO
+    import math
+
+    DPI = 300
+    A4_W = int(210 / 25.4 * DPI)
+    A4_H = int(297 / 25.4 * DPI)
+    mm_px = DPI / 25.4
+    w = max(1, int(largura_cm / 2.54 * DPI))
+    h = max(1, int(altura_cm / 2.54 * DPI))
+    margem = int(margem_mm * mm_px)
+    esp = int(espacamento_mm * mm_px)
+    sangria = int(sangria_mm * mm_px)
+
+    # Quando as marcas da Cameo 4 estão ligadas, a grade precisa ficar
+    # dentro da área segura de Print & Cut, sem invadir as marcas.
+    if marcas_registro:
+        margem = max(margem, int(round(18 * mm_px)))
+
+    pw, ph = w + 2*sangria, h + 2*sangria
+    base = Image.new("RGBA", (pw,ph), (255,255,255,0))
+    arte_fit = ImageOps.fit(imagem.convert("RGBA"), (pw,ph), method=Image.Resampling.LANCZOS)
+
+    mask = Image.new("L", (pw,ph), 0)
+    md = ImageDraw.Draw(mask)
+    if forma == "Redondo":
+        md.ellipse((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
+    else:
+        md.rectangle((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
+    arte_fit.putalpha(mask)
+    base.alpha_composite(arte_fit)
+
+    folha = Image.new("RGB", (A4_W,A4_H), "white")
+    draw = ImageDraw.Draw(folha)
+    passo_x = w + 2*sangria + esp
+    passo_y = h + 2*sangria + esp
+    disponivel_w = A4_W - 2*margem
+    disponivel_h = A4_H - 2*margem
+    cols = max(1, (disponivel_w + esp) // passo_x)
+    rows = max(1, (disponivel_h + esp) // passo_y)
+    por_folha = cols * rows
+    folhas = max(1, math.ceil(quantidade / por_folha))
+
+    for i in range(min(quantidade, por_folha)):
+        row,col = divmod(i,cols)
+        x = margem + col*passo_x
+        y = margem + row*passo_y
+        folha.paste(base, (int(x-sangria), int(y-sangria)), base)
+        if modo_corte != "Sem corte":
+            if forma == "Redondo":
+                draw.ellipse((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
+            else:
+                draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
+
+    if marcas_registro:
+        # Print & Cut tradicional da Cameo 4: 3 marcas de registro.
+        # O canto superior esquerdo é um quadrado preenchido; superior direito
+        # e inferior esquerdo são marcas em L. A área ocupada pelas marcas é
+        # mantida livre para que a arte não invada a leitura óptica.
+        mm = mm_px
+        mark = max(18, int(round(10 * mm)))
+        bar = max(8, int(round(2.0 * mm)))
+        pad = max(6, int(round(5 * mm)))
+
+        xL = pad
+        xR = A4_W - pad - mark
+        yT = pad
+        yB = A4_H - pad - mark
+
+        # superior esquerdo — quadrado preto
+        draw.rectangle(
+            (xL, yT, xL + mark, yT + mark),
+            fill=(0,0,0)
+        )
+
+        # superior direito — L preto (canto interno voltado para a página)
+        draw.rectangle(
+            (xR, yT, xR + mark, yT + bar),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xR + mark - bar, yT, xR + mark, yT + mark),
+            fill=(0,0,0)
+        )
+
+        # inferior esquerdo — L preto
+        draw.rectangle(
+            (xL, yB + mark - bar, xL + mark, yB + mark),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xL, yB, xL + bar, yB + mark),
+            fill=(0,0,0)
+        )
+
+        # Reforça a área segura: a grade nunca deve começar dentro do topo
+        # nem avançar sobre a zona lateral das marcas.
+
+    preview = BytesIO()
+    folha.save(preview, format="PNG", dpi=(DPI,DPI))
+    preview.seek(0)
+    return {
+        "png": preview.getvalue(), "cols": cols, "rows": rows,
+        "por_folha": por_folha, "folhas": folhas,
+        "tamanho": f"{largura_cm:g} × {altura_cm:g}",
+        "quantidade": quantidade, "modo_corte": modo_corte,
+        "marcas_registro": marcas_registro, "forma": forma,
+    }
+
+def _gerador_imagens_pdf(preview_png, titulo, meta):
+    """PDF espelho da prévia do Gerador de Imagens."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.lib import colors
+    from io import BytesIO
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+
+    c.setFillColor(colors.black)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, H-35, titulo[:80])
+    c.setFont("Helvetica", 8)
+    c.drawString(30, H-48, f"Tamanho: {meta['tamanho']}  •  Quantidade: {meta['quantidade']}  •  {meta['por_folha']} por A4  •  {meta['folhas']} folha(s)")
+
+    img = ImageReader(BytesIO(preview_png))
+    # A prévia ocupa a área útil, preservando a proporção da folha A4.
+    c.drawImage(img, 30, 40, width=W-60, height=H-100, preserveAspectRatio=True, anchor="c")
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _gerador_imagens_portal_salvar(cliente_id, titulo, preview_png, meta):
+    """Mantido por compatibilidade; o envio real ocorre via portal_artes."""
+    try:
+        # cliente_id pode ser usado pelo fluxo de orçamento; não altera tabelas do portal.
+        return bool(preview_png and meta)
+    except Exception:
+        return False
+
+
+
+def tela_gerador_imagens_profissional():
+    st.markdown("## 🖼️ Gerador de Imagens")
+    st.caption("Monte artes para impressão e corte sem alterar o Gerador de Moldes de bottons.")
+
+    if "gi_imagem" not in st.session_state:
+        st.session_state.gi_imagem = None
+    if "gi_preview" not in st.session_state:
+        st.session_state.gi_preview = None
+    if "gi_meta" not in st.session_state:
+        st.session_state.gi_meta = None
+    if "gi_mockup" not in st.session_state:
+        st.session_state.gi_mockup = None
+    if "gi_mockup_bytes" not in st.session_state:
+        st.session_state.gi_mockup_bytes = None
+
+    tabs = st.tabs(["🖼️ Criar arte", "👁️ Visualização da aplicação", "📤 Aprovação"])
+
+    with tabs[0]:
+        arquivo = st.file_uploader(
+            "Envie a arte do cliente",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="gi_upload"
+        )
+        if arquivo:
+            from PIL import Image
+            st.session_state.gi_imagem = Image.open(arquivo).convert("RGB")
+            st.image(st.session_state.gi_imagem, caption="Arte recebida", width=260)
+
+        c1, c2, c3 = st.columns(3)
+        forma = c1.selectbox("Formato", ["Redondo", "Quadrado", "Retangular", "Personalizado"], key="gi_forma")
+        presets = {
+            "Redondo": (5.0, 5.0), "Quadrado": (5.0, 5.0),
+            "Retangular": (7.0, 10.0), "Personalizado": (5.0, 5.0)
+        }
+        pad = presets.get(forma, (5.0, 5.0))
+        largura_cm = c2.number_input("Largura (cm)", min_value=0.1, value=float(pad[0]), step=0.1, format="%.1f", key="gi_largura")
+        altura_cm = c3.number_input("Altura (cm)", min_value=0.1, value=float(pad[1]), step=0.1, format="%.1f", key="gi_altura")
+
+        c4, c5, c6 = st.columns(3)
+        quantidade = c4.number_input("Quantidade", min_value=1, value=1, step=1, key="gi_qtd")
+        margem_mm = c5.number_input("Margem (mm)", min_value=0.0, value=5.0, step=0.5, key="gi_margem")
+        espacamento_mm = c6.number_input("Espaçamento (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_esp")
+
+        c7, c8, c9 = st.columns(3)
+        sangria_mm = c7.number_input("Sangria (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_sangria")
+        modo_corte = c8.selectbox("Corte", ["Sem corte", "Corte externo", "Corte por contorno"], key="gi_corte")
+        marcas_registro = c9.checkbox("Marcas de registro — Cameo 4", value=False, key="gi_marcas")
+
+        if st.button("🧩 Gerar prévia A4", use_container_width=True, key="gi_gerar"):
+            if st.session_state.gi_imagem is None:
+                st.warning("Envie a arte do cliente primeiro.")
+            else:
+                st.session_state.gi_meta = _gerador_imagens_desenhar_a4(
+                    st.session_state.gi_imagem, forma, largura_cm, altura_cm,
+                    int(quantidade), margem_mm, espacamento_mm, sangria_mm,
+                    modo_corte, marcas_registro
+                )
+                st.session_state.gi_preview = st.session_state.gi_meta["png"]
+                st.success("Prévia gerada.")
+
+        if st.session_state.gi_preview:
+            st.image(st.session_state.gi_preview, caption="Prévia da folha A4 — espelho do PDF", use_container_width=True)
+            meta = st.session_state.gi_meta
+            st.info(f"📐 {meta.get('forma', forma)} • {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
+
+            pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
+            st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
+
+    with tabs[1]:
+        st.markdown("### 👁️ Visualização realista da aplicação")
+        st.caption(
+            "Gere uma FOTO REALISTA do produto com a arte do cliente aplicada. "
+            "A foto do produto é recomendada. Com uma foto real, o ERP consegue fazer a montagem "
+            "diretamente nela mesmo sem API; sem foto, a geração automática depende da OPENAI_API_KEY."
+        )
+        aplicacao = st.selectbox(
+            "Como você quer mostrar este produto?",
+            ["Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta", "Crachá retrátil", "Broche com cordão"],
+            key="gi_aplicacao"
+        )
+        foto_real_produto = st.file_uploader(
+            "📷 Foto REAL do produto (recomendada para montagem sem API)",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="gi_foto_real_produto",
+            help="Envie a foto real da caneca, garrafa, caderno, sacola etc. Para funcionar sem OPENAI_API_KEY, esta foto é necessária."
+        )
+
+        from io import BytesIO
+        if st.session_state.gi_imagem is not None:
+            if st.button("✨ Gerar FOTO REAL do produto", use_container_width=True, key="gi_gerar_mockup"):
+                with st.spinner("Gerando a montagem fotográfica real..."):
+                    try:
+                        from PIL import Image as _PILImage
+                        _foto_ref = None
+                        if foto_real_produto is not None:
+                            _foto_ref = _PILImage.open(foto_real_produto).convert("RGB")
+
+                        mock_bytes = _chamar_openai_mockup_fotografico(
+                            st.session_state.gi_imagem,
+                            aplicacao,
+                            st.session_state.get("gi_forma", "Quadrado"),
+                            _foto_ref
+                        )
+                        st.session_state.gi_mockup_bytes = mock_bytes
+                        st.session_state.gi_mockup = _PILImage.open(BytesIO(mock_bytes)).convert("RGB")
+                        st.success("FOTO REAL do produto gerada com a arte aplicada.")
+                    except Exception as exc:
+                        st.error(str(exc))
+                        st.info("Se a OPENAI_API_KEY não estiver configurada, envie uma FOTO REAL do produto. O ERP fará a montagem diretamente nessa fotografia.")
+
+            if st.session_state.gi_mockup_bytes:
+                st.image(
+                    st.session_state.gi_mockup_bytes,
+                    caption=f"Foto realista — {aplicacao}",
+                    use_container_width=True
+                )
+                st.download_button(
+                    "🖼️ Baixar foto do produto personalizado",
+                    st.session_state.gi_mockup_bytes,
+                    file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key="gi_download_mockup"
+                )
+                st.caption("Esta imagem é uma visualização comercial do produto; a arte de impressão continua sendo a prévia A4.")
+        else:
+            st.info("Envie a arte do cliente na aba Criar arte primeiro.")
+
+    with tabs[2]:
+        st.markdown("### 📤 Enviar para aprovação")
+        st.caption("O envio usa a infraestrutura do Portal do Cliente existente, sem alterar o Gerador de Moldes.")
+        orcamentos_portal = _clientes_com_orcamentos()
+        if not orcamentos_portal.empty:
+            opcoes = {}
+            for _, row in orcamentos_portal.iterrows():
+                oid = int(row["orcamento_id"])
+                nome = str(row.get("cliente_nome") or "Cliente")
+                opcoes[f"#{oid} — {nome} — {str(row.get('data_orcamento') or '')[:10]}"] = oid
+
+            escolha = st.selectbox("Orçamento / cliente para aprovação", list(opcoes.keys()), key="gi_orcamento_portal")
+            tipo_aprovacao = st.selectbox(
+                "O que você quer enviar ao cliente?",
+                ["Prévia A4 para produção", "Mockup aplicado no produto"],
+                key="gi_tipo_aprovacao"
+            )
+            titulo = st.text_input("Título da aprovação", value="Prévia de produto personalizado", key="gi_titulo")
+            observacao = st.text_area("Observação para o cliente (opcional)", value="Confira a prévia do seu produto e aprove a arte ou solicite uma alteração.", height=90, key="gi_obs_portal")
+
+            if tipo_aprovacao == "Mockup aplicado no produto":
+                st.caption("O cliente verá a montagem fotográfica REAL do produto escolhida na aba Visualização da aplicação.")
+
+            if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
+                _pronto_envio = (
+                    bool(st.session_state.gi_imagem)
+                    and (
+                        bool(st.session_state.gi_mockup_bytes)
+                        if tipo_aprovacao == "Mockup aplicado no produto"
+                        else bool(st.session_state.gi_preview)
+                    )
+                )
+                if not _pronto_envio:
+                    if tipo_aprovacao == "Mockup aplicado no produto":
+                        st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
+                    else:
+                        st.warning("Envie a arte e gere a prévia A4 antes de enviar.")
+                else:
+                    try:
+                        if tipo_aprovacao == "Mockup aplicado no produto":
+                            if not st.session_state.get("gi_mockup_bytes"):
+                                st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
+                                st.stop()
+                            arquivo_envio = st.session_state.gi_mockup_bytes
+                            aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
+                            nome_envio = f"{titulo.strip() or 'mockup'}_{aplicacao_envio.lower().replace(' ', '_')}.png"
+                            obs_envio = f"{observacao}\\n\\nMockup fotográfico real: {aplicacao_envio}"
+                        else:
+                            arquivo_envio = st.session_state.gi_preview
+                            nome_envio = f"{titulo.strip() or 'previa'}_gerador_imagens.png"
+                            obs_envio = f"{observacao}\n\n{st.session_state.gi_meta}"
+
+                        versao = _portal_enviar_arquivo_aprovacao(
+                            opcoes[escolha], arquivo_envio, nome_envio, obs_envio
+                        )
+                        st.success(f"Arquivo enviado para o Portal do Cliente — versão {versao}.")
+                    except Exception as exc:
+                        st.error(f"Não foi possível enviar para o Portal: {exc}")
+
+        else:
+            st.info("É necessário ter pelo menos um orçamento cadastrado para vincular a aprovação ao Portal do Cliente.")
+
 
 if menu_limpo == "Dashboard":
     tela_inicio()
@@ -18930,6 +21017,8 @@ elif menu_limpo == "Impressão / Etiquetas":
     tela_impressao_etiquetas()
 elif menu_limpo == "Gerador de Moldes":
     tela_gerador_moldes_bottons()
+elif menu_limpo == "Gerador de Imagens":
+    tela_gerador_imagens_profissional()
 elif menu_limpo == "Calendário Comercial":
     tela_calendario_comercial()
 elif menu_limpo == "Central de Automação":
