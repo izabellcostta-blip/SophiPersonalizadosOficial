@@ -1,4 +1,3 @@
-import uuid
 from __future__ import annotations
 
 import base64
@@ -18800,8 +18799,7 @@ def garantir_portal_v2():
         descricao TEXT,
         versao INTEGER,
         lida TEXT DEFAULT 'Não',
-        data TEXT DEFAULT CURRENT_TIMESTAMP,
-        evento_id TEXT
+        data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
     # Compatibilidade com instalações anteriores: garante que a tabela de
@@ -18814,8 +18812,6 @@ def garantir_portal_v2():
             executar("ALTER TABLE portal_notificacoes ADD COLUMN lida TEXT DEFAULT 'Não'")
         if "data" not in _cols_notif:
             executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
-        if "evento_id" not in _cols_notif:
-            executar("ALTER TABLE portal_notificacoes ADD COLUMN evento_id TEXT")
     except Exception:
         pass
 
@@ -18855,30 +18851,29 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
     try:
         garantir_portal_v2()
         data_evento = agora_brasil().isoformat()
-        evento_id = str(uuid.uuid4())
         executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
                  (int(orcamento_id), str(token), str(evento), str(descricao), data_evento))
 
         # Somente ações feitas pelo CLIENTE no Portal geram notificação no ERP.
         # Cada ocorrência gera um registro novo, inclusive para novas versões da mesma arte.
-        eventos_cliente = {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}
+        eventos_cliente = {"Arte aprovada", "Alteração de arte", "Pedido aprovado"}
         if str(evento) in eventos_cliente:
             try:
                 executar("""
                     INSERT INTO portal_notificacoes
-                        (orcamento_id, token, evento, descricao, versao, lida, data, evento_id)
-                    VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
+                        (orcamento_id, token, evento, descricao, versao, lida, data)
+                    VALUES (?, ?, ?, ?, ?, 'Não', ?)
                 """, (
                     int(orcamento_id), str(token), str(evento), str(descricao),
-                    int(versao) if versao is not None else None, data_evento, evento_id
+                    int(versao) if versao is not None else None, data_evento
                 ))
             except Exception:
                 executar("""
                     INSERT INTO portal_notificacoes
-                        (orcamento_id, token, evento, descricao, lida, data, evento_id)
-                    VALUES (?, ?, ?, ?, 'Não', ?, ?)
+                        (orcamento_id, token, evento, descricao, lida, data)
+                    VALUES (?, ?, ?, ?, 'Não', ?)
                 """, (
-                    int(orcamento_id), str(token), str(evento), str(descricao), data_evento, evento_id
+                    int(orcamento_id), str(token), str(evento), str(descricao), data_evento
                 ))
             enviar_banco_para_nuvem(force=True)
 
