@@ -18918,8 +18918,8 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
 
         return int(portal_evento_id)
 
-    except Exception:
-        # Mantém o comportamento do ERP sem interromper a tela do Portal.
+    except Exception as _portal_evento_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao gravar/sincronizar evento: {_portal_evento_err}")
         return None
     return True
 def _url_notificacao_portal(notificacao_id, token):
