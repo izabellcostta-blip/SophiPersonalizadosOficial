@@ -18902,13 +18902,31 @@ def mostrar_notificacoes_portal_erp():
                 f'<div style="font-size:10px;color:#aaa;margin-bottom:3px;">{html.escape(cliente)}</div>',
                 unsafe_allow_html=True
             )
-            url = _url_notificacao_portal(int(nrow['id']), str(nrow['token']))
-            st.sidebar.link_button(
+            # O botão precisa executar uma ação no servidor ANTES de abrir o Portal.
+            # st.sidebar.link_button() apenas navega para a URL e, por isso, não
+            # consegue garantir que a notificação seja marcada como lida.
+            # Aqui marcamos primeiro e só depois direcionamos para o Portal.
+            _notif_id_btn = int(nrow['id'])
+            _token_btn = str(nrow['token'])
+            if st.sidebar.button(
                 "Abrir Portal deste cliente",
-                url,
                 use_container_width=True,
-                key=f"abrir_not_portal_{int(nrow['id'])}"
-            )
+                key=f"abrir_not_portal_{_notif_id_btn}"
+            ):
+                marcar_notificacao_portal_lida(_notif_id_btn)
+                try:
+                    st.query_params.clear()
+                    st.query_params["portal"] = "cliente"
+                    st.query_params["token"] = _token_btn
+                    st.query_params["notificacao"] = str(_notif_id_btn)
+                    st.rerun()
+                except Exception:
+                    # Fallback para instalações Streamlit antigas.
+                    st.session_state["abrir_portal_notificacao"] = {
+                        "id": _notif_id_btn,
+                        "token": _token_btn,
+                    }
+                    st.rerun()
     except Exception:
         # A central de notificações nunca pode impedir a abertura do restante do ERP.
         pass
