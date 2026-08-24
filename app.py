@@ -13382,10 +13382,13 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
-    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    # A prévia permanece intocada. Para a exportação, removemos apenas
+    # o dimensionamento CSS relativo ao container, que pode fazer o CairoSVG
+    # rasterizar a página vazia. Nenhuma coordenada, tamanho, borda, faixa,
+    # marca ou posição da arte é alterada.
+    svg_pdf = svg.replace(" style='width:100%;height:auto;display:block;background:#fff;'", "")
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
@@ -13516,9 +13519,12 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    # MESMO SVG DA PRÉVIA. A prévia não é alterada. Removemos somente o
+    # dimensionamento CSS relativo ao container antes da rasterização, para
+    # evitar PDF vazio no CairoSVG; nenhuma coordenada ou tamanho é recalculado.
+    svg_pdf = svg.replace(" style='width:100%;height:auto;display:block;background:#fff;'", "")
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
