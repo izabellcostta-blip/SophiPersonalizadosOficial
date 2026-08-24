@@ -139,8 +139,54 @@ def _sincronizar_notificacao_portal_nuvem(orcamento_id, token, evento, descricao
         return False
 
 
+def _publicar_feed_notificacao_portal_nuvem(payload):
+    """Publica um feed único de notificações; não depende de Storage LIST."""
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return False
+
+        caminho = "portal_notificacoes_feed.json"
+        feed = []
+        try:
+            raw = sb.storage.from_(bucket_supabase()).download(caminho)
+            if raw:
+                feed = json.loads(
+                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                )
+                if not isinstance(feed, list):
+                    feed = []
+        except Exception:
+            feed = []
+
+        sync_id = str(payload.get("sync_id") or uuid.uuid4().hex)
+        if not any(str(x.get("sync_id") or "") == sync_id for x in feed if isinstance(x, dict)):
+            feed.append(dict(payload))
+
+        # Mantém histórico suficiente para múltiplas ações no mesmo Portal.
+        feed = feed[-500:]
+        dados = json.dumps(feed, ensure_ascii=False).encode("utf-8")
+
+        try:
+            sb.storage.from_(bucket_supabase()).update(
+                caminho,
+                dados,
+                {"content-type": "application/json", "upsert": "true"},
+            )
+        except Exception:
+            sb.storage.from_(bucket_supabase()).upload(
+                caminho,
+                dados,
+                {"content-type": "application/json", "upsert": "true"},
+            )
+        return sync_id
+    except Exception as _feed_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao publicar feed: {_feed_err}")
+        return False
+
+
 def _importar_notificacoes_portal_nuvem():
-    """Importa do Storage as notificações que ainda não estão no SQLite local."""
+    """Importa notificações remotas sem depender de Storage LIST."""
     try:
         sb = cliente_supabase()
         if sb is None:
@@ -148,7 +194,7 @@ def _importar_notificacoes_portal_nuvem():
 
         garantir_portal_v2()
 
-        # Campo técnico apenas para impedir duplicação durante a sincronização.
+        # Migração local, se a coluna ainda não existir.
         try:
             cols = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
             if "sync_id" not in cols:
@@ -157,22 +203,27 @@ def _importar_notificacoes_portal_nuvem():
         except Exception:
             pass
 
-        arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes")
-        if not arquivos:
-            return 0
+        # 1) Caminho principal: baixa um único arquivo conhecido.
+        # Isso não exige permissão de LIST na pasta do Storage.
+        feed = []
+        try:
+            raw = sb.storage.from_(bucket_supabase()).download("portal_notificacoes_feed.json")
+            if raw:
+                feed = json.loads(
+                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                )
+                if not isinstance(feed, list):
+                    feed = []
+        except Exception as _feed_read_err:
+            print(f"[PORTAL NOTIFICACAO] Feed remoto indisponível: {_feed_read_err}")
 
         importados = 0
-        for item in arquivos:
-            nome = str((item or {}).get("name") or "")
-            if not nome.lower().endswith(".json"):
-                continue
 
+        for dados in feed:
+            if not isinstance(dados, dict):
+                continue
             try:
-                raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
-                if not raw:
-                    continue
-                dados = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
-                sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
+                sync_id = str(dados.get("sync_id") or "").strip()
                 if not sync_id:
                     continue
 
@@ -203,9 +254,54 @@ def _importar_notificacoes_portal_nuvem():
                 print(f"[PORTAL NOTIFICACAO] Falha ao importar uma notificação: {_one_notif_err}")
                 continue
 
+        # 2) Fallback antigo: tenta LIST somente se o feed não estiver acessível.
+        if not feed:
+            try:
+                arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes") or []
+                for item in arquivos:
+                    nome = str((item or {}).get("name") or "")
+                    if not nome.lower().endswith(".json"):
+                        continue
+                    try:
+                        raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
+                        if not raw:
+                            continue
+                        dados = json.loads(
+                            raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        )
+                        sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
+                        if not sync_id:
+                            continue
+                        ja_existe = consultar(
+                            "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
+                            (sync_id,)
+                        )
+                        if not ja_existe.empty:
+                            continue
+                        executar(
+                            """INSERT INTO portal_notificacoes
+                               (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
+                               VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
+                            (
+                                int(dados.get("orcamento_id") or 0),
+                                str(dados.get("token") or ""),
+                                str(dados.get("evento") or "Atualização do Portal"),
+                                str(dados.get("descricao") or ""),
+                                int(dados["versao"]) if dados.get("versao") is not None else None,
+                                str(dados.get("data") or agora_brasil().isoformat()),
+                                int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
+                                sync_id,
+                            ),
+                        )
+                        importados += 1
+                    except Exception as _one_old_notif_err:
+                        print(f"[PORTAL NOTIFICACAO] Falha no fallback de notificação: {_one_old_notif_err}")
+            except Exception as _list_err:
+                print(f"[PORTAL NOTIFICACAO] Fallback LIST indisponível: {_list_err}")
+
         return importados
-    except Exception as _notif_list_err:
-        print(f"[PORTAL NOTIFICACAO] Falha ao consultar notificações remotas: {_notif_list_err}")
+    except Exception as _notif_import_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao importar notificações: {_notif_import_err}")
         return 0
 
 
@@ -19042,12 +19138,24 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
                 oid, tok, evt, desc, versao, data_evento, portal_evento_id
             )
 
+            _notif_payload = {
+                "sync_id": str(_notif_sync_id or uuid.uuid4().hex),
+                "orcamento_id": oid,
+                "token": tok,
+                "evento": evt,
+                "descricao": desc,
+                "versao": int(versao) if versao is not None else None,
+                "data": data_evento,
+                "portal_evento_id": int(portal_evento_id),
+            }
+            _feed_sync_id = _publicar_feed_notificacao_portal_nuvem(_notif_payload)
+
             # Mantém também a sincronização tradicional do ERP.
             _sync_ok = enviar_banco_para_nuvem(force=True)
             if _sync_ok is False:
                 print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; canal dedicado preservado.")
-            if not _notif_sync_id:
-                print("[PORTAL NOTIFICACAO] Canal dedicado não conseguiu enviar o evento.")
+            if not _notif_sync_id and not _feed_sync_id:
+                print("[PORTAL NOTIFICACAO] Nenhum canal remoto conseguiu publicar o evento.")
 
         return int(portal_evento_id)
 
