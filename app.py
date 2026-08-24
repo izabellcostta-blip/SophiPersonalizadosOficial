@@ -103,6 +103,112 @@ def bucket_supabase():
         return SUPABASE_BUCKET_PADRAO
 
 
+def _sincronizar_notificacao_portal_nuvem(orcamento_id, token, evento, descricao, versao, data_evento, portal_evento_id):
+    """Envia UMA notificação do Portal como arquivo independente no Storage.
+
+    É um canal complementar somente para notificações. Não substitui nem
+    altera o banco principal do ERP.
+    """
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return False
+
+        sync_id = uuid.uuid4().hex
+        payload = {
+            "sync_id": sync_id,
+            "orcamento_id": int(orcamento_id),
+            "token": str(token),
+            "evento": str(evento or ""),
+            "descricao": str(descricao or ""),
+            "versao": int(versao) if versao is not None else None,
+            "data": str(data_evento or ""),
+            "portal_evento_id": int(portal_evento_id) if portal_evento_id is not None else None,
+        }
+        caminho = f"portal_notificacoes/{sync_id}.json"
+        conteudo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        sb.storage.from_(bucket_supabase()).upload(
+            caminho,
+            conteudo,
+            {"content-type": "application/json", "upsert": "false"},
+        )
+        return sync_id
+    except Exception as _notif_upload_err:
+        print(f"[PORTAL NOTIFICACAO] Falha no canal de notificação: {_notif_upload_err}")
+        return False
+
+
+def _importar_notificacoes_portal_nuvem():
+    """Importa do Storage as notificações que ainda não estão no SQLite local."""
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return 0
+
+        garantir_portal_v2()
+
+        # Campo técnico apenas para impedir duplicação durante a sincronização.
+        try:
+            cols = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+            if "sync_id" not in cols:
+                executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+                executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+        except Exception:
+            pass
+
+        arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes")
+        if not arquivos:
+            return 0
+
+        importados = 0
+        for item in arquivos:
+            nome = str((item or {}).get("name") or "")
+            if not nome.lower().endswith(".json"):
+                continue
+
+            try:
+                raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
+                if not raw:
+                    continue
+                dados = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
+                sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
+                if not sync_id:
+                    continue
+
+                ja_existe = consultar(
+                    "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
+                    (sync_id,)
+                )
+                if not ja_existe.empty:
+                    continue
+
+                executar(
+                    """INSERT INTO portal_notificacoes
+                       (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
+                       VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
+                    (
+                        int(dados.get("orcamento_id") or 0),
+                        str(dados.get("token") or ""),
+                        str(dados.get("evento") or "Atualização do Portal"),
+                        str(dados.get("descricao") or ""),
+                        int(dados["versao"]) if dados.get("versao") is not None else None,
+                        str(dados.get("data") or agora_brasil().isoformat()),
+                        int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
+                        sync_id,
+                    ),
+                )
+                importados += 1
+            except Exception as _one_notif_err:
+                print(f"[PORTAL NOTIFICACAO] Falha ao importar uma notificação: {_one_notif_err}")
+                continue
+
+        return importados
+    except Exception as _notif_list_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao consultar notificações remotas: {_notif_list_err}")
+        return 0
+
+
 def baixar_banco_da_nuvem():
     """Baixa o banco salvo no Supabase Storage antes do app criar tabelas."""
     global _SYNC_NUVEM_ATIVO
@@ -18810,7 +18916,8 @@ def garantir_portal_v2():
         versao INTEGER,
         lida TEXT DEFAULT 'Não',
         data TEXT DEFAULT CURRENT_TIMESTAMP,
-        portal_evento_id INTEGER
+        portal_evento_id INTEGER,
+        sync_id TEXT
     )
     """)
     # Compatibilidade com instalações anteriores: adiciona somente os campos
@@ -18825,6 +18932,9 @@ def garantir_portal_v2():
             executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
         if "portal_evento_id" not in _cols_notif:
             executar("ALTER TABLE portal_notificacoes ADD COLUMN portal_evento_id INTEGER")
+        if "sync_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+            executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
     except Exception:
         pass
 
@@ -18920,9 +19030,18 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
         # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
         # confirmada pelo cliente gera uma nova notificação.
         if evt in eventos_cliente:
+            # Canal dedicado: a notificação chega mesmo se a sincronização
+            # do arquivo SQLite estiver atrasada ou em conflito.
+            _notif_sync_id = _sincronizar_notificacao_portal_nuvem(
+                oid, tok, evt, desc, versao, data_evento, portal_evento_id
+            )
+
+            # Mantém também a sincronização tradicional do ERP.
             _sync_ok = enviar_banco_para_nuvem(force=True)
             if _sync_ok is False:
-                print("[PORTAL NOTIFICACAO] Evento gravado, mas o banco não foi sincronizado.")
+                print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; canal dedicado preservado.")
+            if not _notif_sync_id:
+                print("[PORTAL NOTIFICACAO] Canal dedicado não conseguiu enviar o evento.")
 
         return int(portal_evento_id)
 
@@ -18953,6 +19072,14 @@ def mostrar_notificacoes_portal_erp():
             baixar_banco_da_nuvem()
         except Exception:
             pass
+
+        # Busca também o canal dedicado. Isso é o que garante a chegada
+        # imediata quando Portal e ERP estão em sessões Railway diferentes.
+        try:
+            _importar_notificacoes_portal_nuvem()
+        except Exception as _notif_import_err:
+            print(f"[PORTAL NOTIFICACAO] Falha na atualização das notificações: {_notif_import_err}")
+
         notas = consultar("""
             SELECT n.*, o.cliente_nome
             FROM portal_notificacoes n
