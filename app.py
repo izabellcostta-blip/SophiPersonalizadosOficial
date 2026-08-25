@@ -7092,10 +7092,57 @@ def link_catalogo_publico():
 # PORTAL DO CLIENTE + CATÁLOGO COM CARRINHO
 # ============================================================
 
+def garantir_pedidos_catalogo():
+    executar("""
+    CREATE TABLE IF NOT EXISTS pedidos_catalogo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        produto_id INTEGER,
+        produto_nome TEXT,
+        categoria TEXT,
+        preco REAL DEFAULT 0,
+        cliente_nome TEXT,
+        whatsapp TEXT,
+        quantidade REAL DEFAULT 1,
+        observacoes TEXT,
+        status TEXT DEFAULT 'Novo',
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
+        origem TEXT DEFAULT 'Catálogo',
+        total REAL DEFAULT 0,
+        codigo TEXT
+    )
+    """)
+    for coluna, tipo_coluna in {
+        "total": "REAL DEFAULT 0",
+        "codigo": "TEXT",
+        "origem": "TEXT DEFAULT 'Catálogo'",
+    }.items():
+        try:
+            executar(f"ALTER TABLE pedidos_catalogo ADD COLUMN {coluna} {tipo_coluna}")
+        except Exception:
+            pass
 
 
+def garantir_pedidos_catalogo_itens():
+    garantir_pedidos_catalogo()
+    executar("""
+    CREATE TABLE IF NOT EXISTS pedidos_catalogo_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_catalogo_id INTEGER,
+        produto_id INTEGER,
+        produto_nome TEXT,
+        categoria TEXT,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        total REAL DEFAULT 0
+    )
+    """)
 
 
+def codigo_pedido_catalogo(pid):
+    try:
+        return codigo_visual("CAT", int(pid), ano=datetime.now().year)
+    except Exception:
+        return f"CAT-{int(pid):04d}"
 
 
 def obter_app_url_padrao():
@@ -7120,25 +7167,399 @@ def gerar_link_portal_orcamento(orc_id, base_url=None):
     return f"{base_url}/?portal=cliente&token={token}"
 
 
+def mensagem_portal_cliente(cliente_nome, codigo, status, total, link):
+    nome = cliente_nome or "cliente"
+    texto = (
+        f"Olá {nome}! 🤍\n\n"
+        f"Você pode acompanhar o status do seu pedido pelo link abaixo:\n\n"
+        f"Pedido: {codigo}\n"
+        f"Status atual: {status}\n"
+        f"Valor: {total}\n\n"
+        f"Acompanhar pedido:\n{link}\n\n"
+        f"Sempre que atualizarmos o status, você poderá conferir por esse mesmo link. ✨\n\n"
+        f"Equipe Sophi Personalizados Oficial"
+    )
+    try:
+        return limpar_texto_whatsapp(texto)
+    except Exception:
+        return texto
+
+
+def mensagem_pedido_catalogo(cliente_nome, itens_texto, total, observacoes=""):
+    nome = cliente_nome or "cliente"
+    obs = f"\n\nObservações: {observacoes}" if str(observacoes or "").strip() else ""
+    texto = (
+        f"Olá {nome}! 🤍\n\n"
+        f"Recebemos sua solicitação pelo catálogo da Sophi Personalizados Oficial:\n\n"
+        f"{itens_texto}\n\n"
+        f"Total estimado: {real(total)}"
+        f"{obs}\n\n"
+        f"Vou conferir disponibilidade, personalização e prazo e já te retorno por aqui. ✨"
+    )
+    try:
+        return limpar_texto_whatsapp(texto)
+    except Exception:
+        return texto
+
+
+def catalogo_carrinho_inicial():
+    if "catalogo_carrinho" not in st.session_state:
+        st.session_state["catalogo_carrinho"] = []
+
+
+def adicionar_item_carrinho_catalogo(produto_id, nome, categoria, preco, quantidade):
+    catalogo_carrinho_inicial()
+    carrinho = st.session_state["catalogo_carrinho"]
+    for item in carrinho:
+        if int(item["produto_id"]) == int(produto_id):
+            item["quantidade"] = n(item["quantidade"]) + n(quantidade)
+            item["total"] = n(item["quantidade"]) * n(item["preco"])
+            st.session_state["catalogo_carrinho"] = carrinho
+            return
+    carrinho.append({
+        "produto_id": int(produto_id),
+        "nome": str(nome),
+        "categoria": str(categoria or ""),
+        "preco": n(preco),
+        "quantidade": n(quantidade),
+        "total": n(preco) * n(quantidade),
+    })
+    st.session_state["catalogo_carrinho"] = carrinho
+
+
+def remover_item_carrinho_catalogo(indice):
+    catalogo_carrinho_inicial()
+    carrinho = st.session_state["catalogo_carrinho"]
+    if 0 <= int(indice) < len(carrinho):
+        carrinho.pop(int(indice))
+    st.session_state["catalogo_carrinho"] = carrinho
+
+
+def limpar_carrinho_catalogo():
+    st.session_state["catalogo_carrinho"] = []
+
+
+def total_carrinho_catalogo():
+    catalogo_carrinho_inicial()
+    return sum(n(item.get("total", 0)) for item in st.session_state["catalogo_carrinho"])
+
+
+def bloco_carrinho_catalogo_publico():
+    garantir_pedidos_catalogo_itens()
+    catalogo_carrinho_inicial()
+
+    st.markdown("---")
+    st.subheader("🛒 Comprar pelo catálogo")
+    st.write("Escolha os produtos, envie sua solicitação e a Sophi confirma prazo, personalização e pagamento pelo WhatsApp.")
+
+    produtos = consultar_produtos_catalogo_seguro()
+
+    if produtos.empty:
+        st.info("Nenhum produto disponível para compra no momento.")
+        return
+
+    c1, c2, c3 = st.columns([3, 1, 1])
+    opcoes = {}
+    for _, pr in produtos.iterrows():
+        preco = n(pr.get("preco_escolhido", 0)) or n(pr.get("preco_sugerido", 0))
+        status = str("Disponível" or "Disponível")
+        opcoes[f"{pr['nome']} | {real(preco)} | {status}"] = int(pr["id"])
+
+    produto_escolhido = c1.selectbox("Produto", list(opcoes.keys()), key="cat_carrinho_produto")
+    produto_id = opcoes[produto_escolhido]
+    pr = produtos[produtos["id"] == produto_id].iloc[0]
+    preco = n(pr.get("preco_escolhido", 0)) or n(pr.get("preco_sugerido", 0))
+    quantidade = c2.number_input("Qtd", min_value=1, value=1, step=1, key="cat_carrinho_qtd")
+    c3.write("")
+    c3.write("")
+    if c3.button("Adicionar", use_container_width=True, key="cat_add_carrinho"):
+        adicionar_item_carrinho_catalogo(produto_id, pr["nome"], pr.get("categoria", ""), preco, quantidade)
+        st.success("Produto adicionado ao carrinho.")
+        st.rerun()
+
+    carrinho = st.session_state.get("catalogo_carrinho", [])
+    if not carrinho:
+        st.info("Seu carrinho está vazio.")
+        return
+
+    st.markdown("### Seu carrinho")
+    for i, item in enumerate(carrinho):
+        citem1, citem2, citem3 = st.columns([4, 2, 1])
+        citem1.write(f"**{item['nome']}**  \nQtd: {item['quantidade']} | Unitário: {real(item['preco'])}")
+        citem2.write(f"**{real(item['total'])}**")
+        if citem3.button("Remover", key=f"remover_cat_{i}"):
+            remover_item_carrinho_catalogo(i)
+            st.rerun()
+
+    total = total_carrinho_catalogo()
+    st.metric("Total estimado", real(total))
+
+    if st.button("Limpar carrinho", key="limpar_carrinho_catalogo"):
+        limpar_carrinho_catalogo()
+        st.rerun()
+
+    st.markdown("### Finalizar solicitação")
+    with st.form("checkout_catalogo_publico"):
+        nome_cliente = st.text_input("Seu nome")
+        whatsapp_cliente = st.text_input("Seu WhatsApp")
+        observacoes = st.text_area("Observações / personalização", placeholder="Ex: tema, nome, data, cores, prazo desejado...")
+        enviar = st.form_submit_button("Enviar solicitação de pedido")
+
+        if enviar:
+            if not nome_cliente.strip() or not whatsapp_cliente.strip():
+                st.error("Preencha seu nome e WhatsApp.")
+            elif not carrinho:
+                st.error("Seu carrinho está vazio.")
+            else:
+                pedido_id = executar("""
+                INSERT INTO pedidos_catalogo(
+                    produto_id, produto_nome, categoria, preco, cliente_nome,
+                    whatsapp, quantidade, observacoes, status, total, origem
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (None, "Pedido com múltiplos itens", "Carrinho", total, nome_cliente, whatsapp_cliente, len(carrinho), observacoes, "Novo", total, "Catálogo"))
+
+                codigo = codigo_pedido_catalogo(int(pedido_id))
+                try:
+                    executar("UPDATE pedidos_catalogo SET codigo=? WHERE id=?", (codigo, int(pedido_id)))
+                except Exception:
+                    pass
+
+                linhas = []
+                for item in carrinho:
+                    linhas.append(f"- {item['nome']} | Qtd: {item['quantidade']} | {real(item['total'])}")
+                    executar("""
+                    INSERT INTO pedidos_catalogo_itens(
+                        pedido_catalogo_id, produto_id, produto_nome, categoria,
+                        quantidade, valor_unitario, total
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (int(pedido_id), int(item["produto_id"]), str(item["nome"]), str(item.get("categoria", "")), n(item["quantidade"]), n(item["preco"]), n(item["total"])))
+
+                msg = mensagem_pedido_catalogo(nome_cliente, "\n".join(linhas), total, observacoes)
+                limpar_carrinho_catalogo()
+                st.success(f"Solicitação enviada com sucesso! Código: {codigo}")
+                st.info("A Sophi recebeu seu pedido no ERP e vai te chamar no WhatsApp.")
+
+                link = link_whatsapp(whatsapp_cliente, msg)
+                if link:
+                    st.link_button("Abrir WhatsApp com minha solicitação", link, use_container_width=True)
+
+
+def tela_pedidos_catalogo():
+    st.title("Pedidos do Catálogo")
+    st.write("Solicitações que os clientes enviaram pelo catálogo virtual.")
+
+    garantir_pedidos_catalogo_itens()
+    pedidos = consultar("SELECT * FROM pedidos_catalogo ORDER BY id DESC LIMIT 500")
+
+    if pedidos.empty:
+        st.info("Nenhuma solicitação recebida pelo catálogo ainda.")
+        return
+
+    if "total" not in pedidos.columns:
+        pedidos["total"] = pedidos.apply(lambda r: n(r.get("preco", 0)) * n(r.get("quantidade", 1)), axis=1)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        card("Novos", str(len(pedidos[pedidos["status"] == "Novo"])))
+    with c2:
+        card("Em atendimento", str(len(pedidos[pedidos["status"] == "Em atendimento"])))
+    with c3:
+        card("Aprovados", str(len(pedidos[pedidos["status"] == "Aprovado"])))
+    with c4:
+        card("Potencial", real(pedidos["total"].apply(n).sum()))
+
+    st.dataframe(formatar_valores_tabela(pedidos), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Atender solicitação")
+
+    mapa = {
+        f"{codigo_pedido_catalogo(r['id'])} | {r['cliente_nome']} | {r['produto_nome']} | {r['status']}": int(r["id"])
+        for _, r in pedidos.iterrows()
+    }
+    escolhido = st.selectbox("Escolha uma solicitação", list(mapa.keys()))
+    pid = mapa[escolhido]
+    p = pedidos[pedidos["id"] == pid].iloc[0]
+
+    itens = consultar("SELECT * FROM pedidos_catalogo_itens WHERE pedido_catalogo_id=? ORDER BY id", (int(pid),))
+    total_pedido = n(p.get("total", 0))
+    if total_pedido <= 0:
+        total_pedido = itens["total"].apply(n).sum() if not itens.empty else n(p.get("preco", 0)) * n(p.get("quantidade", 1))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Cliente", str(p["cliente_nome"]))
+    c2.metric("Itens", str(len(itens) if not itens.empty else 1))
+    c3.metric("Total estimado", real(total_pedido))
+    st.write(f"**WhatsApp:** {p['whatsapp']}")
+    st.write(f"**Observações:** {p.get('observacoes', '')}")
+
+    if itens.empty:
+        itens_texto = f"- {p['produto_nome']} | Qtd: {p['quantidade']} | {real(n(p['preco']) * n(p['quantidade']))}"
+        st.write(itens_texto)
+    else:
+        st.dataframe(formatar_valores_tabela(itens), use_container_width=True, hide_index=True)
+        itens_texto = "\n".join([f"- {it['produto_nome']} | Qtd: {it['quantidade']} | {real(it['total'])}" for _, it in itens.iterrows()])
+
+    
+    codigo_cat = codigo_pedido_catalogo(int(pid))
+    if itens.empty:
+        itens_texto_wpp = f"- {p['produto_nome']} | Qtd: {p['quantidade']} | {real(n(p['preco']) * n(p['quantidade']))}"
+    else:
+        itens_texto_wpp = "\n".join([
+            f"- {it['produto_nome']} | Qtd: {it['quantidade']} | {real(it['total'])}"
+            for _, it in itens.iterrows()
+        ])
+
+    botoes_whatsapp_pedido_catalogo(p, codigo_cat, itens_texto_wpp, total_pedido)
+
+
+    
+    codigo_cat_wpp = codigo_pedido_catalogo(int(pid))
+    if itens.empty:
+        itens_texto_recebido = f"- {p['produto_nome']} | Qtd: {p['quantidade']} | {real(n(p['preco']) * n(p['quantidade']))}"
+    else:
+        itens_texto_recebido = "\n".join([
+            f"- {it['produto_nome']} | Qtd: {it['quantidade']} | {real(it['total'])}"
+            for _, it in itens.iterrows()
+        ])
+
+    botao_recebemos_pedido_catalogo(p, codigo_cat_wpp, itens_texto_recebido, total_pedido)
+
+
+    
+    codigo_cat_msg = codigo_pedido_catalogo(int(pid))
+    botao_whatsapp_catalogo_online(
+        p.get("whatsapp", ""),
+        p.get("cliente_nome", "cliente"),
+        codigo_cat_msg,
+        real(total_pedido),
+        pix_empresa(),
+        "",
+    )
+
+
+    opcoes_status = ["Novo", "Em atendimento", "Aprovado", "Transformado em orçamento", "Cancelado"]
+    status_atual = str(p["status"])
+    novo_status = st.selectbox("Status", opcoes_status, index=opcoes_status.index(status_atual) if status_atual in opcoes_status else 0, key=f"status_pedido_catalogo_{pid}")
+
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        if st.button("Salvar status", use_container_width=True):
+            executar("UPDATE pedidos_catalogo SET status=? WHERE id=?", (novo_status, int(pid)))
+            st.success("Status atualizado.")
+            st.rerun()
+
+    with b2:
+        msg = mensagem_pedido_catalogo(p["cliente_nome"], itens_texto, total_pedido, p.get("observacoes", ""))
+        link = link_whatsapp(p["whatsapp"], msg)
+        if link:
+            st.link_button("Responder no WhatsApp", link, use_container_width=True)
+
+    with b3:
+        if st.button("Transformar em orçamento", use_container_width=True):
+            cliente = consultar("SELECT id FROM clientes WHERE whatsapp=? LIMIT 1", (str(p["whatsapp"]),))
+            if cliente.empty:
+                cliente_id = executar("INSERT INTO clientes(nome, whatsapp, ativo) VALUES (?, ?, ?)", (str(p["cliente_nome"]), str(p["whatsapp"]), "Sim"))
+            else:
+                cliente_id = int(cliente.iloc[0]["id"])
+
+            orc_id = executar("""
+            INSERT INTO orcamentos(cliente_id, cliente_nome, whatsapp, status, forma_pagamento, subtotal, desconto, frete, total, observacoes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (int(cliente_id), str(p["cliente_nome"]), str(p["whatsapp"]), "Em orçamento", "A combinar", total_pedido, 0, 0, total_pedido, f"Solicitação criada pelo catálogo. Observações: {p.get('observacoes', '')}"))
+
+            if itens.empty:
+                total_item = n(p["preco"]) * n(p["quantidade"])
+                executar("INSERT INTO orcamento_itens(orcamento_id, produto, categoria, quantidade, valor_unitario, desconto, total) VALUES (?, ?, ?, ?, ?, ?, ?)", (int(orc_id), str(p["produto_nome"]), str(p.get("categoria", "")), n(p["quantidade"]), n(p["preco"]), 0, total_item))
+            else:
+                for _, it in itens.iterrows():
+                    executar("INSERT INTO orcamento_itens(orcamento_id, produto, categoria, quantidade, valor_unitario, desconto, total) VALUES (?, ?, ?, ?, ?, ?, ?)", (int(orc_id), str(it["produto_nome"]), str(it.get("categoria", "")), n(it["quantidade"]), n(it["valor_unitario"]), 0, n(it["total"])))
+
+            executar("UPDATE pedidos_catalogo SET status='Transformado em orçamento' WHERE id=?", (int(pid),))
+            st.success(f"Orçamento criado: {codigo_visual('ORC', int(orc_id), ano=datetime.now().year)}")
+            st.rerun()
 
 
 
+def consultar_produtos_catalogo_seguro():
+    """Consulta produtos do catálogo sem quebrar quando o banco antigo não tem algumas colunas."""
+    try:
+        colunas = consultar("PRAGMA table_info(produtos)")
+        nomes = set(colunas["name"].tolist()) if not colunas.empty and "name" in colunas.columns else set()
+    except Exception:
+        nomes = set()
 
+    campos = []
+    for campo in ["id", "nome", "categoria", "descricao", "preco_escolhido", "preco_sugerido", "foto", "ativo"]:
+        if campo in nomes:
+            campos.append(campo)
 
+    if not campos:
+        return pd.DataFrame()
 
+    where = "WHERE ativo='Sim'" if "ativo" in nomes else ""
+    order = "ORDER BY categoria, nome" if "categoria" in nomes else "ORDER BY nome"
 
+    df = consultar(f"SELECT {', '.join(campos)} FROM produtos {where} {order}")
 
+    for campo, padrao in {
+        "categoria": "",
+        "descricao": "",
+        "preco_escolhido": 0,
+        "preco_sugerido": 0,
+        "foto": "",
+        "foto": "",
+        "ativo": "Sim",
+        "status_catalogo": "Disponível",
+        "descricao_catalogo": "",
+    }.items():
+        if campo not in df.columns:
+            df[campo] = padrao
 
+    # Também coloca os kits cadastrados no catálogo online.
+    # Eles ficam como itens com id negativo para não misturar com os produtos.
+    try:
+        kits_df = consultar("SELECT * FROM kits ORDER BY nome")
+    except Exception:
+        kits_df = pd.DataFrame()
 
+    if not kits_df.empty:
+        if "ativo" in kits_df.columns:
+            kits_df = kits_df[kits_df["ativo"].astype(str).str.strip().str.lower() != "não"]
 
+        def _coluna_kit(nome_coluna, padrao=""):
+            if nome_coluna in kits_df.columns:
+                return kits_df[nome_coluna]
+            return pd.Series([padrao] * len(kits_df))
 
+        preco_promocional = _coluna_kit("preco_promocional", 0).apply(n)
+        preco_por = _coluna_kit("preco_por", 0).apply(n)
+        preco_sugerido_kit = _coluna_kit("preco_sugerido", 0).apply(n)
+        preco_final = preco_promocional.where(preco_promocional > 0, preco_por)
+        preco_final = preco_final.where(preco_final > 0, preco_sugerido_kit)
 
+        kits_catalogo = pd.DataFrame({
+            "id": -_coluna_kit("id", 0).apply(lambda x: int(n(x))).abs(),
+            "nome": _coluna_kit("nome", "Kit Presente"),
+            "categoria": _coluna_kit("categoria", "Kits Presente"),
+            "descricao": _coluna_kit("descricao", "Kit presente personalizado completo."),
+            "preco_escolhido": preco_final,
+            "preco_sugerido": preco_sugerido_kit,
+            "foto": _coluna_kit("foto", ""),
+            "ativo": "Sim",
+            "status_catalogo": "Disponível",
+            "descricao_catalogo": _coluna_kit("descricao", "Kit presente personalizado completo."),
+            "tipo_item": "kit",
+        })
 
+        if "tipo_item" not in df.columns:
+            df["tipo_item"] = "produto"
 
+        df = pd.concat([df, kits_catalogo], ignore_index=True)
 
-
-
-
+    return df
 
 
 
@@ -7203,6 +7624,35 @@ def dados_catalogo_empresa():
     }
 
 
+def html_hero_catalogo_empresa():
+    dados = dados_catalogo_empresa()
+    logo_html = ""
+    if dados["logo"]:
+        logo_html = f'<img src="{dados["logo"]}" style="width:92px;height:92px;object-fit:contain;border-radius:22px;background:#fff;padding:8px;margin-bottom:12px;">'
+    else:
+        logo_html = '<div style="width:92px;height:92px;border-radius:22px;background:#fff;color:#111;display:flex;align-items:center;justify-content:center;font-size:42px;font-weight:900;margin-bottom:12px;">S</div>'
+
+    info = []
+    if dados["whatsapp"]:
+        info.append(f"WhatsApp: {dados['whatsapp']}")
+    if dados["instagram"]:
+        info.append(f"Instagram: {dados['instagram']}")
+    if dados["prazo"]:
+        info.append(f"Prazo: {dados['prazo']}")
+    if dados["pagamento"]:
+        info.append(f"Pagamento: {dados['pagamento']}")
+
+    info_html = "".join([f'<span class="shop-badge">{i}</span>' for i in info])
+
+    return f"""
+    <div class="shop-hero">
+        {logo_html}
+        <h1>{dados['nome']}</h1>
+        <p><b>{dados['subtitulo']}</b></p>
+        <p>{dados['descricao']}</p>
+        {info_html}
+    </div>
+    """
 
 
 
@@ -7213,6 +7663,15 @@ def dados_catalogo_empresa():
 
 APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
+def obter_config_flex(chaves, padrao=""):
+    for chave in chaves:
+        try:
+            v = obter_config(chave, "")
+            if str(v or "").strip():
+                return str(v).strip()
+        except Exception:
+            pass
+    return padrao
 
 
 def procurar_logo_catalogo():
@@ -7281,12 +7740,360 @@ def logo_catalogo_data_uri():
         return ""
 
 
+def dados_catalogo_empresa_final():
+    return {
+        "nome": obter_config_flex(["nome_catalogo", "nome_empresa", "empresa"], EMPRESA),
+        "subtitulo": obter_config_flex(
+            ["subtitulo_catalogo", "frase_catalogo", "slogan_catalogo", "slogan"],
+            "Personalizados feitos com carinho para eternizar momentos.",
+        ),
+        "descricao": obter_config_flex(
+            ["descricao_catalogo", "texto_catalogo", "sobre_catalogo"],
+            "Escolha seus personalizados, monte seu carrinho e envie sua solicitação.",
+        ),
+        "whatsapp": obter_config_flex(["whatsapp", "telefone", "contato_whatsapp"], "(13) 99211-2108"),
+        "instagram": obter_config_flex(["instagram", "instagram_catalogo"], "@sophipersonalizadosoficial"),
+        "prazo": obter_config_flex(["prazo_catalogo", "prazo_producao", "prazo"], "Prazo conforme personalização."),
+        "pagamento": obter_config_flex(["pagamento_catalogo", "formas_pagamento"], "Pagamento combinado pelo WhatsApp."),
+        "logo": logo_catalogo_data_uri(),
+    }
 
 
+def css_catalogo_loja():
+    st.markdown("""
+    <style>
+    .main .block-container {
+        max-width: 1180px;
+        padding-top: 1.5rem;
+    }
+    .shop-hero {
+        max-width: 980px;
+        margin: 0 auto 28px auto;
+        text-align: center;
+        background: radial-gradient(circle at top, #303030 0%, #111111 58%, #050505 100%);
+        border-radius: 30px;
+        padding: 34px 28px;
+        color: white;
+        box-shadow: 0 22px 60px rgba(0,0,0,.22);
+    }
+    .shop-logo {
+        width: 112px;
+        height: 112px;
+        object-fit: contain;
+        border-radius: 50%;
+        background: white;
+        padding: 8px;
+        margin: 0 auto 14px auto;
+        display: block;
+        box-shadow: 0 10px 28px rgba(255,255,255,.18);
+    }
+    .shop-logo-fallback {
+        width: 112px;
+        height: 112px;
+        border-radius: 50%;
+        background: white;
+        color: #111;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 52px;
+        font-weight: 900;
+        margin: 0 auto 14px auto;
+    }
+    .shop-hero h1 {
+        font-size: 38px;
+        margin: 0;
+        font-weight: 950;
+        letter-spacing: -1px;
+    }
+    .shop-hero p {
+        opacity: .92;
+        font-size: 16px;
+        max-width: 760px;
+        margin: 10px auto 0 auto;
+    }
+    .shop-badges {
+        margin-top: 18px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    .shop-badge {
+        display: inline-block;
+        background: rgba(255,255,255,.14);
+        border: 1px solid rgba(255,255,255,.25);
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    .shop-card {
+        background: #fff;
+        border: 1px solid #ececec;
+        border-radius: 22px;
+        padding: 18px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.05);
+        height: 100%;
+        margin-bottom: 18px;
+    }
+    .shop-img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 16px;
+        display: block;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+    }
+    .shop-semfoto {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 16px;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+        color: #999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 14px;
+    }
+    .shop-cat {
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: 11px;
+        color: #8a8a8a;
+        font-weight: 800;
+    }
+    .shop-name {
+        font-size: 22px;
+        font-weight: 900;
+        color: #161616;
+        margin-top: 4px;
+        min-height: 54px;
+    }
+    .shop-desc {
+        color: #626262;
+        font-size: 14px;
+        min-height: 46px;
+    }
+    .shop-price {
+        font-size: 28px;
+        font-weight: 950;
+        color: #161616;
+        margin: 12px 0;
+    }
+    .cart-box {
+        max-width: 980px;
+        margin: 24px auto 0 auto;
+        background: #fff;
+        border: 1px solid #e7e2e6;
+        border-radius: 24px;
+        padding: 22px;
+        box-shadow: 0 15px 42px rgba(0,0,0,.07);
+    }
+    .cart-title {
+        font-size: 26px;
+        font-weight: 900;
+        margin-bottom: 8px;
+        text-align: center;
+    }
+    .cart-line {
+        background: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 16px;
+        padding: 12px;
+        margin-bottom: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown('\n    <style>\n    .shop-badges {max-width: 820px; margin-left:auto; margin-right:auto;}\n    .shop-badge {white-space: normal; max-width: 100%; line-height: 1.35;}\n    </style>\n', unsafe_allow_html=True)
 
 
+def html_hero_catalogo_empresa():
+    d = dados_catalogo_empresa_final()
+    if d["logo"]:
+        logo_html = f'<img class="shop-logo" src="{d["logo"]}">'
+    else:
+        logo_html = '<div class="shop-logo-fallback">S</div>'
+
+    badges = []
+    if d["whatsapp"]:
+        badges.append(f"WhatsApp: {d['whatsapp']}")
+    if d["instagram"]:
+        badges.append(f"Instagram: {d['instagram']}")
+    if d["prazo"]:
+        badges.append(f"Prazo: {d['prazo']}")
+    if d["pagamento"]:
+        badges.append(f"Pagamento: {d['pagamento']}")
+
+    badges_html = "".join([f'<span class="shop-badge">{b}</span>' for b in badges])
+
+    return f"""
+    <div class="shop-hero">
+        {logo_html}
+        <h1>{d['nome']}</h1>
+        <p><b>{d['subtitulo']}</b></p>
+        <p>{d['descricao']}</p>
+        <div class="shop-badges">{badges_html}</div>
+    </div>
+    """
 
 
+def tela_catalogo_publico_cliente():
+    garantir_pedidos_catalogo_itens()
+    css_catalogo_loja()
+    catalogo_carrinho_inicial()
+
+    produtos = consultar_produtos_catalogo_seguro()
+
+    kits = pd.DataFrame()
+
+    st.markdown(html_hero_catalogo_empresa(), unsafe_allow_html=True)
+
+    if produtos.empty and kits.empty:
+        st.info("Nenhum produto ou kit disponível no catálogo no momento.")
+        return
+
+    st.markdown("<div class='produtos-wrap'><h2 style='text-align:center;margin:20px 0 22px 0;'>Produtos disponíveis</h2></div>", unsafe_allow_html=True)
+
+    cols = st.columns(3)
+    for idx, (_, pr) in enumerate(produtos.iterrows()):
+        with cols[idx % 3]:
+            preco = n(pr.get("preco_escolhido", 0)) or n(pr.get("preco_sugerido", 0))
+            descricao = str(pr.get("descricao", "") or "Produto personalizado sob encomenda.")
+            categoria = str(pr.get("categoria", "") or "Personalizados")
+            nome = str(pr.get("nome", "Produto"))
+            tipo_item = str(pr.get("tipo_item", "produto") or "produto")
+
+            foto_uri = foto_produto_data_uri(pr.get("foto", ""))
+            if foto_uri:
+                st.markdown(
+                    f'<img src="{foto_uri}" style="width:100%;max-width:230px;aspect-ratio:1/1;object-fit:cover;border-radius:18px;margin:0 auto 10px auto;display:block;">',
+                    unsafe_allow_html=True,
+                )
+
+            descricao_html = html.escape(descricao).replace("\n", "<br>")
+            if tipo_item != "kit":
+                descricao_html = html.escape(descricao[:140])
+
+            st.markdown(f"""
+            <div class="shop-card">
+                <div class="shop-cat">{html.escape(categoria)}</div>
+                <div class="shop-name">{html.escape(nome)}</div>
+                <div class="shop-desc">{descricao_html}</div>
+                <div class="shop-price">{real(preco)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            qtd = st.number_input(
+                "Quantidade",
+                min_value=1,
+                value=1,
+                step=1,
+                key=f"qtd_shop_{int(pr['id'])}",
+            )
+
+            if st.button("Adicionar ao carrinho", key=f"add_shop_{int(pr['id'])}", use_container_width=True):
+                adicionar_item_carrinho_catalogo(pr["id"], nome, categoria, preco, qtd)
+                st.success("Produto adicionado ao carrinho.")
+                st.rerun()
+
+    carrinho = st.session_state.get("catalogo_carrinho", [])
+
+    st.markdown('<div class="cart-box">', unsafe_allow_html=True)
+    st.markdown('<div class="cart-title">🛒 Seu carrinho</div>', unsafe_allow_html=True)
+
+    if not carrinho:
+        st.info("Seu carrinho está vazio. Adicione um produto ou kit acima.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    for i, item in enumerate(carrinho):
+        c1, c2, c3 = st.columns([4, 2, 1])
+        with c1:
+            st.markdown(
+                f'<div class="cart-line"><b>{item["nome"]}</b><br>Qtd: {item["quantidade"]} | Unitário: {real(item["preco"])}</div>',
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(f"**{real(item['total'])}**")
+        with c3:
+            if st.button("Remover", key=f"remover_cat_{i}"):
+                remover_item_carrinho_catalogo(i)
+                st.rerun()
+
+    total = total_carrinho_catalogo()
+    st.metric("Total estimado", real(total))
+
+    if st.button("Limpar carrinho", key="limpar_carrinho_catalogo"):
+        limpar_carrinho_catalogo()
+        st.rerun()
+
+    st.markdown("### Finalizar solicitação")
+    with st.form("checkout_catalogo_publico"):
+        nome_cliente = st.text_input("Seu nome")
+        whatsapp_cliente = st.text_input("Seu WhatsApp")
+        observacoes = st.text_area(
+            "Observações / personalização",
+            placeholder="Ex: tema, nome, data, cores, prazo desejado...",
+        )
+        enviar = st.form_submit_button("Enviar pedido para a Sophi")
+
+        if enviar:
+            if not nome_cliente.strip() or not whatsapp_cliente.strip():
+                st.error("Preencha seu nome e WhatsApp.")
+            elif not carrinho:
+                st.error("Seu carrinho está vazio.")
+            else:
+                pedido_id = executar("""
+                INSERT INTO pedidos_catalogo(
+                    produto_id, produto_nome, categoria, preco, cliente_nome,
+                    whatsapp, quantidade, observacoes, status, total, origem
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    None,
+                    "Pedido com múltiplos itens",
+                    "Carrinho",
+                    total,
+                    nome_cliente,
+                    whatsapp_cliente,
+                    len(carrinho),
+                    observacoes,
+                    "Novo",
+                    total,
+                    "Catálogo",
+                ))
+
+                codigo = codigo_pedido_catalogo(int(pedido_id))
+                try:
+                    executar("UPDATE pedidos_catalogo SET codigo=? WHERE id=?", (codigo, int(pedido_id)))
+                except Exception:
+                    pass
+
+                for item in carrinho:
+                    executar("""
+                    INSERT INTO pedidos_catalogo_itens(
+                        pedido_catalogo_id, produto_id, produto_nome, categoria,
+                        quantidade, valor_unitario, total
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        int(pedido_id),
+                        int(item["produto_id"]),
+                        str(item["nome"]),
+                        str(item.get("categoria", "")),
+                        n(item["quantidade"]),
+                        n(item["preco"]),
+                        n(item["total"]),
+                    ))
+
+                limpar_carrinho_catalogo()
+                st.success(f"Pedido enviado com sucesso! Código: {codigo}")
+                st.info("Seu pedido chegou no ERP da Sophi. Vamos chamar você no WhatsApp para confirmar prazo e pagamento.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
 # MÓDULO 2 — PRODUÇÃO / ORDEM DE PRODUÇÃO
@@ -10849,8 +11656,194 @@ def _formatar_data_hora_portal(valor):
     except Exception:
         return str(valor)
 
+def tela_portal_cliente_publico():
+    aplicar_visual_publico_limpo()
+    garantir_portal_cliente()
+
+    try:
+        token = st.query_params.get("token", "")
+    except Exception:
+        token = ""
+
+    st.title("Portal do Cliente")
+    st.write("Acompanhe seu pedido da Sophi Personalizados.")
+
+    if not token:
+        st.error("Link inválido.")
+        st.stop()
+
+    token_df = consultar("""
+    SELECT * FROM portal_tokens
+    WHERE token=? AND ativo='Sim'
+    LIMIT 1
+    """, (str(token),))
+
+    if token_df.empty:
+        st.error("Link inválido ou expirado.")
+        st.stop()
+
+    try:
+        executar("""
+        UPDATE portal_tokens
+        SET acessos=COALESCE(acessos,0)+1, ultimo_acesso=CURRENT_TIMESTAMP
+        WHERE token=?
+        """, (str(token),))
+    except Exception:
+        pass
+
+    t = token_df.iloc[0]
+    ref_id = int(t["referencia_id"])
+    tipo = str(t["tipo"])
+
+    if tipo == "Orçamento":
+        orc = consultar("SELECT * FROM orcamentos WHERE id=?", (ref_id,))
+    else:
+        op = consultar("SELECT * FROM ordens_producao WHERE id=?", (ref_id,))
+        if op.empty:
+            orc = pd.DataFrame()
+        else:
+            orc_id = op.iloc[0].get("orcamento_id", None)
+            orc = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orc_id),)) if pd.notna(orc_id) else pd.DataFrame()
+
+    if orc.empty:
+        st.warning("Pedido não encontrado.")
+        st.stop()
+
+    o = orc.iloc[0]
+
+    st.subheader(f"Olá, {o.get('cliente_nome', 'cliente')} 🤍")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        card("Status", str(o.get("status", "")))
+    with c2:
+        card("Total", real(o.get("total", 0)))
+    with c3:
+        card("Orçamento", codigo_visual("ORC", o.get("id", 0), ano=datetime.now().year))
+
+    itens = consultar("""
+    SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+    FROM orcamento_itens
+    WHERE orcamento_id=?
+    """, (int(o["id"]),))
+
+    st.subheader("Itens do pedido")
+    if itens.empty:
+        st.info("Nenhum item encontrado.")
+    else:
+        st.dataframe(formatar_valores_tabela(itens), use_container_width=True, hide_index=True)
+
+    st.subheader("Produção")
+    try:
+        op = consultar("""
+        SELECT * FROM ordens_producao
+        WHERE orcamento_id=? AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(o["id"]),))
+    except Exception:
+        op = pd.DataFrame()
+
+    if op.empty:
+        st.info("Produção ainda não iniciada.")
+    else:
+        opr = op.iloc[0]
+        st.write(f"**OP:** {codigo_op_seguro(opr['id'])}")
+        st.write(f"**Status:** {opr.get('status', '-')}")
+        st.write(f"**Previsão:** {opr.get('data_entrega', '-')}")
+        try:
+            checklist = json.loads(opr.get("checklist_json", "{}") or "{}")
+            for nome, feito in checklist.items():
+                st.write(("✅ " if feito else "⬜ ") + nome)
+        except Exception:
+            pass
+
+    st.subheader("Entrega")
+    try:
+        entrega = consultar("""
+        SELECT * FROM entregas
+        WHERE referencia_tipo='OP'
+          AND referencia_id IN (SELECT id FROM ordens_producao WHERE orcamento_id=?)
+          AND ativo='Sim'
+        ORDER BY id DESC LIMIT 1
+        """, (int(o["id"]),))
+    except Exception:
+        entrega = pd.DataFrame()
+
+    if entrega.empty:
+        st.info("Entrega ainda não cadastrada.")
+    else:
+        e = entrega.iloc[0]
+        st.write(f"**Código:** {e.get('codigo', '-')}")
+        st.write(f"**Status:** {e.get('status', '-')}")
+        st.write(f"**Data:** {e.get('data_entrega', '-')}")
+        st.write(f"**Tipo:** {e.get('tipo_entrega', '-')}")
+
+    st.subheader("Falar com a Sophi")
+    whatsapp = obter_config("whatsapp", "")
+    if whatsapp:
+        import urllib.parse
+        numero = "".join([c for c in whatsapp if c.isdigit()])
+        msg = f"Olá, estou acompanhando meu pedido pelo portal."
+        link = f"https://wa.me/55{numero}?text={urllib.parse.quote(msg)}" if numero and not numero.startswith("55") else f"https://wa.me/{numero}?text={urllib.parse.quote(msg)}"
+        st.link_button("Chamar no WhatsApp", link)
 
 
+def tela_portal_cliente_admin():
+    garantir_portal_cliente()
+
+    st.title("Portal do Cliente")
+    st.write("Gere links para o cliente acompanhar orçamento, produção e entrega.")
+
+    abas = st.tabs(["Gerar link", "Links gerados"])
+
+    with abas[0]:
+        orcs = consultar("""
+        SELECT id, cliente_nome, whatsapp, status, total
+        FROM orcamentos
+        ORDER BY id DESC
+        LIMIT 500
+        """)
+
+        if orcs.empty:
+            st.info("Nenhum orçamento encontrado.")
+        else:
+            mapa = {
+                f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
+                for _, r in orcs.iterrows()
+            }
+            esc = st.selectbox("Escolha o orçamento", list(mapa.keys()))
+            orc_id = mapa[esc]
+            o = orcs[orcs["id"] == orc_id].iloc[0]
+            codigo = codigo_visual("ORC", int(orc_id), ano=datetime.now().year)
+
+            base_url = st.text_input("Link principal do seu app", value=obter_app_url_padrao())
+            if st.button("Gerar link do portal", use_container_width=True):
+                link = gerar_link_portal_orcamento(int(orc_id), base_url)
+                st.session_state["portal_link_gerado"] = link
+                st.session_state["portal_orc_id_gerado"] = int(orc_id)
+                st.success("Link gerado.")
+
+            link = st.session_state.get("portal_link_gerado", "")
+            if link and st.session_state.get("portal_orc_id_gerado") == int(orc_id):
+                st.code(link)
+                msg = mensagem_portal_cliente(o["cliente_nome"], codigo, str(o["status"]), real(o["total"]), link)
+                msg_final = st.text_area("Mensagem pronta para WhatsApp", value=msg, height=180, key=f"msg_portal_{orc_id}")
+                link_wpp = link_whatsapp(o["whatsapp"], msg_final)
+                if link_wpp:
+                    st.link_button("Enviar portal no WhatsApp", link_wpp, use_container_width=True)
+                else:
+                    st.warning("Este orçamento não tem WhatsApp cadastrado.")
+                st.link_button("Abrir portal do cliente", link, use_container_width=True)
+
+    with abas[1]:
+        try:
+            toks = consultar("SELECT * FROM portal_tokens ORDER BY id DESC LIMIT 500")
+        except Exception:
+            toks = pd.DataFrame()
+        if toks.empty:
+            st.info("Nenhum link gerado.")
+        else:
+            st.dataframe(formatar_valores_tabela(toks), use_container_width=True, hide_index=True)
 
 # ============================================================
 # MÓDULO 9 — CENTRAL DE AUTOMAÇÃO / ALERTAS INTELIGENTES
@@ -13156,8 +14149,28 @@ def aplicar_fluxo_status_orcamento(orcamento_id, novo_status):
 # EMOJIS SEGUROS PARA WHATSAPP
 # ============================================================
 
+def emoji_seguro(nome):
+    emojis = {
+        "coracao": "\U0001F90D",
+        "brilho": "\u2728",
+        "caminhao": "\U0001F69A",
+        "bolo": "\U0001F382",
+        "caixa": "\U0001F4E6",
+        "dinheiro": "\U0001F4B3",
+        "check": "\u2705",
+        "alerta": "\u26A0\uFE0F",
+        "sorriso": "\U0001F60A",
+    }
+    return emojis.get(nome, "")
 
 
+def limpar_texto_whatsapp(texto):
+    texto = str(texto or "")
+    texto = texto.replace("\r\n", "\n").replace("\r", "\n")
+    texto = texto.replace("\uFFFD", "")
+    texto = texto.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
+    texto = texto.replace("\ufeff", "")
+    return texto
 
 
 
@@ -13194,6 +14207,18 @@ def limpar_texto_whatsapp(texto):
     return texto
 
 
+def aplicar_variaveis_mensagem(modelo, nome="", codigo="", valor="", data="", link="", pix=""):
+    texto = str(modelo or "")
+    texto = texto.replace("{nome}", str(nome or "cliente"))
+    texto = texto.replace("{id}", str(codigo or ""))
+    texto = texto.replace("{valor}", str(valor or ""))
+    texto = texto.replace("{data}", str(data or ""))
+    texto = texto.replace("{link}", str(link or ""))
+    texto = texto.replace("{pix}", str(pix or pix_empresa()))
+    try:
+        return limpar_texto_whatsapp(texto)
+    except Exception:
+        return texto
 
 
 def limpar_numero_whatsapp(numero):
@@ -14104,187 +15129,99 @@ def aplicar_css_login_premium():
     <style>
     .stApp {
         background:
-            radial-gradient(circle at 8% 8%, rgba(0,0,0,0.055), transparent 24%),
-            radial-gradient(circle at 92% 90%, rgba(0,0,0,0.045), transparent 28%),
-            linear-gradient(135deg, #fbfbfa 0%, #f3f2f0 100%) !important;
+            radial-gradient(circle at top left, rgba(255, 212, 226, 0.45), transparent 28%),
+            radial-gradient(circle at bottom right, rgba(210, 210, 210, 0.35), transparent 25%),
+            linear-gradient(135deg, #fbfaf8 0%, #f5f1ec 100%) !important;
     }
 
-    [data-testid="stSidebar"] { display: none !important; }
-    header, footer, #MainMenu { visibility: hidden !important; display: none !important; }
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+
+    header, footer, #MainMenu {
+        visibility: hidden !important;
+        display: none !important;
+    }
 
     .block-container {
         max-width: 760px !important;
-        padding-top: 3.5rem !important;
-        padding-bottom: 2rem !important;
+        padding-top: 4rem !important;
     }
 
-    .login-shell {
-        width: 100%;
+    .login-wrap {
         display: flex;
-        flex-direction: column;
-        align-items: center;
-    }
-
-    .login-brand-card {
-        width: min(430px, 100%);
-        box-sizing: border-box;
-        background: rgba(255,255,255,0.94);
-        border: 1px solid rgba(0,0,0,0.08);
-        border-top: 3px solid #111111;
-        border-radius: 24px;
-        padding: 28px 28px 24px;
-        box-shadow: 0 22px 55px rgba(0,0,0,0.09);
-        text-align: center;
-    }
-
-    .login-logo-img {
-        width: 76px;
-        height: 76px;
-        object-fit: contain;
-        border-radius: 20px;
-        display: block;
-        margin: 0 auto 14px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.12);
-    }
-
-    .login-logo-fallback {
-        width: 76px;
-        height: 76px;
-        border-radius: 20px;
-        background: #050505;
-        color: #fff;
-        display: flex;
-        align-items: center;
         justify-content: center;
-        margin: 0 auto 14px;
-        font: 700 26px Georgia, serif;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.12);
+        align-items: center;
+        margin-top: 10px;
+    }
+
+    .login-card {
+        width: 430px;
+        background: rgba(255,255,255,0.86);
+        border: 1px solid rgba(20,20,20,0.08);
+        border-radius: 34px;
+        padding: 34px 34px 28px 34px;
+        box-shadow: 0 26px 70px rgba(0,0,0,0.10);
+        text-align: center;
+        backdrop-filter: blur(10px);
+    }
+
+    .login-logo {
+        width: 92px;
+        height: 92px;
+        border-radius: 28px;
+        background: linear-gradient(145deg, #050505, #222);
+        color: white;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-family: Georgia, serif;
+        font-size: 34px;
+        font-weight: 700;
+        margin-bottom: 20px;
+        box-shadow: 0 18px 36px rgba(0,0,0,0.18);
     }
 
     .login-title {
-        font-family: Georgia, 'Times New Roman', serif;
-        font-size: 36px;
+        font-family: Georgia, serif;
+        font-size: 38px;
         font-weight: 800;
-        color: #111111;
+        color: #161616;
         margin: 0;
-        line-height: 1.05;
+        line-height: 1;
     }
 
     .login-sub {
-        margin-top: 8px;
-        font-size: 11px;
         letter-spacing: 3px;
         text-transform: uppercase;
-        font-weight: 700;
-        color: #222222;
+        color: #777;
+        font-size: 11px;
+        margin-top: 8px;
+        margin-bottom: 8px;
     }
 
     .login-caption {
-        margin-top: 9px;
-        color: #777777;
+        color: #8a8a8a;
         font-size: 13px;
+        margin-bottom: 22px;
     }
 
-    .login-access-box {
-        margin-top: 18px;
-        padding: 16px 18px;
-        background: #f7f7f7;
-        border: 1px solid #eeeeee;
-        border-radius: 16px;
-        text-align: left;
-    }
-
-    .login-access-title {
-        color: #111111;
-        font-size: 18px;
-        font-weight: 800;
-        margin-bottom: 4px;
-    }
-
-    .login-access-sub {
-        color: #777777;
-        font-size: 12px;
-        line-height: 1.45;
-    }
-
-    div[data-testid="stTextInput"] { margin-bottom: 0.15rem; }
-    div[data-testid="stTextInput"] label {
-        color: #222222 !important;
-        font-weight: 700 !important;
-        font-size: 12px !important;
-    }
     div[data-testid="stTextInput"] input {
-        border-radius: 13px !important;
-        border: 1px solid #dedede !important;
-        padding: 11px 13px !important;
+        border-radius: 16px !important;
+        border: 1px solid #e6ded5 !important;
+        padding: 12px 14px !important;
         background: #fff !important;
-        color: #111 !important;
-    }
-    div[data-testid="stTextInput"] input:focus {
-        border-color: #111111 !important;
-        box-shadow: 0 0 0 1px #111111 !important;
     }
 
-    div[data-testid="stForm"] {
-        width: min(430px, 100%);
-        box-sizing: border-box;
-        margin: 14px auto 0 !important;
-        padding: 22px 20px 18px;
-        background: rgba(255,255,255,0.97);
-        border: 1px solid rgba(0,0,0,0.08);
-        border-radius: 22px;
-        box-shadow: 0 16px 42px rgba(0,0,0,0.08);
-    }
-
-    .stButton button, div[data-testid="stFormSubmitButton"] button {
+    .stButton button {
         width: 100%;
-        min-height: 46px;
-        border-radius: 13px !important;
-        background: #050505 !important;
-        color: #ffffff !important;
+        border-radius: 16px !important;
+        background: linear-gradient(135deg, #050505, #1e1e1e) !important;
+        color: white !important;
         border: 0 !important;
         font-weight: 800 !important;
-        box-shadow: 0 10px 24px rgba(0,0,0,0.14);
-    }
-
-    .stButton button:hover, div[data-testid="stFormSubmitButton"] button:hover {
-        background: #1b1b1b !important;
-        color: #ffffff !important;
-    }
-
-    .login-forgot-wrap {
-        width: min(430px, 100%);
-        box-sizing: border-box;
-        text-align: center;
-        margin: 10px auto 0 !important;
-    }
-
-    /* Mantém o botão de recuperação exatamente centralizado com o login. */
-    .login-forgot-wrap + div[data-testid="stButton"] {
-        width: min(430px, 100%) !important;
-        margin-left: auto !important;
-        margin-right: auto !important;
-    }
-
-    .login-footer {
-        width: min(430px, 100%);
-        box-sizing: border-box;
-        margin: 20px auto 0 !important;
-        padding-top: 14px;
-        border-top: 1px solid rgba(0,0,0,0.08);
-        color: #777777;
-        font-size: 11px;
-        text-align: center;
-        line-height: 1.5;
-    }
-    .login-footer strong { color: #111111; }
-
-    /* Os elementos de login que o Streamlit renderiza fora do HTML
-       também ficam presos à mesma largura e ao mesmo centro do cartão. */
-    div[data-testid="stButton"] {
-        width: min(430px, 100%) !important;
-        margin-left: auto !important;
-        margin-right: auto !important;
+        padding: 0.75rem 1rem !important;
+        box-shadow: 0 16px 32px rgba(0,0,0,0.16);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -14304,125 +15241,81 @@ def obter_credenciais_login():
             login = st.secrets.get("login", {})
         except Exception:
             login = {}
-
         usuario = str(os.getenv("LOGIN_USUARIO", "") or login.get("usuario", "")).strip()
         senha = str(os.getenv("LOGIN_SENHA", "") or login.get("senha", "")).strip()
-        email = str(os.getenv("LOGIN_EMAIL", "") or login.get("email", "")).strip().lower()
-        email_suporte = str(
-            os.getenv("LOGIN_EMAIL_SUPORTE", "") or login.get("email_suporte", "")
-        ).strip()
-        return usuario, senha, email, email_suporte
+        return usuario, senha
     except Exception:
-        return "", "", "", ""
+        return "", ""
 
 
 def tela_login():
     aplicar_css_login_premium()
-
-    # Cabeçalho totalmente em HTML válido para evitar que o código da interface
-    # apareça literalmente na tela do login.
-    logo_html = '<div class="login-logo-fallback">SP</div>'
-    try:
-        logo = obter_config("logo_path", "")
-        if logo and Path(logo).exists():
-            b64 = base64.b64encode(Path(logo).read_bytes()).decode("utf-8")
-            ext = Path(logo).suffix.lower().replace(".", "") or "png"
-            if ext not in {"png", "jpeg", "jpg", "webp", "gif"}:
-                ext = "png"
-            logo_html = (
-                f'<img class="login-logo-img" '
-                f'src="data:image/{ext};base64,{b64}" '
-                f'alt="Sophi Personalizados Oficial">'
-            )
-    except Exception:
-        pass
-
     st.markdown(
-        f"""
-        <div class="login-shell">
-            <div class="login-brand-card">
-                {logo_html}
-                <div class="login-title">Sophi ERP</div>
-                <div class="login-sub">Personalizados Oficial</div>
-                <div class="login-caption">Eternizando momentos desde 2018</div>
-                <div class="login-access-box">
-                    <div class="login-access-title">Acesso ao Sistema</div>
-                    <div class="login-access-sub">
-                        Entre com seu usuário ou e-mail e sua senha para acessar seu ERP.
-                    </div>
-                </div>
-            </div>
+        """
+        <style>
+        .login-card {
+            max-width: 430px;
+            margin: 7vh auto 0 auto;
+            background: #ffffff;
+            border: 1px solid #e9e9e9;
+            border-radius: 22px;
+            padding: 34px 32px;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
+            text-align: center;
+        }
+        .login-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 38px;
+            font-weight: 700;
+            color: #000000;
+            margin-bottom: 4px;
+        }
+        .login-subtitle {
+            font-size: 12px;
+            letter-spacing: 2.2px;
+            text-transform: uppercase;
+            color: #777777;
+            margin-bottom: 18px;
+        }
+        .login-caption {
+            font-size: 13px;
+            color: #777777;
+            margin-bottom: 22px;
+        }
+        </style>
+        <div class="login-card">
+            <div class="login-title">Sophi ERP</div>
+            <div class="login-subtitle">Personalizados Oficial</div>
+            <div class="login-caption">Acesso restrito ao sistema</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    usuario_correto, senha_correta, email_correto, email_suporte = obter_credenciais_login()
+    usuario_correto, senha_correta = obter_credenciais_login()
 
     if not usuario_correto or not senha_correta:
         st.error("Login ainda não configurado. Configure os Secrets do Streamlit com [login], usuario e senha.")
         st.stop()
 
     with st.form("form_login"):
-        identificador = st.text_input(
-            "Usuário ou e-mail",
-            placeholder="Digite seu usuário ou e-mail",
-            autocomplete="username",
-        )
-        senha = st.text_input(
-            "Senha",
-            type="password",
-            placeholder="Digite sua senha",
-            autocomplete="current-password",
-        )
-        entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        entrar = st.form_submit_button("Entrar")
 
         if entrar:
-            identificador_limpo = identificador.strip()
-            identificador_lower = identificador_limpo.lower()
-            acesso_por_usuario = identificador_limpo == usuario_correto
-            acesso_por_email = bool(email_correto) and identificador_lower == email_correto
-
-            if (acesso_por_usuario or acesso_por_email) and senha.strip() == senha_correta:
+            if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
                 st.session_state["autenticado"] = True
-                st.session_state["usuario_logado"] = usuario_correto
+                st.session_state["usuario_logado"] = usuario.strip()
                 try:
-                    # O token continua sendo criado com o usuário configurado,
-                    # preservando o mecanismo de acesso existente mesmo quando
-                    # o login é feito por e-mail.
-                    token = _criar_token_acesso(usuario_correto, senha_correta, validade_dias=30)
+                    token = _criar_token_acesso(usuario.strip(), senha_correta, validade_dias=30)
                     if token:
                         st.query_params["access"] = token
                 except Exception:
                     pass
                 st.rerun()
             else:
-                st.error("Usuário/e-mail ou senha incorretos.")
-
-    st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
-    esqueci = st.button("Esqueci minha senha", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    if esqueci:
-        if email_suporte:
-            st.success(
-                f"Solicitação de recuperação registrada. Para continuar, entre em contato pelo e-mail {email_suporte}."
-            )
-        else:
-            st.success(
-                "Solicitação de recuperação registrada. Entre em contato com o administrador do Sophi ERP para receber a orientação de redefinição da senha."
-            )
-
-    st.markdown(
-        """
-        <div class="login-footer">
-            <strong>Sophi Personalizados Oficial</strong><br>
-            Sistema interno • Acesso exclusivo e seguro
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+                st.error("Usuário ou senha incorretos.")
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
@@ -14475,7 +15368,7 @@ def exigir_login():
     # evita que o Streamlit peça a senha novamente após uma simples reconexão.
     if not st.session_state["autenticado"]:
         try:
-            usuario_correto, senha_correta, _, _ = obter_credenciais_login()
+            usuario_correto, senha_correta = obter_credenciais_login()
             token = st.query_params.get("access", "")
             valido, usuario_token = _validar_token_acesso(token, usuario_correto, senha_correta)
             if valido:
@@ -14490,20 +15383,78 @@ def exigir_login():
 
 
 
+
 # ============================================================
 # LOJA ONLINE + PORTAL DO CLIENTE — VERSÃO FINAL
 # ============================================================
 
 APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
+def obter_app_url_padrao():
+    return APP_URL_OFICIAL
 
 
+def garantir_pedidos_catalogo():
+    executar("""
+    CREATE TABLE IF NOT EXISTS pedidos_catalogo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        produto_id INTEGER,
+        produto_nome TEXT,
+        categoria TEXT,
+        preco REAL DEFAULT 0,
+        cliente_nome TEXT,
+        whatsapp TEXT,
+        quantidade REAL DEFAULT 1,
+        observacoes TEXT,
+        status TEXT DEFAULT 'Novo',
+        data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
+        origem TEXT DEFAULT 'Catálogo',
+        total REAL DEFAULT 0,
+        codigo TEXT
+    )
+    """)
+    for coluna, tipo_coluna in {
+        "total": "REAL DEFAULT 0",
+        "codigo": "TEXT",
+        "origem": "TEXT DEFAULT 'Catálogo'",
+    }.items():
+        try:
+            executar(f"ALTER TABLE pedidos_catalogo ADD COLUMN {coluna} {tipo_coluna}")
+        except Exception:
+            pass
 
 
+def garantir_pedidos_catalogo_itens():
+    garantir_pedidos_catalogo()
+    executar("""
+    CREATE TABLE IF NOT EXISTS pedidos_catalogo_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_catalogo_id INTEGER,
+        produto_id INTEGER,
+        produto_nome TEXT,
+        categoria TEXT,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        total REAL DEFAULT 0
+    )
+    """)
 
 
+def codigo_pedido_catalogo(pid):
+    try:
+        return codigo_visual("CAT", int(pid), ano=datetime.now().year)
+    except Exception:
+        return f"CAT-{int(pid):04d}"
 
 
+def gerar_link_portal_orcamento(orc_id, base_url=None):
+    # Sempre gerar o link individual no domínio oficial do Railway.
+    base_url = APP_URL_OFICIAL.rstrip("/")
+    try:
+        token = gerar_token_portal("Orçamento", int(orc_id))
+    except TypeError:
+        token = gerar_token_portal(int(orc_id))
+    return f"{base_url}/?portal=cliente&token={token}"
 
 
 def mensagem_portal_cliente(cliente_nome, codigo, status, total, link):
@@ -14541,18 +15492,212 @@ def mensagem_pedido_catalogo(cliente_nome, itens_texto, total, observacoes=""):
         return texto
 
 
+def consultar_produtos_catalogo_seguro():
+    try:
+        colunas = consultar("PRAGMA table_info(produtos)")
+        nomes = set(colunas["name"].tolist()) if not colunas.empty and "name" in colunas.columns else set()
+    except Exception:
+        nomes = set()
+
+    campos = []
+    for campo in ["id", "nome", "categoria", "descricao", "preco_escolhido", "preco_sugerido", "foto", "ativo"]:
+        if campo in nomes:
+            campos.append(campo)
+
+    if not campos:
+        return pd.DataFrame()
+
+    where = "WHERE ativo='Sim'" if "ativo" in nomes else ""
+    order = "ORDER BY categoria, nome" if "categoria" in nomes else "ORDER BY nome"
+    df = consultar(f"SELECT {', '.join(campos)} FROM produtos {where} {order}")
+
+    for campo, padrao in {
+        "categoria": "Personalizados",
+        "descricao": "",
+        "preco_escolhido": 0,
+        "preco_sugerido": 0,
+        "foto": "",
+        "foto": "",
+        "ativo": "Sim",
+        "status_catalogo": "Disponível",
+        "descricao_catalogo": "",
+    }.items():
+        if campo not in df.columns:
+            df[campo] = padrao
+    kits = consultar("""
+    SELECT
+        -id AS id,
+        nome,
+        categoria,
+        'Kit presente personalizado completo.' AS descricao,
+        preco_por AS preco_escolhido,
+        preco_sugerido,
+        '' AS foto,
+        'Sim' AS ativo,
+        status AS status_catalogo,
+        catalogo AS destaque_catalogo
+    FROM kits
+    ORDER BY nome
+    """)
+
+    if not kits.empty:
+        df = pd.concat([df, kits], ignore_index=True)
+    return df
 
 
+def catalogo_carrinho_inicial():
+    if "catalogo_carrinho" not in st.session_state:
+        st.session_state["catalogo_carrinho"] = []
 
 
+def adicionar_item_carrinho_catalogo(produto_id, nome, categoria, preco, quantidade):
+    catalogo_carrinho_inicial()
+    carrinho = st.session_state["catalogo_carrinho"]
+    for item in carrinho:
+        if int(item["produto_id"]) == int(produto_id):
+            item["quantidade"] = n(item["quantidade"]) + n(quantidade)
+            item["total"] = n(item["quantidade"]) * n(item["preco"])
+            st.session_state["catalogo_carrinho"] = carrinho
+            return
+    carrinho.append({
+        "produto_id": int(produto_id),
+        "nome": str(nome),
+        "categoria": str(categoria or "Personalizados"),
+        "preco": n(preco),
+        "quantidade": n(quantidade),
+        "total": n(preco) * n(quantidade),
+    })
+    st.session_state["catalogo_carrinho"] = carrinho
 
 
+def remover_item_carrinho_catalogo(indice):
+    catalogo_carrinho_inicial()
+    carrinho = st.session_state["catalogo_carrinho"]
+    if 0 <= int(indice) < len(carrinho):
+        carrinho.pop(int(indice))
+    st.session_state["catalogo_carrinho"] = carrinho
 
 
+def limpar_carrinho_catalogo():
+    st.session_state["catalogo_carrinho"] = []
 
 
+def total_carrinho_catalogo():
+    catalogo_carrinho_inicial()
+    return sum(n(item.get("total", 0)) for item in st.session_state["catalogo_carrinho"])
 
 
+def css_catalogo_loja():
+    st.markdown("""
+    <style>
+    .shop-hero {
+        background: linear-gradient(135deg, #111111 0%, #2b2b2b 55%, #f4e7f0 100%);
+        border-radius: 28px;
+        padding: 34px;
+        color: white;
+        margin-bottom: 22px;
+        box-shadow: 0 20px 55px rgba(0,0,0,.18);
+    }
+    .shop-hero h1 {
+        font-size: 38px;
+        margin: 0;
+        font-weight: 900;
+        letter-spacing: -1px;
+    }
+    .shop-hero p {
+        opacity: .88;
+        font-size: 16px;
+        max-width: 720px;
+        margin-top: 8px;
+    }
+    .shop-badge {
+        display: inline-block;
+        background: rgba(255,255,255,.14);
+        border: 1px solid rgba(255,255,255,.25);
+        border-radius: 999px;
+        padding: 8px 14px;
+        margin: 5px 5px 0 0;
+        font-weight: 700;
+        font-size: 13px;
+    }
+    .shop-card {
+        background: #fff;
+        border: 1px solid #ececec;
+        border-radius: 22px;
+        padding: 18px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.05);
+        height: 100%;
+        margin-bottom: 18px;
+    }
+    .shop-img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 16px;
+        display: block;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+    }
+    .shop-semfoto {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 16px;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+        color: #999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 14px;
+    }
+    .shop-cat {
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: 11px;
+        color: #8a8a8a;
+        font-weight: 800;
+    }
+    .shop-name {
+        font-size: 22px;
+        font-weight: 900;
+        color: #161616;
+        margin-top: 4px;
+        min-height: 54px;
+    }
+    .shop-desc {
+        color: #626262;
+        font-size: 14px;
+        min-height: 46px;
+    }
+    .shop-price {
+        font-size: 28px;
+        font-weight: 950;
+        color: #161616;
+        margin: 12px 0;
+    }
+    .cart-box {
+        background: #fff;
+        border: 1px solid #e7e2e6;
+        border-radius: 24px;
+        padding: 22px;
+        box-shadow: 0 15px 42px rgba(0,0,0,.07);
+        margin-top: 18px;
+    }
+    .cart-title {
+        font-size: 26px;
+        font-weight: 900;
+        margin-bottom: 8px;
+    }
+    .cart-line {
+        background: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 16px;
+        padding: 12px;
+        margin-bottom: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 
 def bloco_carrinho_catalogo_publico():
@@ -14670,8 +15815,147 @@ def bloco_carrinho_catalogo_publico():
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def tela_pedidos_catalogo():
+    st.title("Pedidos do Catálogo")
+    st.write("Pedidos que os clientes enviaram pelo catálogo online.")
+
+    garantir_pedidos_catalogo_itens()
+    pedidos = consultar("SELECT * FROM pedidos_catalogo ORDER BY id DESC LIMIT 500")
+
+    if pedidos.empty:
+        st.info("Nenhum pedido recebido pelo catálogo ainda.")
+        return
+
+    if "total" not in pedidos.columns:
+        pedidos["total"] = pedidos.apply(lambda r: n(r.get("preco", 0)) * n(r.get("quantidade", 1)), axis=1)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        card("Novos", str(len(pedidos[pedidos["status"] == "Novo"])))
+    with c2:
+        card("Em atendimento", str(len(pedidos[pedidos["status"] == "Em atendimento"])))
+    with c3:
+        card("Aprovados", str(len(pedidos[pedidos["status"] == "Aprovado"])))
+    with c4:
+        card("Valor potencial", real(pedidos["total"].apply(n).sum()))
+
+    st.dataframe(formatar_valores_tabela(pedidos), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Aprovar / atender pedido")
+
+    mapa = {
+        f"{codigo_pedido_catalogo(r['id'])} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
+        for _, r in pedidos.iterrows()
+    }
+
+    escolhido = st.selectbox("Escolha o pedido do catálogo", list(mapa.keys()))
+    pid = mapa[escolhido]
+    p = pedidos[pedidos["id"] == pid].iloc[0]
+    itens = consultar("SELECT * FROM pedidos_catalogo_itens WHERE pedido_catalogo_id=? ORDER BY id", (int(pid),))
+
+    total_pedido = n(p.get("total", 0))
+    if total_pedido <= 0:
+        total_pedido = itens["total"].apply(n).sum() if not itens.empty else n(p.get("preco", 0)) * n(p.get("quantidade", 1))
+
+    a, b, c = st.columns(3)
+    a.metric("Cliente", str(p["cliente_nome"]))
+    b.metric("WhatsApp", str(p["whatsapp"]))
+    c.metric("Total", real(total_pedido))
+
+    st.write(f"**Observações:** {p.get('observacoes', '')}")
+
+    if itens.empty:
+        itens_texto = f"- {p['produto_nome']} | Qtd: {p['quantidade']} | {real(n(p['preco']) * n(p['quantidade']))}"
+        st.write(itens_texto)
+    else:
+        st.dataframe(formatar_valores_tabela(itens), use_container_width=True, hide_index=True)
+        itens_texto = "\n".join([f"- {it['produto_nome']} | Qtd: {it['quantidade']} | {real(it['total'])}" for _, it in itens.iterrows()])
+
+    status_opcoes = ["Novo", "Em atendimento", "Aprovado", "Transformado em orçamento", "Cancelado"]
+    status_atual = str(p.get("status", "Novo"))
+    novo_status = st.selectbox("Status", status_opcoes, index=status_opcoes.index(status_atual) if status_atual in status_opcoes else 0)
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        if st.button("Salvar status", use_container_width=True):
+            executar("UPDATE pedidos_catalogo SET status=? WHERE id=?", (novo_status, int(pid)))
+            st.success("Status atualizado.")
+            st.rerun()
+
+    with c2:
+        msg = mensagem_pedido_catalogo(p["cliente_nome"], itens_texto, total_pedido, p.get("observacoes", ""))
+        link = link_whatsapp(p["whatsapp"], msg)
+        if link:
+            st.link_button("Responder no WhatsApp", link, use_container_width=True)
+
+    with c3:
+        if st.button("Transformar em orçamento", use_container_width=True):
+            cliente = consultar("SELECT id FROM clientes WHERE whatsapp=? LIMIT 1", (str(p["whatsapp"]),))
+            if cliente.empty:
+                cliente_id = executar("INSERT INTO clientes(nome, whatsapp, ativo) VALUES (?, ?, ?)", (str(p["cliente_nome"]), str(p["whatsapp"]), "Sim"))
+            else:
+                cliente_id = int(cliente.iloc[0]["id"])
+
+            orc_id = executar("""
+            INSERT INTO orcamentos(cliente_id, cliente_nome, whatsapp, status, forma_pagamento, subtotal, desconto, frete, total, observacoes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (int(cliente_id), str(p["cliente_nome"]), str(p["whatsapp"]), "Em orçamento", "A combinar", total_pedido, 0, 0, total_pedido, f"Pedido criado pelo catálogo. Observações: {p.get('observacoes', '')}"))
+
+            if itens.empty:
+                total_item = n(p["preco"]) * n(p["quantidade"])
+                executar("INSERT INTO orcamento_itens(orcamento_id, produto, categoria, quantidade, valor_unitario, desconto, total) VALUES (?, ?, ?, ?, ?, ?, ?)", (int(orc_id), str(p["produto_nome"]), str(p.get("categoria", "")), n(p["quantidade"]), n(p["preco"]), 0, total_item))
+            else:
+                for _, it in itens.iterrows():
+                    executar("INSERT INTO orcamento_itens(orcamento_id, produto, categoria, quantidade, valor_unitario, desconto, total) VALUES (?, ?, ?, ?, ?, ?, ?)", (int(orc_id), str(it["produto_nome"]), str(it.get("categoria", "")), n(it["quantidade"]), n(it["valor_unitario"]), 0, n(it["total"])))
+
+            executar("UPDATE pedidos_catalogo SET status='Transformado em orçamento' WHERE id=?", (int(pid),))
+            st.success(f"Orçamento criado: {codigo_visual('ORC', int(orc_id), ano=datetime.now().year)}")
+            st.rerun()
 
 
+def tela_portal_cliente_admin():
+    garantir_portal_cliente()
+
+    st.title("Portal do Cliente")
+    st.write("Gere o link para o cliente acompanhar o pedido em tempo real.")
+
+    orcs = consultar("""
+    SELECT id, cliente_nome, whatsapp, status, total
+    FROM orcamentos
+    ORDER BY id DESC
+    LIMIT 500
+    """)
+
+    if orcs.empty:
+        st.info("Nenhum orçamento encontrado.")
+        return
+
+    mapa = {
+        f"{codigo_visual('ORC', r['id'], ano=datetime.now().year)} | {r['cliente_nome']} | {real(r['total'])} | {r['status']}": int(r["id"])
+        for _, r in orcs.iterrows()
+    }
+
+    esc = st.selectbox("Escolha o orçamento", list(mapa.keys()), key="portal_cliente_orcamento")
+    orc_id = mapa[esc]
+    o = orcs[orcs["id"] == orc_id].iloc[0]
+    codigo = codigo_visual("ORC", int(orc_id), ano=datetime.now().year)
+
+    link = gerar_link_portal_orcamento(int(orc_id), APP_URL_OFICIAL)
+    msg = mensagem_portal_cliente(o["cliente_nome"], codigo, str(o["status"]), real(o["total"]), link)
+
+    st.markdown("### Link do portal")
+    st.code(link)
+    st.text_area("Mensagem pronta para enviar ao cliente", value=msg, height=190, key=f"portal_msg_pronta_{orc_id}")
+
+    link_wpp = link_whatsapp(o["whatsapp"], msg)
+    if link_wpp:
+        st.link_button("Enviar portal no WhatsApp", link_wpp, use_container_width=True)
+    else:
+        st.warning("Este orçamento não tem WhatsApp cadastrado.")
+
+    st.link_button("Abrir portal do cliente", link, use_container_width=True)
 
 
 
@@ -14681,8 +15965,33 @@ def bloco_carrinho_catalogo_publico():
 
 APP_URL_OFICIAL = "https://sophipersonalizadosoficial-production.up.railway.app"
 
+def obter_config_flex(chaves, padrao=""):
+    for chave in chaves:
+        try:
+            v = obter_config(chave, "")
+            if str(v or "").strip():
+                return str(v).strip()
+        except Exception:
+            pass
+    return padrao
 
 
+def dados_catalogo_empresa_final():
+    return {
+        "nome": obter_config_flex(["nome_catalogo", "nome_empresa", "empresa"], EMPRESA),
+        "subtitulo": obter_config_flex(
+            ["subtitulo_catalogo", "frase_catalogo", "slogan_catalogo", "slogan"],
+            "Personalizados feitos com carinho para eternizar momentos.",
+        ),
+        "descricao": obter_config_flex(
+            ["descricao_catalogo", "texto_catalogo", "sobre_catalogo"],
+            "Escolha seus personalizados, monte seu carrinho e envie sua solicitação.",
+        ),
+        "whatsapp": obter_config_flex(["whatsapp", "telefone", "contato_whatsapp"], "(13) 99211-2108"),
+        "instagram": obter_config_flex(["instagram", "instagram_catalogo"], "@sophipersonalizadosoficial"),
+        "prazo": obter_config_flex(["prazo_catalogo", "prazo_producao", "prazo"], "Prazo conforme personalização."),
+        "pagamento": obter_config_flex(["pagamento_catalogo", "formas_pagamento"], "Pagamento combinado pelo WhatsApp."),
+    }
 
 
 def garantir_pedidos_catalogo():
@@ -14896,8 +16205,62 @@ def total_carrinho_catalogo():
     return sum(n(item.get("total", 0)) for item in st.session_state["catalogo_carrinho"])
 
 
+def css_catalogo_loja():
+    st.markdown("""
+    <style>
+    .main .block-container {max-width: 1080px; padding-top: 1.5rem;}
+    .shop-hero {
+        max-width: 900px;
+        margin: 0 auto 28px auto;
+        text-align: center;
+        background: linear-gradient(135deg, #111 0%, #2b2b2b 70%, #f4edf2 100%);
+        border-radius: 28px;
+        padding: 38px 26px;
+        color: white;
+        box-shadow: 0 18px 55px rgba(0,0,0,.18);
+    }
+    .shop-logo-fallback {
+        width: 86px;height:86px;border-radius:50%;background:white;color:#111;
+        display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:900;
+        margin:0 auto 16px auto;
+    }
+    .shop-hero h1 {font-size:36px;margin:0;font-weight:950;letter-spacing:-1px;}
+    .shop-hero p {opacity:.92;font-size:16px;max-width:720px;margin:10px auto 0 auto;}
+    .shop-badges {margin-top:18px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+    .shop-badge {display:inline-block;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:8px 14px;font-weight:700;font-size:13px;}
+    .shop-card {background:#fff;border:1px solid #ececec;border-radius:22px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.05);height:100%;margin-bottom:18px;}
+    .shop-cat {text-transform:uppercase;letter-spacing:2px;font-size:11px;color:#8a8a8a;font-weight:800;}
+    .shop-name {font-size:22px;font-weight:900;color:#161616;margin-top:4px;min-height:54px;}
+    .shop-desc {color:#626262;font-size:14px;min-height:46px;}
+    .shop-price {font-size:28px;font-weight:950;color:#161616;margin:12px 0;}
+    .cart-box {max-width:900px;margin:24px auto 0 auto;background:#fff;border:1px solid #e7e2e6;border-radius:24px;padding:22px;box-shadow:0 15px 42px rgba(0,0,0,.07);}
+    .cart-title {font-size:26px;font-weight:900;margin-bottom:8px;text-align:center;}
+    .cart-line {background:#fafafa;border:1px solid #eee;border-radius:16px;padding:12px;margin-bottom:10px;}
+    </style>
+    """, unsafe_allow_html=True)
 
 
+def html_hero_catalogo_empresa():
+    d = dados_catalogo_empresa_final()
+    badges = []
+    if d["whatsapp"]:
+        badges.append(f"WhatsApp: {d['whatsapp']}")
+    if d["instagram"]:
+        badges.append(f"Instagram: {d['instagram']}")
+    if d["prazo"]:
+        badges.append(f"Prazo: {d['prazo']}")
+    if d["pagamento"]:
+        badges.append(f"Pagamento: {d['pagamento']}")
+    badges_html = "".join([f'<span class="shop-badge">{b}</span>' for b in badges])
+    return f"""
+    <div class="shop-hero">
+        <div class="shop-logo-fallback">S</div>
+        <h1>{d['nome']}</h1>
+        <p><b>{d['subtitulo']}</b></p>
+        <p>{d['descricao']}</p>
+        <div class="shop-badges">{badges_html}</div>
+    </div>
+    """
 
 
 def tela_catalogo_publico_cliente():
@@ -15188,8 +16551,193 @@ def logo_catalogo_data_uri_corrigida():
     return ""
 
 
+def css_catalogo_loja():
+    st.markdown("""
+    <style>
+    .main .block-container {
+        max-width: 1100px;
+        padding-top: 1.5rem;
+    }
+    .shop-hero {
+        max-width: 880px;
+        margin: 0 auto 30px auto;
+        text-align: center;
+        background: linear-gradient(135deg, #101010 0%, #242424 70%, #eee4eb 100%);
+        border-radius: 28px;
+        padding: 34px 26px 30px 26px;
+        color: white;
+        box-shadow: 0 18px 55px rgba(0,0,0,.18);
+    }
+    .shop-logo {
+        width: 118px;
+        height: 118px;
+        object-fit: contain;
+        border-radius: 50%;
+        background: #fff;
+        padding: 8px;
+        margin: 0 auto 16px auto;
+        display: block;
+        box-shadow: 0 10px 28px rgba(255,255,255,.18);
+    }
+    .shop-logo-fallback {
+        width: 92px;
+        height: 92px;
+        border-radius: 50%;
+        background: #fff;
+        color: #111;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 42px;
+        font-weight: 900;
+        margin: 0 auto 16px auto;
+    }
+    .shop-hero h1 {
+        font-size: 34px;
+        margin: 0;
+        font-weight: 950;
+        letter-spacing: -1px;
+    }
+    .shop-hero p {
+        opacity: .92;
+        font-size: 15px;
+        max-width: 720px;
+        margin: 10px auto 0 auto;
+    }
+    .shop-badges {
+        margin-top: 18px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    .shop-badge {
+        display: inline-block;
+        background: rgba(255,255,255,.14);
+        border: 1px solid rgba(255,255,255,.25);
+        border-radius: 999px;
+        padding: 8px 13px;
+        font-weight: 700;
+        font-size: 12px;
+    }
+    .produtos-wrap {
+        max-width: 980px;
+        margin: 0 auto;
+    }
+    .shop-card {
+        background: #fff;
+        border: 1px solid #ececec;
+        border-radius: 22px;
+        padding: 18px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.05);
+        min-height: 210px;
+        margin-bottom: 18px;
+        overflow: hidden;
+    }
+    .shop-img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 16px;
+        display: block;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+    }
+    .shop-semfoto {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 16px;
+        margin-bottom: 12px;
+        background: #f4f4f4;
+        color: #999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 14px;
+    }
+    .shop-cat {
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: 11px;
+        color: #8a8a8a;
+        font-weight: 800;
+    }
+    .shop-name {
+        font-size: 22px;
+        font-weight: 900;
+        color: #161616;
+        margin-top: 4px;
+        min-height: 34px;
+        word-break: break-word;
+    }
+    .shop-desc {
+        color: #626262;
+        font-size: 14px;
+        min-height: 42px;
+        word-break: break-word;
+    }
+    .shop-price {
+        font-size: 28px;
+        font-weight: 950;
+        color: #161616;
+        margin: 12px 0 4px 0;
+    }
+    .cart-box {
+        max-width: 880px;
+        margin: 24px auto 0 auto;
+        background: #fff;
+        border: 1px solid #e7e2e6;
+        border-radius: 24px;
+        padding: 22px;
+        box-shadow: 0 15px 42px rgba(0,0,0,.07);
+    }
+    .cart-title {
+        font-size: 26px;
+        font-weight: 900;
+        margin-bottom: 8px;
+        text-align: center;
+    }
+    .cart-line {
+        background: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 16px;
+        padding: 12px;
+        margin-bottom: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 
+def html_hero_catalogo_empresa():
+    d = dados_catalogo_empresa_final()
+    logo = logo_catalogo_data_uri_corrigida()
+    if logo:
+        logo_html = f'<img class="shop-logo" src="{logo}">'
+    else:
+        logo_html = '<div class="shop-logo-fallback">S</div>'
+
+    badges = []
+    if d["whatsapp"]:
+        badges.append(f"WhatsApp: {d['whatsapp']}")
+    if d["instagram"]:
+        badges.append(f"Instagram: {d['instagram']}")
+    if d["prazo"]:
+        badges.append(f"Prazo: {d['prazo']}")
+    if d["pagamento"]:
+        badges.append(f"Pagamento: {d['pagamento']}")
+
+    badges_html = "".join([f'<span class="shop-badge">{b}</span>' for b in badges])
+
+    return f"""
+    <div class="shop-hero">
+        {logo_html}
+        <h1>{d['nome']}</h1>
+        <p><b>{d['subtitulo']}</b></p>
+        <p>{d['descricao']}</p>
+        <div class="shop-badges">{badges_html}</div>
+    </div>
+    """
 
 
 
@@ -15212,6 +16760,19 @@ def notificar_pedidos_catalogo_novos():
         pass
 
 
+def mensagem_catalogo_recebido(nome, codigo, itens_texto, total):
+    texto = (
+        f"Olá {nome}! 🤍\n\n"
+        f"Recebemos seu pedido pelo nosso catálogo online.\n\n"
+        f"Pedido: {codigo}\n"
+        f"Itens:\n{itens_texto}\n\n"
+        f"Total estimado: {real(total)}\n\n"
+        f"Vamos conferir os detalhes, personalização e prazo para te confirmar tudo por aqui. ✨"
+    )
+    try:
+        return limpar_texto_whatsapp(texto)
+    except Exception:
+        return texto
 
 
 def mensagem_catalogo_aprovacao(nome, codigo, total):
@@ -15378,8 +16939,35 @@ def html_hero_catalogo_empresa():
     """
 
 
+def mensagem_catalogo_recebido(nome, codigo, itens_texto, total):
+    texto = (
+        f"Olá {nome}! 🤍\n\n"
+        f"Recebemos seu pedido pelo nosso catálogo online. ✨\n\n"
+        f"Pedido: {codigo}\n"
+        f"Itens:\n{itens_texto}\n\n"
+        f"Total estimado: {real(total)}\n\n"
+        f"Vamos conferir os detalhes, personalização e prazo. Em seguida te retorno por aqui para confirmação, pagamento e produção.\n\n"
+        f"Equipe Sophi Personalizados Oficial"
+    )
+    try:
+        return limpar_texto_whatsapp(texto)
+    except Exception:
+        return texto
 
 
+def botao_recebemos_pedido_catalogo(p, codigo, itens_texto, total_pedido):
+    st.markdown("### WhatsApp do cliente")
+    msg_recebido = mensagem_catalogo_recebido(
+        p.get("cliente_nome", "cliente"),
+        codigo,
+        itens_texto,
+        total_pedido,
+    )
+    link_recebido = link_whatsapp(p.get("whatsapp", ""), msg_recebido)
+    if link_recebido:
+        st.link_button("Enviar: recebemos seu pedido", link_recebido, use_container_width=True)
+    else:
+        st.warning("Esse pedido não tem WhatsApp cadastrado.")
 
 
 
@@ -17031,22 +18619,6 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
-    # Fila persistente de notificações do Portal para o ERP.
-    # A aprovação do cliente gera uma entrada aqui, independente de o operador
-    # estar ou não com a tela do Portal aberta.
-    executar("""
-    CREATE TABLE IF NOT EXISTS erp_notificacoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tipo TEXT DEFAULT 'Portal do Cliente',
-        titulo TEXT NOT NULL,
-        mensagem TEXT NOT NULL,
-        orcamento_id INTEGER,
-        referencia_id INTEGER,
-        lida INTEGER DEFAULT 0,
-        data TEXT DEFAULT CURRENT_TIMESTAMP,
-        chave_unica TEXT UNIQUE
-    )
-    """)
     executar("""
     CREATE TABLE IF NOT EXISTS portal_aprovacoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17090,91 +18662,13 @@ def garantir_portal_v2():
     """)
 
 
-def registrar_notificacao_portal(orcamento_id, evento, descricao, referencia_id=None):
-    """Cria uma notificação persistente no ERP para decisões tomadas pelo cliente."""
-    try:
-        oid = int(orcamento_id)
-        evento = str(evento or '').strip()
-        if evento not in {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}:
-            return False
-
-        cliente_nome = "Cliente"
-        try:
-            d = consultar("""
-                SELECT COALESCE(NULLIF(o.cliente_nome,''), c.nome, 'Cliente') AS cliente_nome
-                FROM orcamentos o LEFT JOIN clientes c ON c.id=o.cliente_id
-                WHERE o.id=? LIMIT 1
-            """, (oid,))
-            if not d.empty and str(d.iloc[0].get('cliente_nome') or '').strip():
-                cliente_nome = str(d.iloc[0]['cliente_nome']).strip()
-        except Exception:
-            pass
-
-        if evento == "Arte aprovada":
-            titulo = "✅ Arte aprovada pelo cliente"
-        elif evento == "Alteração de arte":
-            titulo = "✏️ Cliente solicitou alteração na arte"
-        elif evento == "Pedido aprovado":
-            titulo = "✅ Pedido aprovado pelo cliente"
-        else:
-            titulo = "❌ Pedido reprovado pelo cliente"
-
-        mensagem = f"{cliente_nome} — {descricao}"
-        chave = f"portal:{oid}:{evento}:{int(referencia_id) if referencia_id is not None else descricao}"
-        # INSERT OR IGNORE evita duplicar a mesma decisão quando o Streamlit rerodar.
-        executar(
-            "INSERT OR IGNORE INTO erp_notificacoes(tipo,titulo,mensagem,orcamento_id,referencia_id,lida,data,chave_unica) VALUES(?,?,?,?,?,?,?,?)",
-            ("Portal do Cliente", titulo, mensagem, oid, int(referencia_id) if referencia_id is not None else None, 0, agora_brasil().isoformat(), chave)
-        )
-        return True
-    except Exception:
-        return False
-
-
 def portal_evento(orcamento_id, token, evento, descricao):
     try:
         garantir_portal_v2()
         executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
                  (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
-        # Somente decisões do cliente viram notificações no ERP.
-        if str(evento) in {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}:
-            registrar_notificacao_portal(orcamento_id, evento, descricao)
     except Exception:
         pass
-
-
-def contar_notificacoes_portal_nao_lidas():
-    try:
-        garantir_portal_v2()
-        d = consultar("SELECT COUNT(*) AS total FROM erp_notificacoes WHERE COALESCE(lida,0)=0")
-        return int(d.iloc[0]['total']) if not d.empty else 0
-    except Exception:
-        return 0
-
-
-def renderizar_notificacoes_portal():
-    try:
-        garantir_portal_v2()
-        d = consultar("SELECT * FROM erp_notificacoes ORDER BY id DESC LIMIT 50")
-        if d.empty:
-            st.info("Nenhuma notificação do Portal do Cliente.")
-            return
-        for _, r in d.iterrows():
-            lida = int(r.get('lida') or 0) == 1
-            caixa = st.container(border=True) if hasattr(st, 'container') else st
-            with caixa:
-                st.markdown(f"**{r.get('titulo','Notificação')}**")
-                st.write(str(r.get('mensagem') or ''))
-                try:
-                    st.caption(datetime.fromisoformat(str(r.get('data'))).strftime('%d/%m/%Y %H:%M'))
-                except Exception:
-                    st.caption(str(r.get('data') or ''))
-                if not lida:
-                    if st.button("Marcar como lida", key=f"notif_lida_{int(r['id'])}"):
-                        executar("UPDATE erp_notificacoes SET lida=1 WHERE id=?", (int(r['id']),))
-                        st.rerun()
-    except Exception as e:
-        st.warning(f"Não foi possível carregar as notificações: {e}")
 
 
 def _portal_token_v2():
@@ -17342,7 +18836,7 @@ def tela_portal_cliente_publico():
                 b1,b2 = st.columns(2)
                 with b1:
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
-                        aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
+                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
                         portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
                         st.success("Arte aprovada com sucesso!")
@@ -17353,7 +18847,7 @@ def tela_portal_cliente_publico():
                 if st.session_state.get(f"alterar_arte_{a['id']}"):
                     comentario = st.text_area("O que deseja alterar?", key=f"coment_arte_{a['id']}")
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
-                        aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
+                        executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
                         portal_evento(oid,token,"Alteração de arte",comentario)
                         st.success("Sua solicitação foi enviada para a Sophi.")
@@ -17368,7 +18862,7 @@ def tela_portal_cliente_publico():
     else:
         st.write("Confira os itens, valores e prazo antes de confirmar.")
         if st.button("✅ APROVAR PEDIDO", type="primary", use_container_width=True):
-            aprovacao_id = executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Pedido","Aprovado","Cliente aprovou o pedido pelo portal"))
+            executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario) VALUES(?,?,?,?,?)", (oid,token,"Pedido","Aprovado","Cliente aprovou o pedido pelo portal"))
             try:
                 executar("UPDATE orcamentos SET status='Aprovado' WHERE id=?", (oid,))
             except Exception: pass
@@ -18093,21 +19587,6 @@ st.sidebar.markdown("""
 botao_sair()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
-# ============================================================
-# NOTIFICAÇÕES — decisões do Portal do Cliente
-# ============================================================
-_notif_qtd = contar_notificacoes_portal_nao_lidas()
-_notif_label = f"🔔 Notificações ({_notif_qtd})" if _notif_qtd else "🔔 Notificações"
-if st.sidebar.button(_notif_label, use_container_width=True, key="abrir_notificacoes_portal"):
-    st.session_state["mostrar_notificacoes_portal"] = True
-
-if st.session_state.get("mostrar_notificacoes_portal"):
-    st.sidebar.markdown("### 🔔 Notificações do Portal")
-    renderizar_notificacoes_portal()
-    if st.sidebar.button("Fechar notificações", use_container_width=True, key="fechar_notificacoes_portal"):
-        st.session_state["mostrar_notificacoes_portal"] = False
-        st.rerun()
-
 menu = st.sidebar.radio(
     "Menu",
     [
@@ -18405,73 +19884,257 @@ def _mockup_aplicacao_sophi(imagem, aplicacao):
     return Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
 
 
-def _aplicar_arte_em_foto_real(foto, arte, aplicacao):
-    """Aplica a arte sobre uma foto REAL do produto usando perspectiva.
-    A foto do produto é preservada; somente a área da aplicação recebe a arte.
+
+def _chamar_openai_mockup_fotografico(arte, aplicacao, forma="Quadrado", foto_produto=None):
     """
-    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+    Gera o mockup do produto.
+    - Com OPENAI_API_KEY: usa geração/edição de imagem.
+    - Sem chave, mas com foto real do produto: faz uma montagem local funcional.
+    - Sem chave e sem foto: informa que não é possível inventar uma fotografia real
+      localmente; o usuário deve enviar a foto do produto.
+    """
+    import base64 as _b64
+    import json as _json
+    import urllib.request as _ureq
+    import urllib.error as _uerr
+    from io import BytesIO
+
+    api_key = ""
+    try:
+        api_key = str(_segredo("OPENAI_API_KEY", "")).strip()
+    except Exception:
+        pass
+
+    # Sem API: nunca deixa o botão "não funcionar" se a foto real foi enviada.
+    # Usa a fotografia real fornecida pelo usuário como base do mockup.
+    if not api_key:
+        if foto_produto is None:
+            raise RuntimeError(
+                "Para gerar a FOTO REAL sem uma chave de API, envie a foto real do produto "
+                "no campo acima. A montagem será feita diretamente nessa fotografia."
+            )
+        resultado = _aplicar_arte_em_foto_real(
+            foto_produto, arte, aplicacao, forma
+        )
+        buf = BytesIO()
+        resultado.save(buf, format="PNG", dpi=(180, 180))
+        return buf.getvalue()
+
+    def _data_url(img, mime="image/png"):
+        buf = BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        return f"data:{mime};base64,{_b64.b64encode(buf.getvalue()).decode('ascii')}"
+
+    arte_url = _data_url(arte)
+
+    nomes = {
+        "Geladeira": "uma geladeira real",
+        "Garrafa": "uma garrafa real de uso cotidiano",
+        "Embalagem": "uma embalagem real de produto",
+        "Sacola": "uma sacola real de papel personalizada",
+        "Caderno": "um caderno real",
+        "Planner": "um planner real",
+        "Caneca": "uma caneca real de cerâmica",
+        "Chaveiro": "um chaveiro real",
+        "Cartão": "um cartão real impresso",
+        "Etiqueta": "uma etiqueta adesiva real aplicada em um produto",
+        "Crachá retrátil": "um crachá retrátil real",
+        "Broche com cordão": "um broche/button real preso a um cordão",
+    }
+    produto = nomes.get(aplicacao, "um produto real personalizado")
+    formato = {
+        "Redondo": "A área personalizada deve ser perfeitamente REDONDA.",
+        "Quadrado": "A área personalizada deve ser perfeitamente QUADRADA.",
+        "Retangular": "A área personalizada deve ser RETANGULAR.",
+        "Personalizado": "A área personalizada deve respeitar exatamente o formato definido pela arte.",
+    }.get(forma, "Respeite exatamente o formato da arte.")
+
+    prompt = f"""
+Crie uma FOTOGRAFIA COMERCIAL REALISTA de {produto} com a ARTE FINAL DO CLIENTE aplicada.
+A arte enviada é referência de alta fidelidade. Preserve textos, nomes, logotipos, símbolos,
+cores e detalhes sem redesenhar ou inventar conteúdo.
+
+A arte precisa estar fisicamente aplicada na superfície do produto, seguindo a perspectiva,
+curvatura, textura, iluminação, reflexos e sombras da própria superfície. NÃO mostre a arte
+como uma imagem quadrada/PNG flutuando diante do produto.
+
+{formato}
+
+Mostre o produto inteiro ou quase inteiro, em fotografia comercial realista, pronto para
+apresentação ao cliente. Não transforme em ilustração, desenho ou render 3D.
+
+Se uma foto real do produto foi fornecida, ela é a referência principal: mantenha o mesmo
+produto, ângulo, enquadramento, cor e características físicas e aplique a arte diretamente nele.
+Não substitua a foto por outro produto.
+"""
+
+    content = [
+        {"type": "input_text", "text": prompt},
+        {"type": "input_image", "image_url": arte_url, "detail": "high"},
+    ]
+    if foto_produto is not None:
+        content.append(
+            {"type": "input_image", "image_url": _data_url(foto_produto), "detail": "high"}
+        )
+
+    payload = {
+        "model": "gpt-5",
+        "input": [{"role": "user", "content": content}],
+        "tools": [{
+            "type": "image_generation",
+            "action": "auto",
+            "quality": "high",
+            "size": "1024x1024",
+            "output_format": "png",
+            "input_fidelity": "high",
+        }],
+    }
+
+    req = _ureq.Request(
+        "https://api.openai.com/v1/responses",
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ureq.urlopen(req, timeout=180) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+    except _uerr.HTTPError as exc:
+        detalhe = exc.read().decode("utf-8", errors="ignore")
+        # Se a API falhar e houver foto real, ainda entrega um mockup local.
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError(f"Erro da API de imagens ({exc.code}): {detalhe[:800]}")
+    except Exception as exc:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError(f"Não foi possível gerar o mockup fotográfico: {exc}")
+
+    resultados = []
+    for output in data.get("output", []):
+        if output.get("type") == "image_generation_call":
+            result = output.get("result")
+            if isinstance(result, str) and result:
+                resultados.append(result)
+
+    if not resultados:
+        if foto_produto is not None:
+            resultado = _aplicar_arte_em_foto_real(
+                foto_produto, arte, aplicacao, forma
+            )
+            buf = BytesIO()
+            resultado.save(buf, format="PNG", dpi=(180, 180))
+            return buf.getvalue()
+        raise RuntimeError("A API não retornou uma imagem de mockup.")
+    return _b64.b64decode(resultados[0])
+
+
+
+def _aplicar_arte_em_foto_real(foto, arte, aplicacao, forma="Quadrado"):
+    """
+    Fallback local: usa a FOTO REAL enviada como base e aplica a arte em perspectiva.
+    Não cria uma falsa foto do produto; trabalha diretamente sobre a fotografia real.
+    """
+    from PIL import Image, ImageOps, ImageFilter, ImageEnhance
     import numpy as np
 
     base = foto.convert("RGB")
     bw, bh = base.size
-    # Converte a arte para RGBA e prepara textura/leve transparência para integração.
-    art = ImageOps.fit(arte.convert("RGBA"), (max(10, int(bw*0.28)), max(10, int(bh*0.28))), method=Image.Resampling.LANCZOS)
-    aw, ah = art.size
 
-    # Região padrão da aplicação em coordenadas relativas da fotografia.
+    # Área de aplicação por produto. Coordenadas normalizadas para fotografias
+    # frontais/semifrontalmente enquadradas.
     regioes = {
-        "Geladeira": [(0.37,0.30),(0.63,0.28),(0.66,0.58),(0.34,0.60)],
-        "Garrafa": [(0.39,0.34),(0.61,0.34),(0.63,0.63),(0.37,0.63)],
-        "Embalagem": [(0.35,0.38),(0.65,0.38),(0.65,0.68),(0.35,0.68)],
-        "Sacola": [(0.37,0.36),(0.63,0.36),(0.63,0.68),(0.37,0.68)],
-        "Caderno": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
-        "Planner": [(0.38,0.30),(0.63,0.30),(0.63,0.68),(0.38,0.68)],
-        "Caneca": [(0.36,0.36),(0.64,0.34),(0.66,0.63),(0.34,0.65)],
-        "Chaveiro": [(0.38,0.34),(0.62,0.34),(0.64,0.63),(0.36,0.63)],
-        "Cartão": [(0.35,0.35),(0.65,0.35),(0.65,0.67),(0.35,0.67)],
-        "Etiqueta": [(0.35,0.34),(0.65,0.34),(0.65,0.68),(0.35,0.68)],
-        "Crachá retrátil": [(0.40,0.34),(0.60,0.34),(0.61,0.61),(0.39,0.61)],
-        "Broche com cordão": [(0.40,0.32),(0.60,0.32),(0.61,0.61),(0.39,0.61)],
+        "Geladeira": [(0.30,0.25),(0.70,0.25),(0.70,0.62),(0.30,0.62)],
+        "Garrafa": [(0.32,0.30),(0.68,0.30),(0.66,0.66),(0.34,0.66)],
+        "Embalagem": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Sacola": [(0.30,0.30),(0.70,0.30),(0.70,0.70),(0.30,0.70)],
+        "Caderno": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Planner": [(0.25,0.18),(0.75,0.18),(0.75,0.78),(0.25,0.78)],
+        "Caneca": [(0.24,0.28),(0.76,0.28),(0.72,0.65),(0.28,0.65)],
+        "Chaveiro": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Cartão": [(0.20,0.25),(0.80,0.25),(0.80,0.70),(0.20,0.70)],
+        "Etiqueta": [(0.28,0.30),(0.72,0.30),(0.72,0.70),(0.28,0.70)],
+        "Crachá retrátil": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
+        "Broche com cordão": [(0.30,0.28),(0.70,0.28),(0.70,0.68),(0.30,0.68)],
     }
-    q = regioes.get(aplicacao, regioes["Geladeira"])
-    quad = tuple((int(x*bw), int(y*bh)) for x,y in q)
 
-    # Máscara da arte para respeitar o formato escolhido.
-    mask = Image.new("L", (aw,ah), 0)
-    md = ImageOps.grayscale(Image.new("L", (aw,ah), 255))
-    mask = md
-    # Para produtos redondos, usa máscara circular.
-    if aplicacao in ("Chaveiro","Crachá retrátil","Broche com cordão","Geladeira"):
-        mask = Image.new("L", (aw,ah), 0)
-        from PIL import ImageDraw
-        ImageDraw.Draw(mask).ellipse((0,0,aw-1,ah-1), fill=235)
-    art.putalpha(ImageEnhance.Brightness(art.getchannel("A")).enhance(1.0))
+    q = regioes.get(aplicacao, regioes["Caderno"])
+    quad = np.float32([[x*bw, y*bh] for x,y in q])
 
-    # Perspectiva com Pillow. Usa os quatro pontos da superfície real.
-    src = np.float32([[0,0],[aw,0],[aw,ah],[0,ah]])
-    dst = np.float32(quad)
+    # Tamanho base proporcional à área selecionada.
+    minx,maxx = quad[:,0].min(),quad[:,0].max()
+    miny,maxy = quad[:,1].min(),quad[:,1].max()
+    aw=max(80,int(maxx-minx))
+    ah=max(80,int(maxy-miny))
+
+    # Preserva o formato da arte.
+    art=ImageOps.contain(arte.convert("RGBA"),(aw,ah),method=Image.Resampling.LANCZOS)
+    canvas=Image.new("RGBA",(aw,ah),(255,255,255,0))
+    canvas.alpha_composite(art,((aw-art.width)//2,(ah-art.height)//2))
+
+    mask=Image.new("L",(aw,ah),0)
+    md=ImageOps.autocontrast(mask)
+    from PIL import ImageDraw
+    d=ImageDraw.Draw(mask)
+    if forma=="Redondo":
+        d.ellipse((1,1,aw-2,ah-2),fill=255)
+    elif forma=="Retangular":
+        d.rectangle((1,1,aw-2,ah-2),fill=255)
+    else:
+        d.rounded_rectangle((1,1,aw-2,ah-2),radius=max(2,int(min(aw,ah)*0.015)),fill=255)
+    canvas.putalpha(mask)
+
     try:
         import cv2
-        M = cv2.getPerspectiveTransform(src, dst)
-        rgba = np.array(art)
-        warped = cv2.warpPerspective(rgba, M, (bw,bh), flags=cv2.INTER_LANCZOS, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0))
-        overlay = Image.fromarray(warped, "RGBA")
-    except Exception:
-        # Fallback sem OpenCV: mantém a aplicação proporcional na região central.
-        overlay = Image.new("RGBA", (bw,bh), (0,0,0,0))
-        rect = (int(min(x for x,y in quad)), int(min(y for x,y in quad)), int(max(x for x,y in quad)), int(max(y for x,y in quad)))
-        overlay.alpha_composite(art.resize((rect[2]-rect[0], rect[3]-rect[1]), Image.Resampling.LANCZOS), (rect[0],rect[1]))
+        src_pts=np.float32([[0,0],[aw-1,0],[aw-1,ah-1],[0,ah-1]])
+        M=cv2.getPerspectiveTransform(src_pts,quad)
+        warped=cv2.warpPerspective(
+            np.array(canvas),M,(bw,bh),
+            flags=cv2.INTER_LANCZOS,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0,0,0,0)
+        )
+        overlay=Image.fromarray(warped,"RGBA")
 
-    # Integração fotográfica: leve transparência, sombra e brilho da foto atravessando a arte.
-    alpha = overlay.getchannel("A").point(lambda v: int(v*0.88))
-    overlay.putalpha(alpha)
-    result = Image.alpha_composite(base.convert("RGBA"), overlay)
-    return result.convert("RGB")
+        # Sombra suave sob a peça.
+        alpha=overlay.getchannel("A")
+        shadow_alpha=alpha.filter(ImageFilter.GaussianBlur(max(2,int(min(bw,bh)*0.006))))
+        shadow_alpha=shadow_alpha.point(lambda p:int(p*0.22))
+        shadow=Image.new("RGBA",(bw,bh),(0,0,0,0))
+        shadow.putalpha(shadow_alpha)
+
+        result=Image.alpha_composite(base.convert("RGBA"),shadow)
+
+        # Integração leve com a iluminação da fotografia: reduz um pouco a
+        # opacidade e mistura textura/luz do produto sem destruir a arte.
+        overlay.putalpha(overlay.getchannel("A").point(lambda p:int(p*0.94)))
+        result=Image.alpha_composite(result,overlay)
+        return result.convert("RGB")
+    except Exception:
+        # Fallback sem OpenCV: aplicação central sem perspectiva.
+        result=base.copy()
+        x=int(minx); y=int(miny)
+        result.paste(canvas.convert("RGB"),(x,y),canvas)
+        return result
+
 
 def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidade,
                                  margem_mm, espacamento_mm, sangria_mm,
                                  modo_corte, marcas_registro):
-    """Monta a prévia A4 e retorna PNG + metadados de produção."""
+    """Monta a prévia A4 com a arte realmente no formato escolhido."""
     from PIL import Image, ImageDraw, ImageOps
     from io import BytesIO
     import math
@@ -18480,95 +20143,106 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
     A4_W = int(210 / 25.4 * DPI)
     A4_H = int(297 / 25.4 * DPI)
     mm_px = DPI / 25.4
-
     w = max(1, int(largura_cm / 2.54 * DPI))
     h = max(1, int(altura_cm / 2.54 * DPI))
     margem = int(margem_mm * mm_px)
     esp = int(espacamento_mm * mm_px)
     sangria = int(sangria_mm * mm_px)
 
-    # Mantém proporção e preenche a área final sem deformar a arte.
-    base_w = w + 2*sangria
-    base_h = h + 2*sangria
-    base_fitted = ImageOps.fit(imagem.convert("RGB"), (base_w, base_h),
-                               method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+    # Quando as marcas da Cameo 4 estão ligadas, a grade precisa ficar
+    # dentro da área segura de Print & Cut, sem invadir as marcas.
+    if marcas_registro:
+        margem = max(margem, int(round(18 * mm_px)))
 
-    # Quando o formato é REDONDO, a própria arte fica circular de verdade:
-    # os cantos externos são transparentes e não são impressos como um quadrado.
-    # A sangria também acompanha o círculo para preservar o acabamento no corte.
+    pw, ph = w + 2*sangria, h + 2*sangria
+    base = Image.new("RGBA", (pw,ph), (255,255,255,0))
+    arte_fit = ImageOps.fit(imagem.convert("RGBA"), (pw,ph), method=Image.Resampling.LANCZOS)
+
+    mask = Image.new("L", (pw,ph), 0)
+    md = ImageDraw.Draw(mask)
     if forma == "Redondo":
-        base = Image.new("RGBA", (base_w, base_h), (255, 255, 255, 0))
-        mascara_circular = Image.new("L", (base_w, base_h), 0)
-        mascara_draw = ImageDraw.Draw(mascara_circular)
-        mascara_draw.ellipse((0, 0, base_w - 1, base_h - 1), fill=255)
-        base.paste(base_fitted, (0, 0), mascara_circular)
+        md.ellipse((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
     else:
-        base = base_fitted.convert("RGB")
+        md.rectangle((sangria,sangria,sangria+w-1,sangria+h-1), fill=255)
+    arte_fit.putalpha(mask)
+    base.alpha_composite(arte_fit)
 
-    # Prévia da folha branca.
-    folha = Image.new("RGB", (A4_W, A4_H), "white")
+    folha = Image.new("RGB", (A4_W,A4_H), "white")
     draw = ImageDraw.Draw(folha)
-
     passo_x = w + 2*sangria + esp
     passo_y = h + 2*sangria + esp
     disponivel_w = A4_W - 2*margem
     disponivel_h = A4_H - 2*margem
-
     cols = max(1, (disponivel_w + esp) // passo_x)
     rows = max(1, (disponivel_h + esp) // passo_y)
     por_folha = cols * rows
     folhas = max(1, math.ceil(quantidade / por_folha))
 
-    n = min(quantidade, por_folha)
-    for i in range(n):
-        row = i // cols
-        col = i % cols
-        x = margem + col * passo_x
-        y = margem + row * passo_y
-        if forma == "Redondo":
-            # Usa a transparência circular para impedir que o quadrado da imagem
-            # seja colocado na folha.
-            folha.paste(base, (int(x - sangria), int(y - sangria)), base)
-        else:
-            folha.paste(base, (int(x - sangria), int(y - sangria)))
-
-        # Visualização da linha de corte, quando solicitada.
+    for i in range(min(quantidade, por_folha)):
+        row,col = divmod(i,cols)
+        x = margem + col*passo_x
+        y = margem + row*passo_y
+        folha.paste(base, (int(x-sangria), int(y-sangria)), base)
         if modo_corte != "Sem corte":
             if forma == "Redondo":
-                draw.ellipse(
-                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
-                )
+                draw.ellipse((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
             else:
-                draw.rectangle(
-                    (x, y, x+w, y+h), outline=(80, 80, 80), width=max(1, int(mm_px*0.25))
-                )
+                draw.rectangle((x,y,x+w,y+h), outline=(80,80,80), width=max(1,int(mm_px*0.25)))
 
-    # Marcas de registro simples e opcionais para fluxo de impressão/corte.
-    if marcas_registro and modo_corte != "Sem corte":
-        tam = int(5 * mm_px)
-        off = margem // 2
-        for px, py in [
-            (off, off), (A4_W-off-tam, off),
-            (off, A4_H-off-tam), (A4_W-off-tam, A4_H-off-tam)
-        ]:
-            draw.rectangle((px, py, px+tam, py+tam), outline=(0,0,0), width=max(2, int(mm_px*0.3)))
+    if marcas_registro:
+        # Print & Cut tradicional da Cameo 4: 3 marcas de registro.
+        # O canto superior esquerdo é um quadrado preenchido; superior direito
+        # e inferior esquerdo são marcas em L. A área ocupada pelas marcas é
+        # mantida livre para que a arte não invada a leitura óptica.
+        mm = mm_px
+        mark = max(18, int(round(10 * mm)))
+        bar = max(8, int(round(2.0 * mm)))
+        pad = max(6, int(round(5 * mm)))
+
+        xL = pad
+        xR = A4_W - pad - mark
+        yT = pad
+        yB = A4_H - pad - mark
+
+        # superior esquerdo — quadrado preto
+        draw.rectangle(
+            (xL, yT, xL + mark, yT + mark),
+            fill=(0,0,0)
+        )
+
+        # superior direito — L preto (canto interno voltado para a página)
+        draw.rectangle(
+            (xR, yT, xR + mark, yT + bar),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xR + mark - bar, yT, xR + mark, yT + mark),
+            fill=(0,0,0)
+        )
+
+        # inferior esquerdo — L preto
+        draw.rectangle(
+            (xL, yB + mark - bar, xL + mark, yB + mark),
+            fill=(0,0,0)
+        )
+        draw.rectangle(
+            (xL, yB, xL + bar, yB + mark),
+            fill=(0,0,0)
+        )
+
+        # Reforça a área segura: a grade nunca deve começar dentro do topo
+        # nem avançar sobre a zona lateral das marcas.
 
     preview = BytesIO()
-    folha.save(preview, format="PNG", dpi=(DPI, DPI))
+    folha.save(preview, format="PNG", dpi=(DPI,DPI))
     preview.seek(0)
-
     return {
-        "png": preview.getvalue(),
-        "cols": cols,
-        "rows": rows,
-        "por_folha": por_folha,
-        "folhas": folhas,
-        "tamanho": f"{largura_cm:g} × {altura_cm:g} cm",
-        "quantidade": quantidade,
-        "modo_corte": modo_corte,
-        "marcas_registro": marcas_registro,
+        "png": preview.getvalue(), "cols": cols, "rows": rows,
+        "por_folha": por_folha, "folhas": folhas,
+        "tamanho": f"{largura_cm:g} × {altura_cm:g}",
+        "quantidade": quantidade, "modo_corte": modo_corte,
+        "marcas_registro": marcas_registro, "forma": forma,
     }
-
 
 def _gerador_imagens_pdf(preview_png, titulo, meta):
     """PDF espelho da prévia do Gerador de Imagens."""
@@ -18616,6 +20290,10 @@ def tela_gerador_imagens_profissional():
         st.session_state.gi_preview = None
     if "gi_meta" not in st.session_state:
         st.session_state.gi_meta = None
+    if "gi_mockup" not in st.session_state:
+        st.session_state.gi_mockup = None
+    if "gi_mockup_bytes" not in st.session_state:
+        st.session_state.gi_mockup_bytes = None
 
     tabs = st.tabs(["🖼️ Criar arte", "👁️ Visualização da aplicação", "📤 Aprovação"])
 
@@ -18648,7 +20326,7 @@ def tela_gerador_imagens_profissional():
         c7, c8, c9 = st.columns(3)
         sangria_mm = c7.number_input("Sangria (mm)", min_value=0.0, value=2.0, step=0.5, key="gi_sangria")
         modo_corte = c8.selectbox("Corte", ["Sem corte", "Corte externo", "Corte por contorno"], key="gi_corte")
-        marcas_registro = c9.checkbox("Marcas para Cameo 4", value=False, key="gi_marcas")
+        marcas_registro = c9.checkbox("Marcas de registro — Cameo 4", value=False, key="gi_marcas")
 
         if st.button("🧩 Gerar prévia A4", use_container_width=True, key="gi_gerar"):
             if st.session_state.gi_imagem is None:
@@ -18665,49 +20343,70 @@ def tela_gerador_imagens_profissional():
         if st.session_state.gi_preview:
             st.image(st.session_state.gi_preview, caption="Prévia da folha A4 — espelho do PDF", use_container_width=True)
             meta = st.session_state.gi_meta
-            st.info(f"📐 {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
+            st.info(f"📐 {meta.get('forma', forma)} • {meta['tamanho']}  •  {meta['por_folha']} por folha  •  {meta['folhas']} folha(s) para {meta['quantidade']} unidade(s).")
 
             pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
             st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
 
     with tabs[1]:
         st.markdown("### 👁️ Visualização realista da aplicação")
-        st.caption("Veja a arte aplicada em uma representação visual do produto antes de enviar ao cliente. A arte original permanece intacta.")
+        st.caption(
+            "Gere uma FOTO REALISTA do produto com a arte do cliente aplicada. "
+            "A foto do produto é recomendada. Com uma foto real, o ERP consegue fazer a montagem "
+            "diretamente nela mesmo sem API; sem foto, a geração automática depende da OPENAI_API_KEY."
+        )
         aplicacao = st.selectbox(
             "Como você quer mostrar este produto?",
             ["Geladeira", "Garrafa", "Embalagem", "Sacola", "Caderno", "Planner", "Caneca", "Chaveiro", "Cartão", "Etiqueta", "Crachá retrátil", "Broche com cordão"],
             key="gi_aplicacao"
         )
         foto_real_produto = st.file_uploader(
-            "📷 Foto REAL do produto (opcional)",
+            "📷 Foto REAL do produto (recomendada para montagem sem API)",
             type=["png", "jpg", "jpeg", "webp"],
             key="gi_foto_real_produto",
-            help="Envie uma foto real da geladeira, garrafa, embalagem etc. A arte será aplicada diretamente nela para uma visualização fotográfica real."
+            help="Envie a foto real da caneca, garrafa, caderno, sacola etc. Para funcionar sem OPENAI_API_KEY, esta foto é necessária."
         )
+
+        from io import BytesIO
         if st.session_state.gi_imagem is not None:
-            if foto_real_produto is not None:
-                from PIL import Image as _PILImage
-                _foto_real = _PILImage.open(foto_real_produto).convert("RGB")
-                mockup = _aplicar_arte_em_foto_real(_foto_real, st.session_state.gi_imagem, aplicacao)
-                st.success("Aplicação fotográfica real gerada sobre a foto do produto.")
-            else:
-                mockup = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao)
-            from io import BytesIO
-            mock_buf = BytesIO()
-            mockup.save(mock_buf, format="PNG", dpi=(180,180))
-            mock_bytes = mock_buf.getvalue()
-            st.image(mock_bytes, caption=f"Prévia do produto aplicado — {aplicacao}", use_container_width=True)
-            st.download_button(
-                "🖼️ Baixar imagem do mockup",
-                mock_bytes,
-                file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
-                mime="image/png",
-                use_container_width=True,
-                key="gi_download_mockup"
-            )
-            st.caption("Esta é a visualização comercial da aplicação. Para impressão, use a prévia A4 da aba Criar arte.")
+            if st.button("✨ Gerar FOTO REAL do produto", use_container_width=True, key="gi_gerar_mockup"):
+                with st.spinner("Gerando a montagem fotográfica real..."):
+                    try:
+                        from PIL import Image as _PILImage
+                        _foto_ref = None
+                        if foto_real_produto is not None:
+                            _foto_ref = _PILImage.open(foto_real_produto).convert("RGB")
+
+                        mock_bytes = _chamar_openai_mockup_fotografico(
+                            st.session_state.gi_imagem,
+                            aplicacao,
+                            st.session_state.get("gi_forma", "Quadrado"),
+                            _foto_ref
+                        )
+                        st.session_state.gi_mockup_bytes = mock_bytes
+                        st.session_state.gi_mockup = _PILImage.open(BytesIO(mock_bytes)).convert("RGB")
+                        st.success("FOTO REAL do produto gerada com a arte aplicada.")
+                    except Exception as exc:
+                        st.error(str(exc))
+                        st.info("Se a OPENAI_API_KEY não estiver configurada, envie uma FOTO REAL do produto. O ERP fará a montagem diretamente nessa fotografia.")
+
+            if st.session_state.gi_mockup_bytes:
+                st.image(
+                    st.session_state.gi_mockup_bytes,
+                    caption=f"Foto realista — {aplicacao}",
+                    use_container_width=True
+                )
+                st.download_button(
+                    "🖼️ Baixar foto do produto personalizado",
+                    st.session_state.gi_mockup_bytes,
+                    file_name=f"mockup_{aplicacao.lower().replace(' ', '_')}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key="gi_download_mockup"
+                )
+                st.caption("Esta imagem é uma visualização comercial do produto; a arte de impressão continua sendo a prévia A4.")
         else:
-            st.info("Envie a arte do cliente primeiro para visualizar a aplicação.")
+            st.info("Envie a arte do cliente na aba Criar arte primeiro.")
 
     with tabs[2]:
         st.markdown("### 📤 Enviar para aprovação")
@@ -18730,27 +20429,32 @@ def tela_gerador_imagens_profissional():
             observacao = st.text_area("Observação para o cliente (opcional)", value="Confira a prévia do seu produto e aprove a arte ou solicite uma alteração.", height=90, key="gi_obs_portal")
 
             if tipo_aprovacao == "Mockup aplicado no produto":
-                st.caption("O cliente verá a arte aplicada no produto escolhido na aba Visualização da aplicação.")
+                st.caption("O cliente verá a montagem fotográfica REAL do produto escolhida na aba Visualização da aplicação.")
 
             if st.button("📤 Enviar para o Portal do Cliente", use_container_width=True, key="gi_portal"):
-                if not st.session_state.gi_preview or st.session_state.gi_imagem is None:
-                    st.warning("Envie a arte e gere a prévia antes de enviar.")
+                _pronto_envio = (
+                    bool(st.session_state.gi_imagem)
+                    and (
+                        bool(st.session_state.gi_mockup_bytes)
+                        if tipo_aprovacao == "Mockup aplicado no produto"
+                        else bool(st.session_state.gi_preview)
+                    )
+                )
+                if not _pronto_envio:
+                    if tipo_aprovacao == "Mockup aplicado no produto":
+                        st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
+                    else:
+                        st.warning("Envie a arte e gere a prévia A4 antes de enviar.")
                 else:
                     try:
                         if tipo_aprovacao == "Mockup aplicado no produto":
+                            if not st.session_state.get("gi_mockup_bytes"):
+                                st.warning("Gere a FOTO REAL do produto na aba Visualização da aplicação antes de enviar.")
+                                st.stop()
+                            arquivo_envio = st.session_state.gi_mockup_bytes
                             aplicacao_envio = st.session_state.get("gi_aplicacao", "Geladeira")
-                            if st.session_state.get("gi_foto_real_produto") is not None:
-                                from PIL import Image as _PILImage
-                                _foto_real_envio = _PILImage.open(st.session_state["gi_foto_real_produto"]).convert("RGB")
-                                mockup_envio = _aplicar_arte_em_foto_real(_foto_real_envio, st.session_state.gi_imagem, aplicacao_envio)
-                            else:
-                                mockup_envio = _mockup_aplicacao_sophi(st.session_state.gi_imagem, aplicacao_envio)
-                            from io import BytesIO
-                            _mb = BytesIO()
-                            mockup_envio.save(_mb, format="PNG", dpi=(180,180))
-                            arquivo_envio = _mb.getvalue()
                             nome_envio = f"{titulo.strip() or 'mockup'}_{aplicacao_envio.lower().replace(' ', '_')}.png"
-                            obs_envio = f"{observacao}\n\nMockup de aplicação: {aplicacao_envio}"
+                            obs_envio = f"{observacao}\\n\\nMockup fotográfico real: {aplicacao_envio}"
                         else:
                             arquivo_envio = st.session_state.gi_preview
                             nome_envio = f"{titulo.strip() or 'previa'}_gerador_imagens.png"
@@ -18762,6 +20466,7 @@ def tela_gerador_imagens_profissional():
                         st.success(f"Arquivo enviado para o Portal do Cliente — versão {versao}.")
                     except Exception as exc:
                         st.error(f"Não foi possível enviar para o Portal: {exc}")
+
         else:
             st.info("É necessário ter pelo menos um orçamento cadastrado para vincular a aprovação ao Portal do Cliente.")
 
