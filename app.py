@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 import base64
 import hashlib
@@ -102,6 +103,208 @@ def bucket_supabase():
         return SUPABASE_BUCKET_PADRAO
 
 
+def _sincronizar_notificacao_portal_nuvem(orcamento_id, token, evento, descricao, versao, data_evento, portal_evento_id):
+    """Envia UMA notificação do Portal como arquivo independente no Storage.
+
+    É um canal complementar somente para notificações. Não substitui nem
+    altera o banco principal do ERP.
+    """
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return False
+
+        sync_id = uuid.uuid4().hex
+        payload = {
+            "sync_id": sync_id,
+            "orcamento_id": int(orcamento_id),
+            "token": str(token),
+            "evento": str(evento or ""),
+            "descricao": str(descricao or ""),
+            "versao": int(versao) if versao is not None else None,
+            "data": str(data_evento or ""),
+            "portal_evento_id": int(portal_evento_id) if portal_evento_id is not None else None,
+        }
+        caminho = f"portal_notificacoes/{sync_id}.json"
+        conteudo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        sb.storage.from_(bucket_supabase()).upload(
+            caminho,
+            conteudo,
+            {"content-type": "application/json", "upsert": "false"},
+        )
+        return sync_id
+    except Exception as _notif_upload_err:
+        print(f"[PORTAL NOTIFICACAO] Falha no canal de notificação: {_notif_upload_err}")
+        return False
+
+
+def _publicar_feed_notificacao_portal_nuvem(payload):
+    """Publica um feed único de notificações; não depende de Storage LIST."""
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return False
+
+        caminho = "portal_notificacoes_feed.json"
+        feed = []
+        try:
+            raw = sb.storage.from_(bucket_supabase()).download(caminho)
+            if raw:
+                feed = json.loads(
+                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                )
+                if not isinstance(feed, list):
+                    feed = []
+        except Exception:
+            feed = []
+
+        sync_id = str(payload.get("sync_id") or uuid.uuid4().hex)
+        if not any(str(x.get("sync_id") or "") == sync_id for x in feed if isinstance(x, dict)):
+            feed.append(dict(payload))
+
+        # Mantém histórico suficiente para múltiplas ações no mesmo Portal.
+        feed = feed[-500:]
+        dados = json.dumps(feed, ensure_ascii=False).encode("utf-8")
+
+        try:
+            sb.storage.from_(bucket_supabase()).update(
+                caminho,
+                dados,
+                {"content-type": "application/json", "upsert": "true"},
+            )
+        except Exception:
+            sb.storage.from_(bucket_supabase()).upload(
+                caminho,
+                dados,
+                {"content-type": "application/json", "upsert": "true"},
+            )
+        return sync_id
+    except Exception as _feed_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao publicar feed: {_feed_err}")
+        return False
+
+
+def _importar_notificacoes_portal_nuvem():
+    """Importa notificações remotas sem depender de Storage LIST."""
+    try:
+        sb = cliente_supabase()
+        if sb is None:
+            return 0
+
+        garantir_portal_v2()
+
+        # Migração local, se a coluna ainda não existir.
+        try:
+            cols = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+            if "sync_id" not in cols:
+                executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+                executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+        except Exception:
+            pass
+
+        # 1) Caminho principal: baixa um único arquivo conhecido.
+        # Isso não exige permissão de LIST na pasta do Storage.
+        feed = []
+        try:
+            raw = sb.storage.from_(bucket_supabase()).download("portal_notificacoes_feed.json")
+            if raw:
+                feed = json.loads(
+                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                )
+                if not isinstance(feed, list):
+                    feed = []
+        except Exception as _feed_read_err:
+            print(f"[PORTAL NOTIFICACAO] Feed remoto indisponível: {_feed_read_err}")
+
+        importados = 0
+
+        for dados in feed:
+            if not isinstance(dados, dict):
+                continue
+            try:
+                sync_id = str(dados.get("sync_id") or "").strip()
+                if not sync_id:
+                    continue
+
+                ja_existe = consultar(
+                    "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
+                    (sync_id,)
+                )
+                if not ja_existe.empty:
+                    continue
+
+                executar(
+                    """INSERT INTO portal_notificacoes
+                       (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
+                       VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
+                    (
+                        int(dados.get("orcamento_id") or 0),
+                        str(dados.get("token") or ""),
+                        str(dados.get("evento") or "Atualização do Portal"),
+                        str(dados.get("descricao") or ""),
+                        int(dados["versao"]) if dados.get("versao") is not None else None,
+                        str(dados.get("data") or agora_brasil().isoformat()),
+                        int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
+                        sync_id,
+                    ),
+                )
+                importados += 1
+            except Exception as _one_notif_err:
+                print(f"[PORTAL NOTIFICACAO] Falha ao importar uma notificação: {_one_notif_err}")
+                continue
+
+        # 2) Fallback antigo: tenta LIST somente se o feed não estiver acessível.
+        if not feed:
+            try:
+                arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes") or []
+                for item in arquivos:
+                    nome = str((item or {}).get("name") or "")
+                    if not nome.lower().endswith(".json"):
+                        continue
+                    try:
+                        raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
+                        if not raw:
+                            continue
+                        dados = json.loads(
+                            raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        )
+                        sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
+                        if not sync_id:
+                            continue
+                        ja_existe = consultar(
+                            "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
+                            (sync_id,)
+                        )
+                        if not ja_existe.empty:
+                            continue
+                        executar(
+                            """INSERT INTO portal_notificacoes
+                               (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
+                               VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
+                            (
+                                int(dados.get("orcamento_id") or 0),
+                                str(dados.get("token") or ""),
+                                str(dados.get("evento") or "Atualização do Portal"),
+                                str(dados.get("descricao") or ""),
+                                int(dados["versao"]) if dados.get("versao") is not None else None,
+                                str(dados.get("data") or agora_brasil().isoformat()),
+                                int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
+                                sync_id,
+                            ),
+                        )
+                        importados += 1
+                    except Exception as _one_old_notif_err:
+                        print(f"[PORTAL NOTIFICACAO] Falha no fallback de notificação: {_one_old_notif_err}")
+            except Exception as _list_err:
+                print(f"[PORTAL NOTIFICACAO] Fallback LIST indisponível: {_list_err}")
+
+        return importados
+    except Exception as _notif_import_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao importar notificações: {_notif_import_err}")
+        return 0
+
+
 def baixar_banco_da_nuvem():
     """Baixa o banco salvo no Supabase Storage antes do app criar tabelas."""
     global _SYNC_NUVEM_ATIVO
@@ -112,10 +315,15 @@ def baixar_banco_da_nuvem():
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         dados = sb.storage.from_(bucket_supabase()).download(SUPABASE_DB_ARQUIVO)
         if dados:
-            DB_PATH.write_bytes(dados)
+            _tmp_db = DB_PATH.with_suffix(DB_PATH.suffix + ".sync_tmp")
+            _tmp_db.write_bytes(dados)
+            if _tmp_db.stat().st_size <= 0:
+                raise RuntimeError("Banco baixado vazio.")
+            _tmp_db.replace(DB_PATH)
             _SYNC_NUVEM_ATIVO = True
             return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao baixar banco: {_sync_err}')
         # Primeira execução: ainda não existe banco na nuvem. O app cria e depois envia.
         _SYNC_NUVEM_ATIVO = True
         return False
@@ -155,7 +363,8 @@ def enviar_banco_para_nuvem(force=False):
             )
         _ULTIMO_UPLOAD_NUVEM = agora
         return True
-    except Exception:
+    except Exception as _sync_err:
+        print(f'[SYNC BANCO] Falha ao enviar banco: {_sync_err}')
         return False
 
 
@@ -13269,10 +13478,13 @@ def _gerar_pdf_moldes_bottons(
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # A prévia e o PDF usam exatamente o mesmo SVG. Só mudamos a forma de
-    # empacotar essa arte em A4; nenhuma coordenada é recalculada.
+    # A prévia permanece intocada. Para a exportação, removemos apenas
+    # o dimensionamento CSS relativo ao container, que pode fazer o CairoSVG
+    # rasterizar a página vazia. Nenhuma coordenada, tamanho, borda, faixa,
+    # marca ou posição da arte é alterada.
+    svg_pdf = svg.replace(" style='width:100%;height:auto;display:block;background:#fff;'", "")
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
@@ -13403,9 +13615,12 @@ def _gerar_pdf_moldes_bottons_misto(items, fotos, border_color="#000000", gap_mm
     except ImportError as exc:
         raise RuntimeError("A biblioteca CairoSVG é necessária para gerar o PDF igual à prévia.") from exc
 
-    # MESMO SVG DA PRÉVIA. Nenhuma coordenada ou tamanho é recalculado aqui.
+    # MESMO SVG DA PRÉVIA. A prévia não é alterada. Removemos somente o
+    # dimensionamento CSS relativo ao container antes da rasterização, para
+    # evitar PDF vazio no CairoSVG; nenhuma coordenada ou tamanho é recalculado.
+    svg_pdf = svg.replace(" style='width:100%;height:auto;display:block;background:#fff;'", "")
     png = cairosvg.svg2png(
-        bytestring=svg.encode("utf-8"),
+        bytestring=svg_pdf.encode("utf-8"),
         output_width=2480,
         output_height=3508,
     )
@@ -15250,43 +15465,185 @@ def obter_credenciais_login():
 
 def tela_login():
     aplicar_css_login_premium()
+
+    # Tela de entrada centralizada — alteração somente visual/layout.
     st.markdown(
         """
         <style>
-        .login-card {
-            max-width: 430px;
-            margin: 7vh auto 0 auto;
+        .login-page {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+        }
+        .login-brand-card {
+            width: 430px;
+            box-sizing: border-box;
+            margin: 0 auto 14px auto;
             background: #ffffff;
             border: 1px solid #e9e9e9;
+            border-top: 2px solid #171717;
             border-radius: 22px;
-            padding: 34px 32px;
+            padding: 28px 24px 22px 24px;
             box-shadow: 0 18px 45px rgba(0,0,0,0.08);
             text-align: center;
         }
+        .login-logo-img {
+            width: 62px;
+            height: 62px;
+            object-fit: contain;
+            border-radius: 16px;
+            display: block;
+            margin: 0 auto 12px auto;
+        }
+        .login-logo-fallback {
+            width: 62px;
+            height: 62px;
+            border-radius: 16px;
+            background: #111;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px auto;
+            font-family: Georgia, serif;
+            font-size: 22px;
+        }
         .login-title {
-            font-family: 'Playfair Display', serif;
-            font-size: 38px;
-            font-weight: 700;
-            color: #000000;
-            margin-bottom: 4px;
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 32px;
+            font-weight: 800;
+            color: #111;
+            line-height: 1;
+            margin: 0;
         }
         .login-subtitle {
-            font-size: 12px;
-            letter-spacing: 2.2px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2.8px;
             text-transform: uppercase;
-            color: #777777;
-            margin-bottom: 18px;
+            color: #111;
+            margin-top: 7px;
         }
         .login-caption {
-            font-size: 13px;
-            color: #777777;
-            margin-bottom: 22px;
+            font-size: 11px;
+            color: #888;
+            margin-top: 7px;
+        }
+        .login-access-box {
+            margin-top: 20px;
+            padding: 15px 14px;
+            background: #f7f7f7;
+            border: 1px solid #e8e8e8;
+            border-radius: 14px;
+            text-align: left;
+        }
+        .login-access-title {
+            font-size: 15px;
+            font-weight: 800;
+            color: #111;
+            margin-bottom: 6px;
+        }
+        .login-access-sub {
+            font-size: 10px;
+            line-height: 1.45;
+            color: #777;
+        }
+        div[data-testid="stForm"] {
+            width: 430px !important;
+            max-width: 430px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box;
+            background: #fff;
+            border: 1px solid #e9e9e9;
+            border-radius: 22px;
+            padding: 20px 20px 14px 20px !important;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.08);
+        }
+        div[data-testid="stTextInput"] input {
+            border-radius: 12px !important;
+            border: 1px solid #e3e3e3 !important;
+            padding: 10px 12px !important;
+            background: #fff !important;
+        }
+        div[data-testid="stFormSubmitButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-forgot-wrap {
+            width: 430px;
+            max-width: 430px;
+            margin: 14px auto 0 auto;
+        }
+        .login-forgot-wrap + div[data-testid="stButton"] button {
+            border-radius: 12px !important;
+            background: #080808 !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            min-height: 42px !important;
+        }
+        .login-footer {
+            width: 430px;
+            max-width: 430px;
+            box-sizing: border-box;
+            margin: 18px auto 0 auto;
+            padding: 14px 10px 0 10px;
+            border-top: 1px solid #e5e5e5;
+            text-align: center;
+            color: #777;
+            font-size: 10px;
+            line-height: 1.6;
+        }
+        .login-footer strong {
+            color: #111;
+            font-weight: 700;
+        }
+        @media (max-width: 520px) {
+            .login-brand-card,
+            div[data-testid="stForm"],
+            .login-forgot-wrap,
+            .login-footer { width: min(430px, calc(100vw - 28px)) !important; max-width: min(430px, calc(100vw - 28px)) !important; }
         }
         </style>
-        <div class="login-card">
+        """,
+        unsafe_allow_html=True,
+    )
+
+    logo = obter_config("logo_path", "")
+    logo_html = ""
+    try:
+        if logo and Path(str(logo)).exists():
+            import base64 as _b64
+            _mime = "image/png"
+            _suf = Path(str(logo)).suffix.lower()
+            if _suf in [".jpg", ".jpeg"]:
+                _mime = "image/jpeg"
+            elif _suf == ".webp":
+                _mime = "image/webp"
+            _dados_logo = _b64.b64encode(Path(str(logo)).read_bytes()).decode("ascii")
+            logo_html = f'<img class="login-logo-img" src="data:{_mime};base64,{_dados_logo}" />'
+    except Exception:
+        logo_html = ""
+    if not logo_html:
+        logo_html = '<div class="login-logo-fallback">S</div>'
+
+    st.markdown(
+        f"""
+        <div class="login-brand-card">
+            {logo_html}
             <div class="login-title">Sophi ERP</div>
             <div class="login-subtitle">Personalizados Oficial</div>
-            <div class="login-caption">Acesso restrito ao sistema</div>
+            <div class="login-caption">Eternizando momentos desde 2018</div>
+            <div class="login-access-box">
+                <div class="login-access-title">Acesso ao Sistema</div>
+                <div class="login-access-sub">Entre com seu usuário e sua senha para acessar seu ERP.</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -15299,9 +15656,9 @@ def tela_login():
         st.stop()
 
     with st.form("form_login"):
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar")
+        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", label_visibility="visible")
+        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha", label_visibility="visible")
+        entrar = st.form_submit_button("Entrar no Sophi ERP", use_container_width=True)
 
         if entrar:
             if usuario.strip() == usuario_correto and senha.strip() == senha_correta:
@@ -15316,6 +15673,23 @@ def tela_login():
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
+
+    st.markdown('<div class="login-forgot-wrap">', unsafe_allow_html=True)
+    esqueci = st.button("Esqueci minha senha", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if esqueci:
+        st.info("Para redefinir sua senha, entre em contato com o administrador do Sophi ERP.")
+
+    st.markdown(
+        """
+        <div class="login-footer">
+            <strong>Sophi Personalizados Oficial</strong><br>
+            Sistema interno • Acesso exclusivo e seguro
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _criar_token_acesso(usuario, senha, validade_dias=30):
     """Cria um token assinado para manter o acesso após reconexões do Streamlit."""
@@ -18630,6 +19004,42 @@ def garantir_portal_v2():
         data TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Notificações internas do ERP: UM registro independente para CADA ação do cliente.
+    # A coluna portal_evento_id vincula a notificação ao evento exato do Portal.
+    # Isso permite que o MESMO Portal gere quantas notificações forem necessárias,
+    # inclusive várias aprovações/alterações em versões diferentes da arte.
+    executar("""
+    CREATE TABLE IF NOT EXISTS portal_notificacoes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        orcamento_id INTEGER,
+        token TEXT,
+        evento TEXT NOT NULL,
+        descricao TEXT,
+        versao INTEGER,
+        lida TEXT DEFAULT 'Não',
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        portal_evento_id INTEGER,
+        sync_id TEXT
+    )
+    """)
+    # Compatibilidade com instalações anteriores: adiciona somente os campos
+    # necessários, sem apagar ou alterar os dados existentes.
+    try:
+        _cols_notif = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
+        if "versao" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN versao INTEGER")
+        if "lida" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN lida TEXT DEFAULT 'Não'")
+        if "data" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN data TEXT")
+        if "portal_evento_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN portal_evento_id INTEGER")
+        if "sync_id" not in _cols_notif:
+            executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
+            executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+    except Exception:
+        pass
+
     # Permite que cada arte tenha sua própria aprovação/alteração quando houver várias artes no mesmo pedido.
     try:
         colunas_aprov = consultar("PRAGMA table_info(portal_aprovacoes)")["name"].astype(str).tolist()
@@ -18662,11 +19072,194 @@ def garantir_portal_v2():
     """)
 
 
-def portal_evento(orcamento_id, token, evento, descricao):
+def portal_evento(orcamento_id, token, evento, descricao, versao=None):
+    """
+    Registra um evento do Portal e, quando for uma ação do cliente, cria
+    uma NOTIFICAÇÃO NOVA e independente no ERP.
+
+    Importante: não existe deduplicação por portal, token, evento ou versão.
+    Portanto, o mesmo Portal pode gerar várias notificações ao longo do tempo:
+    aprovação da versão 1, alteração, aprovação da versão 2, nova alteração,
+    aprovação do pedido etc.
+    """
     try:
         garantir_portal_v2()
-        executar("INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
-                 (int(orcamento_id), str(token), str(evento), str(descricao), agora_brasil().isoformat()))
+        oid = int(orcamento_id)
+        tok = str(token)
+        evt = str(evento or "").strip()
+        desc = str(descricao or "")
+        data_evento = agora_brasil().isoformat()
+
+        eventos_cliente = {
+            "Arte aprovada",
+            "Alteração de arte",
+            "Pedido aprovado",
+            "Pedido reprovado",
+        }
+
+        # Uma única transação grava primeiro o evento e, se for uma ação
+        # do cliente, a notificação correspondente. Assim cada notificação
+        # fica ligada ao ID EXATO daquele evento, mesmo usando o mesmo Portal.
+        with conectar() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO portal_eventos(orcamento_id,token,evento,descricao,data) VALUES(?,?,?,?,?)",
+                (oid, tok, evt, desc, data_evento),
+            )
+            portal_evento_id = cur.lastrowid
+
+            if evt in eventos_cliente:
+                cur.execute(
+                    """
+                    INSERT INTO portal_notificacoes
+                        (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
+                    VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
+                    """,
+                    (
+                        oid,
+                        tok,
+                        evt,
+                        desc,
+                        int(versao) if versao is not None else None,
+                        data_evento,
+                        int(portal_evento_id),
+                    ),
+                )
+
+            conn.commit()
+
+        # Sincroniza somente depois que a transação terminou.
+        # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
+        # confirmada pelo cliente gera uma nova notificação.
+        if evt in eventos_cliente:
+            # Canal dedicado: a notificação chega mesmo se a sincronização
+            # do arquivo SQLite estiver atrasada ou em conflito.
+            _notif_sync_id = _sincronizar_notificacao_portal_nuvem(
+                oid, tok, evt, desc, versao, data_evento, portal_evento_id
+            )
+
+            _notif_payload = {
+                "sync_id": str(_notif_sync_id or uuid.uuid4().hex),
+                "orcamento_id": oid,
+                "token": tok,
+                "evento": evt,
+                "descricao": desc,
+                "versao": int(versao) if versao is not None else None,
+                "data": data_evento,
+                "portal_evento_id": int(portal_evento_id),
+            }
+            _feed_sync_id = _publicar_feed_notificacao_portal_nuvem(_notif_payload)
+
+            # Mantém também a sincronização tradicional do ERP.
+            _sync_ok = enviar_banco_para_nuvem(force=True)
+            if _sync_ok is False:
+                print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; canal dedicado preservado.")
+            if not _notif_sync_id and not _feed_sync_id:
+                print("[PORTAL NOTIFICACAO] Nenhum canal remoto conseguiu publicar o evento.")
+
+        return int(portal_evento_id)
+
+    except Exception as _portal_evento_err:
+        print(f"[PORTAL NOTIFICACAO] Falha ao gravar/sincronizar evento: {_portal_evento_err}")
+        return None
+    return True
+def _url_notificacao_portal(notificacao_id, token):
+    base = APP_URL_OFICIAL.rstrip('/')
+    return f"{base}/?portal=cliente&token={token}&notificacao={int(notificacao_id)}"
+
+
+def marcar_notificacao_portal_lida(notificacao_id):
+    try:
+        if notificacao_id:
+            executar("UPDATE portal_notificacoes SET lida='Sim' WHERE id=?", (int(notificacao_id),))
+            enviar_banco_para_nuvem(force=True)
+    except Exception:
+        pass
+
+
+def mostrar_notificacoes_portal_erp():
+    import urllib.parse
+    """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
+    try:
+        garantir_portal_v2()
+        try:
+            baixar_banco_da_nuvem()
+        except Exception:
+            pass
+
+        # Busca também o canal dedicado. Isso é o que garante a chegada
+        # imediata quando Portal e ERP estão em sessões Railway diferentes.
+        try:
+            _importar_notificacoes_portal_nuvem()
+        except Exception as _notif_import_err:
+            print(f"[PORTAL NOTIFICACAO] Falha na atualização das notificações: {_notif_import_err}")
+
+        notas = consultar("""
+            SELECT n.*, o.cliente_nome
+            FROM portal_notificacoes n
+            LEFT JOIN orcamentos o ON o.id=n.orcamento_id
+            WHERE COALESCE(LOWER(n.lida), 'não') <> 'sim'
+            ORDER BY n.id DESC
+            LIMIT 50
+        """)
+
+        qtd = len(notas) if not notas.empty else 0
+        st.sidebar.markdown(
+            f'<div id="sophi-notificacoes-titulo" style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
+            unsafe_allow_html=True
+        )
+
+        if notas.empty:
+            st.sidebar.caption("Nenhuma notificação do Portal.")
+            return
+
+        for _, nrow in notas.head(15).iterrows():
+            _notif_id_btn = int(nrow["id"])
+            _token_btn = str(nrow.get("token") or "")
+            evento = str(nrow.get("evento") or "Atualização do Portal")
+            cliente = str(nrow.get("cliente_nome") or "Cliente")
+            vers = nrow.get("versao")
+            vers_txt = f" · Versão {int(vers)}" if pd.notna(vers) else ""
+
+            _portal_base_btn = APP_URL_OFICIAL.rstrip("/")
+            _portal_link_btn = (
+                f"{_portal_base_btn}/?portal=cliente"
+                f"&token={urllib.parse.quote(_token_btn)}"
+                f"&notificacao={_notif_id_btn}"
+            )
+
+            _wrapper_id = f"sophi-notif-{_notif_id_btn}"
+            st.sidebar.markdown(
+                f"""
+                <div id="{_wrapper_id}" style="margin:7px 0 10px;">
+                    <div style="font-size:11px;font-weight:800;margin-top:7px;">
+                        🔔 {html.escape(evento)}{html.escape(vers_txt)}
+                    </div>
+                    <div style="font-size:10px;color:#aaa;margin-bottom:3px;">
+                        {html.escape(cliente)}
+                    </div>
+                    <a href="{html.escape(_portal_link_btn, quote=True)}"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       onclick="
+                           try {{
+                               this.closest('#{_wrapper_id}').style.display='none';
+                               const t=document.getElementById('sophi-notificacoes-titulo');
+                               if(t) {{
+                                   const m=t.textContent.match(/(\\d+)/);
+                                   if(m) t.textContent='🔔 Notificações ('+Math.max(0,parseInt(m[1],10)-1)+')';
+                               }}
+                           }} catch(e) {{}}
+                       "
+                       style="display:block;text-align:center;background:#050505;color:#fff;
+                              padding:11px 12px;border-radius:12px;font-weight:900;font-size:11px;
+                              text-decoration:none;margin:5px 0 9px;">
+                        Abrir Portal deste cliente
+                    </a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     except Exception:
         pass
 
@@ -18728,6 +19321,12 @@ def tela_portal_cliente_publico():
     aplicar_visual_publico_limpo()
     garantir_portal_v2()
     token = _portal_token_v2()
+    try:
+        _notif_id = st.query_params.get("notificacao", "")
+        if _notif_id:
+            marcar_notificacao_portal_lida(int(_notif_id))
+    except Exception:
+        pass
     t, orc, _ = _portal_contexto_v2(token)
     if t is None or orc is None or orc.empty:
         st.error("Link inválido ou pedido não encontrado.")
@@ -18838,7 +19437,7 @@ def tela_portal_cliente_publico():
                     if st.button("✅ APROVAR ARTE", key=f"ap_arte_{a['id']}", use_container_width=True):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Aprovada","Arte aprovada pelo cliente",int(a['id'])))
                         executar("UPDATE portal_artes SET status='Aprovada' WHERE id=?", (int(a['id']),))
-                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.")
+                        portal_evento(oid,token,"Arte aprovada","Cliente aprovou a arte.", versao=int(a.get("versao") or 1))
                         st.success("Arte aprovada com sucesso!")
                         st.rerun()
                 with b2:
@@ -18849,7 +19448,7 @@ def tela_portal_cliente_publico():
                     if st.button("Enviar solicitação", key=f"send_alt_{a['id']}"):
                         executar("INSERT INTO portal_aprovacoes(orcamento_id,token,tipo,status,comentario,arte_id) VALUES(?,?,?,?,?,?)", (oid,token,"Arte","Alteração solicitada",comentario,int(a['id'])))
                         executar("UPDATE portal_artes SET status='Alteração solicitada', observacao=? WHERE id=?", (comentario,int(a['id'])))
-                        portal_evento(oid,token,"Alteração de arte",comentario)
+                        portal_evento(oid,token,"Alteração de arte",comentario, versao=int(a.get("versao") or 1))
                         st.success("Sua solicitação foi enviada para a Sophi.")
                         st.rerun()
 
@@ -19564,6 +20163,12 @@ def tela_impressao_etiquetas():
 # Acesso público do Portal do Cliente sem login.
 try:
     if st.query_params.get("portal", "") == "cliente":
+        try:
+            _notif_publico = st.query_params.get("notificacao", "")
+            if _notif_publico:
+                marcar_notificacao_portal_lida(int(_notif_publico))
+        except Exception:
+            pass
         tela_portal_cliente_publico()
         st.stop()
 except Exception:
@@ -19585,6 +20190,27 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 botao_sair()
+# Central de notificações do Portal — somente leitura/atalho; não altera os demais módulos.
+# Central de notificações: atualização automática da própria área de notificações.
+# Isso faz o ERP consultar novamente o banco sem exigir F5 ou clicar em outro menu.
+try:
+    if hasattr(st, "fragment"):
+        @st.fragment(run_every="3s")
+        def _notificacoes_portal_auto_refresh():
+            mostrar_notificacoes_portal_erp()
+
+        # IMPORTANTE: o contexto da sidebar precisa envolver a CHAMADA
+        # do fragment, e não ficar dentro da função fragment.
+        with st.sidebar:
+            _notificacoes_portal_auto_refresh()
+    else:
+        # Compatibilidade com versões antigas do Streamlit.
+        mostrar_notificacoes_portal_erp()
+except Exception as _notif_refresh_err:
+    # Se o fragment não estiver disponível/compatível, mantém a central
+    # funcionando pelo modo normal.
+    print(f"[PORTAL NOTIFICACAO] Auto-refresh indisponível: {_notif_refresh_err}")
+    mostrar_notificacoes_portal_erp()
 # Catálogo público desativado: vendas são registradas internamente após Offstore/WhatsApp.
 
 menu = st.sidebar.radio(
