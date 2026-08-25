@@ -20870,27 +20870,119 @@ def _gerador_imagens_desenhar_a4(imagem, forma, largura_cm, altura_cm, quantidad
         "marcas_registro": marcas_registro, "forma": forma,
     }
 
+def _gerador_imagens_svg_silhouette(imagem, forma, largura_cm, altura_cm, quantidade,
+                                      margem_mm, espacamento_mm, sangria_mm,
+                                      modo_corte):
+    """Gera somente a folha de artes em SVG A4, sem textos e sem marcas de registro.
+
+    O arquivo é destinado ao Silhouette Studio: o Studio deve adicionar as
+    próprias marcas de registro. As artes são posicionadas em milímetros,
+    preservando o tamanho físico escolhido e o layout calculado pelo gerador.
+    """
+    from PIL import Image
+    from io import BytesIO
+    import base64
+    import math
+    import html
+
+    DPI = 300
+    A4_W_MM, A4_H_MM = 210.0, 297.0
+    w_mm = float(largura_cm) * 10.0
+    h_mm = float(altura_cm) * 10.0
+    margem = max(0.0, float(margem_mm))
+    esp = max(0.0, float(espacamento_mm))
+    sangria = max(0.0, float(sangria_mm))
+
+    # O espaçamento usado pelo gerador inclui a sangria em torno da arte.
+    passo_x = w_mm + 2.0 * sangria + esp
+    passo_y = h_mm + 2.0 * sangria + esp
+    disponivel_w = max(0.0, A4_W_MM - 2.0 * margem)
+    disponivel_h = max(0.0, A4_H_MM - 2.0 * margem)
+    cols = max(1, int(math.floor((disponivel_w + esp) / passo_x)))
+    rows = max(1, int(math.floor((disponivel_h + esp) / passo_y)))
+    por_folha = cols * rows
+
+    # SVG incorpora a imagem original; não há recompressão JPEG.
+    src = imagem.convert("RGBA")
+    bio = BytesIO()
+    src.save(bio, format="PNG", dpi=(DPI, DPI), optimize=False)
+    b64 = base64.b64encode(bio.getvalue()).decode("ascii")
+    href = "data:image/png;base64," + b64
+
+    # Fundo branco da página para que o arquivo seja fiel ao que será impresso.
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink" '
+        'width="210mm" height="297mm" viewBox="0 0 210 297">',
+        '<rect x="0" y="0" width="210" height="297" fill="#ffffff"/>',
+        '<defs>'
+    ]
+
+    # Clipping separado para cada peça evita que a arte invada a área vizinha.
+    clip_defs = []
+    clip_ids = []
+    for i in range(min(int(quantidade), por_folha)):
+        row, col = divmod(i, cols)
+        x = margem + col * passo_x
+        y = margem + row * passo_y
+        cid = f"gi_clip_{i}"
+        clip_ids.append(cid)
+        if forma == "Redondo":
+            clip_defs.append(
+                f'<clipPath id="{cid}"><ellipse cx="{x + sangria + w_mm/2:.4f}" '
+                f'cy="{y + sangria + h_mm/2:.4f}" rx="{w_mm/2:.4f}" ry="{h_mm/2:.4f}"/></clipPath>'
+            )
+        else:
+            clip_defs.append(
+                f'<clipPath id="{cid}"><rect x="{x + sangria:.4f}" y="{y + sangria:.4f}" '
+                f'width="{w_mm:.4f}" height="{h_mm:.4f}"/></clipPath>'
+            )
+    parts.extend(clip_defs)
+    parts.append('</defs>')
+
+    for i in range(min(int(quantidade), por_folha)):
+        row, col = divmod(i, cols)
+        x = margem + col * passo_x
+        y = margem + row * passo_y
+        # A imagem ocupa exatamente a área de sangria + peça, como na prévia.
+        parts.append(
+            f'<image x="{x:.4f}" y="{y:.4f}" width="{w_mm + 2*sangria:.4f}" '
+            f'height="{h_mm + 2*sangria:.4f}" preserveAspectRatio="none" '
+            f'xlink:href="{href}" clip-path="url(#{clip_ids[i]})"/>'
+        )
+        # Se houver corte externo/contorno, o Studio pode criar o corte a partir
+        # da própria forma; não desenhamos marcas de registro nem textos.
+        if modo_corte != "Sem corte":
+            if forma == "Redondo":
+                parts.append(
+                    f'<circle cx="{x + sangria + w_mm/2:.4f}" cy="{y + sangria + h_mm/2:.4f}" '
+                    f'r="{min(w_mm,h_mm)/2:.4f}" fill="none" stroke="#000000" stroke-width="0.1"/>'
+                )
+            else:
+                parts.append(
+                    f'<rect x="{x + sangria:.4f}" y="{y + sangria:.4f}" '
+                    f'width="{w_mm:.4f}" height="{h_mm:.4f}" fill="none" stroke="#000000" stroke-width="0.1"/>'
+                )
+
+    parts.append('</svg>')
+    return "\n".join(parts).encode("utf-8")
+
+
 def _gerador_imagens_pdf(preview_png, titulo, meta):
-    """PDF espelho da prévia do Gerador de Imagens."""
+    """PDF limpo da prévia A4, sem cabeçalho ou textos extras."""
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.utils import ImageReader
-    from reportlab.lib import colors
     from io import BytesIO
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
-
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(30, H-35, titulo[:80])
-    c.setFont("Helvetica", 8)
-    c.drawString(30, H-48, f"Tamanho: {meta['tamanho']}  •  Quantidade: {meta['quantidade']}  •  {meta['por_folha']} por A4  •  {meta['folhas']} folha(s)")
-
     img = ImageReader(BytesIO(preview_png))
-    # A prévia ocupa a área útil, preservando a proporção da folha A4.
-    c.drawImage(img, 30, 40, width=W-60, height=H-100, preserveAspectRatio=True, anchor="c")
+    # A prévia já é uma folha A4 em 300 DPI; ocupa toda a página.
+    c.drawImage(img, 0, 0, width=W, height=H, preserveAspectRatio=False, mask='auto')
+    c.showPage()
     c.save()
     buf.seek(0)
     return buf.getvalue()
@@ -20973,6 +21065,24 @@ def tela_gerador_imagens_profissional():
 
             pdf = _gerador_imagens_pdf(st.session_state.gi_preview, "Gerador de Imagens — Sophi Personalizados", meta)
             st.download_button("📄 Baixar PDF para impressão", pdf, file_name="gerador_imagens.pdf", mime="application/pdf", use_container_width=True)
+            # Arquivo para o Silhouette Studio: sem marcas de registro e sem textos.
+            # As marcas de registro devem ser adicionadas pelo próprio Studio.
+            try:
+                svg_silhouette = _gerador_imagens_svg_silhouette(
+                    st.session_state.gi_imagem, forma, largura_cm, altura_cm,
+                    int(quantidade), margem_mm, espacamento_mm, sangria_mm, modo_corte
+                )
+                st.download_button(
+                    "✂️ Baixar arquivo para Silhouette Studio (.SVG)",
+                    svg_silhouette,
+                    file_name="gerador_imagens_silhouette.svg",
+                    mime="image/svg+xml",
+                    use_container_width=True,
+                    key="gi_download_silhouette_svg"
+                )
+                st.caption("Abra o SVG no Silhouette Studio e deixe o próprio Studio adicionar as marcas de registro.")
+            except Exception as _svg_exc:
+                st.error(f"Não foi possível gerar o arquivo para a Silhouette: {_svg_exc}")
 
     with tabs[1]:
         st.markdown("### 👁️ Visualização realista da aplicação")
