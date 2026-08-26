@@ -17533,10 +17533,11 @@ def mostrar_notificacoes_portal_erp():
     """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
     try:
         garantir_portal_v2()
-        try:
-            baixar_banco_da_nuvem()
-        except Exception:
-            pass
+        # NÃO baixa o banco principal durante o auto-refresh das notificações.
+        # O ERP já baixa o banco na inicialização. Fazer isso a cada 3 segundos
+        # pode sobrescrever a cópia local com uma versão antiga enquanto o
+        # Portal ainda está sincronizando uma aprovação. A central de
+        # notificações usa o canal dedicado abaixo para buscar as ações do cliente.
 
         # Busca também o canal dedicado. Isso é o que garante a chegada
         # imediata quando Portal e ERP estão em sessões Railway diferentes.
