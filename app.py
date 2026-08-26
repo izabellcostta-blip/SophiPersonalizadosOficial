@@ -13559,19 +13559,35 @@ def _botton_mixed_svg_preview(items, fotos, border_color, gap_mm, margin_mm,
             svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{rx:.2f}' fill='{border_color}'/>")
             if uri: svg.append(f"<clipPath id='mixs{i}'><rect x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' rx='{irx:.2f}'/></clipPath><image href='{uri}' x='{x+(outer-inner)/2:.2f}' y='{y+(outer-inner)/2:.2f}' width='{inner:.2f}' height='{inner:.2f}' preserveAspectRatio='xMidYMid slice' clip-path='url(#mixs{i})'/>")
         if legenda_text.strip():
-            band=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2,0.8)
-            font=max(1.0,min(float(legenda_size_mm),band*.48))*scale
+            # IMPORTANTE: esta marca usa a MESMA regra de posicionamento do
+            # modelo atual (tamanho único). Assim o modo misto não possui uma
+            # segunda configuração de @ para manter.
+            band_mm_global=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2.0,0.8)
+            font_mm_global=max(1.0,min(float(legenda_size_mm),band_mm_global*0.60))
+            font_size=font_mm_global*scale
             if shape=="circle":
-                radius=inner/2+max(font*0.62, 0.35*scale); span=78.0
-                a1,a2=135,45
-                x1=cx+radius*__import__('math').cos(__import__('math').radians(a1)); y1=cy+radius*__import__('math').sin(__import__('math').radians(a1))
-                x2=cx+radius*__import__('math').cos(__import__('math').radians(a2)); y2=cy+radius*__import__('math').sin(__import__('math').radians(a2))
-                pid=f'mixleg{i}'
-                svg.append(f"<path id='{pid}' d='M{x1:.2f},{y1:.2f} A{radius:.2f},{radius:.2f} 0 0,0 {x2:.2f},{y2:.2f}' fill='none' stroke='none'/>")
-                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700'><textPath href='#{pid}' startOffset='50%' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</textPath></text>")
+                band_mm=max((float(spec["externa_mm"])-float(spec["interna_mm"]))/2.0,0.8)
+                font_mm=max(1.0,min(float(legenda_size_mm),band_mm*0.48))
+                font_size=font_mm*scale
+                radius=inner/2.0+max(font_size*0.62,0.35*scale)
+                span=78.0
+                path_id=f'mixleg{i}'
+                import math
+                a1,a2=135.0,45.0
+                x1=cx+radius*math.cos(math.radians(a1)); y1=cy+radius*math.sin(math.radians(a1))
+                x2=cx+radius*math.cos(math.radians(a2)); y2=cy+radius*math.sin(math.radians(a2))
+                arc_len=radius*math.radians(span)
+                approx_width=max(len(legenda_text.strip())*font_size*0.52,font_size)
+                if approx_width>arc_len*0.82 and approx_width>0:
+                    font_size=max(0.9*scale,font_size*(arc_len*0.82)/approx_width)
+                svg.append(f"<path id='{path_id}' d='M {x1:.2f},{y1:.2f} A {radius:.2f},{radius:.2f} 0 0,0 {x2:.2f},{y2:.2f}' fill='none' stroke='none'/>")
+                svg.append(f"<text fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700'><textPath href='#{path_id}' startOffset='50%' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</textPath></text>")
             else:
-                baseline=y+(outer-inner)/2+font*.78
-                svg.append(f"<text x='{cx:.2f}' y='{baseline:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
+                # QUADRADO: sempre embaixo e centralizado, nunca no topo.
+                band=(outer-inner)/2.0
+                left=x+band; right=x+outer-band
+                bottom_y=y+outer-band
+                svg.append(f"<text x='{(left+right)/2:.2f}' y='{bottom_y+font_size*.78:.2f}' fill='{_svg_escape(legenda_color)}' font-family='Arial,sans-serif' font-size='{font_size:.2f}' font-weight='700' text-anchor='middle'>{_svg_escape(legenda_text.strip())}</text>")
         if show_cut:
             if shape=="circle": svg.append(f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='{outer/2:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
             else: svg.append(f"<rect x='{x:.2f}' y='{y:.2f}' width='{outer:.2f}' height='{outer:.2f}' rx='{3*scale:.2f}' fill='none' stroke='#111827' stroke-width='0.8' stroke-dasharray='2 2'/>")
@@ -13803,7 +13819,7 @@ def tela_gerador_moldes_bottons():
     st.title("Gerador de Moldes para Bottons")
     # NOVO: permite combinar 32/44/58 mm e 50×50 mm na mesma A4.
     # O modo antigo permanece intacto quando esta opção não é selecionada.
-    modo_folha = st.radio("Como montar a folha A4?", ["Um único tamanho (modo atual)", "Mesclar tamanhos na mesma A4"], index=1, horizontal=True, key="gm_modo_folha_v5")
+    modo_folha = st.radio("Como montar a folha A4?", ["Um único tamanho (modo atual)", "Mesclar tamanhos na mesma A4"], index=0, horizontal=True, key="gm_modo_folha_v5")
     if modo_folha == "Mesclar tamanhos na mesma A4":
         _tela_gerador_moldes_mistos()
         return
