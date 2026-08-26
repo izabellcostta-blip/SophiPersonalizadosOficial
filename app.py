@@ -11402,6 +11402,10 @@ def bi_produtos_lucro(inicio, fim):
     else:
         df["custo_unitario"] = 0
 
+    # O catálogo pode existir sem a coluna custo_unitario em bancos antigos.
+    # Nesse caso, o relatório considera o custo como zero em vez de interromper a tela.
+    if "custo_unitario" not in df.columns:
+        df["custo_unitario"] = 0
     df["custo_unitario"] = df["custo_unitario"].fillna(0)
     df["custo_total_estimado"] = df["quantidade"].fillna(0) * df["custo_unitario"].fillna(0)
     df["lucro_estimado"] = df["total"].fillna(0) - df["custo_total_estimado"]
