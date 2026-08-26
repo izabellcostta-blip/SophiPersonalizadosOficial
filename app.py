@@ -186,7 +186,13 @@ def _publicar_feed_notificacao_portal_nuvem(payload):
 
 
 def _importar_notificacoes_portal_nuvem():
-    """Importa notificações remotas sem depender de Storage LIST."""
+    """Importa notificações remotas do Portal para o ERP.
+
+    Usa o feed conhecido como caminho principal e também consulta a pasta
+    dedicada como segunda fonte, mesmo quando o feed existe. Isso evita que
+    uma atualização concorrente do feed esconda uma notificação que já foi
+    gravada no Storage.
+    """
     try:
         sb = cliente_supabase()
         if sb is None:
@@ -194,38 +200,62 @@ def _importar_notificacoes_portal_nuvem():
 
         garantir_portal_v2()
 
-        # Migração local, se a coluna ainda não existir.
+        # Garante a coluna de sincronização nas instalações antigas.
         try:
             cols = consultar("PRAGMA table_info(portal_notificacoes)")["name"].astype(str).tolist()
             if "sync_id" not in cols:
                 executar("ALTER TABLE portal_notificacoes ADD COLUMN sync_id TEXT")
-                executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
+            executar("CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_notificacoes_sync_id ON portal_notificacoes(sync_id)")
         except Exception:
             pass
 
-        # 1) Caminho principal: baixa um único arquivo conhecido.
-        # Isso não exige permissão de LIST na pasta do Storage.
-        feed = []
+        fontes = []
+
+        # 1) Feed único conhecido.
         try:
             raw = sb.storage.from_(bucket_supabase()).download("portal_notificacoes_feed.json")
             if raw:
-                feed = json.loads(
-                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                )
-                if not isinstance(feed, list):
-                    feed = []
+                feed = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
+                if isinstance(feed, list):
+                    fontes.extend([x for x in feed if isinstance(x, dict)])
         except Exception as _feed_read_err:
             print(f"[PORTAL NOTIFICACAO] Feed remoto indisponível: {_feed_read_err}")
 
-        importados = 0
+        # 2) Pasta dedicada: consulta SEMPRE como segunda fonte.
+        # Não depende da existência/atualidade do feed.
+        try:
+            arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes") or []
+            for item in arquivos:
+                nome = str((item or {}).get("name") or "")
+                if not nome.lower().endswith(".json"):
+                    continue
+                try:
+                    raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
+                    if not raw:
+                        continue
+                    dados = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
+                    if isinstance(dados, dict):
+                        fontes.append(dados)
+                except Exception as _one_file_err:
+                    print(f"[PORTAL NOTIFICACAO] Falha ao ler {nome}: {_one_file_err}")
+        except Exception as _list_err:
+            print(f"[PORTAL NOTIFICACAO] Consulta da pasta de notificações indisponível: {_list_err}")
 
-        for dados in feed:
-            if not isinstance(dados, dict):
-                continue
+        importados = 0
+        vistos = set()
+
+        for dados in fontes:
             try:
                 sync_id = str(dados.get("sync_id") or "").strip()
                 if not sync_id:
+                    # Compatibilidade com registros antigos sem sync_id.
+                    sync_id = "legacy-" + hashlib.sha256(
+                        json.dumps(dados, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                    ).hexdigest()
+
+                if sync_id in vistos:
                     continue
+                vistos.add(sync_id)
 
                 ja_existe = consultar(
                     "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
@@ -254,56 +284,10 @@ def _importar_notificacoes_portal_nuvem():
                 print(f"[PORTAL NOTIFICACAO] Falha ao importar uma notificação: {_one_notif_err}")
                 continue
 
-        # 2) Fallback antigo: tenta LIST somente se o feed não estiver acessível.
-        if not feed:
-            try:
-                arquivos = sb.storage.from_(bucket_supabase()).list("portal_notificacoes") or []
-                for item in arquivos:
-                    nome = str((item or {}).get("name") or "")
-                    if not nome.lower().endswith(".json"):
-                        continue
-                    try:
-                        raw = sb.storage.from_(bucket_supabase()).download(f"portal_notificacoes/{nome}")
-                        if not raw:
-                            continue
-                        dados = json.loads(
-                            raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                        )
-                        sync_id = str(dados.get("sync_id") or Path(nome).stem).strip()
-                        if not sync_id:
-                            continue
-                        ja_existe = consultar(
-                            "SELECT id FROM portal_notificacoes WHERE sync_id=? LIMIT 1",
-                            (sync_id,)
-                        )
-                        if not ja_existe.empty:
-                            continue
-                        executar(
-                            """INSERT INTO portal_notificacoes
-                               (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id, sync_id)
-                               VALUES (?, ?, ?, ?, ?, 'Não', ?, ?, ?)""",
-                            (
-                                int(dados.get("orcamento_id") or 0),
-                                str(dados.get("token") or ""),
-                                str(dados.get("evento") or "Atualização do Portal"),
-                                str(dados.get("descricao") or ""),
-                                int(dados["versao"]) if dados.get("versao") is not None else None,
-                                str(dados.get("data") or agora_brasil().isoformat()),
-                                int(dados["portal_evento_id"]) if dados.get("portal_evento_id") is not None else None,
-                                sync_id,
-                            ),
-                        )
-                        importados += 1
-                    except Exception as _one_old_notif_err:
-                        print(f"[PORTAL NOTIFICACAO] Falha no fallback de notificação: {_one_old_notif_err}")
-            except Exception as _list_err:
-                print(f"[PORTAL NOTIFICACAO] Fallback LIST indisponível: {_list_err}")
-
         return importados
     except Exception as _notif_import_err:
         print(f"[PORTAL NOTIFICACAO] Falha ao importar notificações: {_notif_import_err}")
         return 0
-
 
 def baixar_banco_da_nuvem():
     """Baixa o banco salvo no Supabase Storage antes do app criar tabelas."""
