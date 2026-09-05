@@ -4361,31 +4361,10 @@ def tela_produtos():
             help="Desmarque apenas para simulações sem despesas mensais da empresa.",
         )
 
-        base_rateio_fixos = st.selectbox(
-            "Como ratear os custos fixos neste produto?",
-            ["Por folhas A4 utilizadas", "Por unidades finais do lote", "Quantidade manual de unidades de produção"],
-            index=0,
-            help=(
-                "Para cartões, tags e adesivos, normalmente use folhas A4. "
-                "Exemplo: 1.000 cartões, 10 por folha = 100 unidades de produção."
-            ),
-        )
-
-        if base_rateio_fixos == "Por folhas A4 utilizadas":
-            unidades_rateio_fixos = float(folhas_estimadas)
-            descricao_rateio_fixos = f"{folhas_estimadas} folhas A4"
-        elif base_rateio_fixos == "Por unidades finais do lote":
-            unidades_rateio_fixos = float(qtd_total_lote)
-            descricao_rateio_fixos = f"{qtd_total_lote:.0f} unidades finais"
-        else:
-            unidades_rateio_fixos = st.number_input(
-                "Quantidade de unidades de produção para o rateio",
-                min_value=0.0,
-                value=float(folhas_estimadas),
-                step=1.0,
-                help="Informe quantas folhas, ciclos, peças-base ou lotes internos foram realmente produzidos.",
-            )
-            descricao_rateio_fixos = f"{unidades_rateio_fixos:.0f} unidades de produção"
+        # CUSTOS FIXOS: sempre rateados pela quantidade FINAL de peças.
+        # A lógica de materiais/folhas permanece intacta.
+        unidades_rateio_fixos = float(qtd_total_lote)
+        descricao_rateio_fixos = f"{qtd_total_lote:.0f} unidades finais"
 
         custo_fixos_total = (
             resumo_fixos["custo_fixo_unidade"] * unidades_rateio_fixos
@@ -4395,7 +4374,7 @@ def tela_produtos():
 
         st.caption(
             f"Custos fixos rateados: {real(custo_fixos_total)} no lote — "
-            f"{real4(resumo_fixos['custo_fixo_unidade'])} por unidade de produção × "
+            f"{real4(resumo_fixos['custo_fixo_unidade'])} por unidade final × "
             f"{descricao_rateio_fixos}."
         )
 
