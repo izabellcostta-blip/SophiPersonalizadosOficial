@@ -17524,6 +17524,110 @@ def marcar_notificacao_portal_lida(notificacao_id):
         pass
 
 
+def diagnostico_notificacoes_portal():
+    """Diagnóstico somente leitura da comunicação Portal -> ERP.
+    Não altera pedidos, orçamentos ou notificações. Não exibe segredos.
+    """
+    st.subheader("🔎 Diagnóstico das notificações do Portal")
+    st.caption("Este diagnóstico somente lê os registros e testa o acesso ao Supabase. Não altera seus dados.")
+
+    try:
+        garantir_portal_v2()
+    except Exception as e:
+        st.error(f"❌ Não consegui preparar as tabelas do Portal: {e}")
+        return
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**1. Banco local do ERP**")
+        try:
+            ev = consultar("""
+                SELECT id, orcamento_id, evento, descricao, data
+                FROM portal_eventos
+                ORDER BY id DESC LIMIT 5
+            """)
+            no = consultar("""
+                SELECT id, orcamento_id, evento, descricao, versao, lida, data, portal_evento_id, sync_id
+                FROM portal_notificacoes
+                ORDER BY id DESC LIMIT 5
+            """)
+            st.success("✅ Banco local acessível")
+            st.write(f"Eventos registrados: **{len(ev)}** (últimos 5 exibidos)")
+            st.write(f"Notificações registradas: **{len(no)}** (últimas 5 exibidas)")
+            if not ev.empty:
+                st.write("**Últimos eventos:**")
+                st.dataframe(ev, use_container_width=True, hide_index=True)
+            else:
+                st.warning("⚠️ Nenhum evento do Portal existe neste banco local.")
+            if not no.empty:
+                st.write("**Últimas notificações:**")
+                st.dataframe(no, use_container_width=True, hide_index=True)
+            else:
+                st.warning("⚠️ Nenhuma notificação existe neste banco local.")
+        except Exception as e:
+            st.error(f"❌ Erro lendo o banco local: {e}")
+
+    with c2:
+        st.markdown("**2. Supabase / canal de comunicação**")
+        configurado = False
+        try:
+            configurado = supabase_configurado()
+        except Exception:
+            configurado = False
+        if configurado:
+            st.success("✅ SUPABASE_URL e SUPABASE_KEY estão configurados")
+        else:
+            st.error("❌ Supabase NÃO está configurado neste ambiente")
+            st.info("Sem Supabase configurado, o Portal e o ERP em sessões/processos diferentes não conseguem usar o canal de notificação em nuvem.")
+
+        if configurado:
+            sb = cliente_supabase()
+            if sb is None:
+                st.error("❌ Não foi possível criar a conexão com o Supabase")
+            else:
+                st.success("✅ Cliente Supabase criado")
+                bucket = bucket_supabase()
+                st.write(f"Bucket configurado: **{bucket}**")
+
+                try:
+                    raw = sb.storage.from_(bucket).download("portal_notificacoes_feed.json")
+                    if raw:
+                        feed = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw))
+                        qtd = len(feed) if isinstance(feed, list) else 0
+                        st.success(f"✅ Feed portal_notificacoes_feed.json acessível ({qtd} registro(s))")
+                        if isinstance(feed, list) and feed:
+                            st.write("**Últimos registros do feed:**")
+                            st.json(feed[-5:])
+                    else:
+                        st.warning("⚠️ O feed existe, mas está vazio.")
+                except Exception as e:
+                    st.error(f"❌ ERP não consegue ler o feed do Supabase: {e}")
+
+                try:
+                    arquivos = sb.storage.from_(bucket).list("portal_notificacoes") or []
+                    nomes = [str((x or {}).get("name") or "") for x in arquivos if str((x or {}).get("name") or "").lower().endswith(".json")]
+                    st.success(f"✅ Pasta portal_notificacoes acessível ({len(nomes)} arquivo(s))")
+                except Exception as e:
+                    st.error(f"❌ ERP não consegue listar portal_notificacoes: {e}")
+
+    st.divider()
+    st.markdown("**3. Interpretação rápida**")
+    try:
+        ultimo_evento = consultar("SELECT id, evento, data FROM portal_eventos ORDER BY id DESC LIMIT 1")
+        ultima_notif = consultar("SELECT id, evento, data FROM portal_notificacoes ORDER BY id DESC LIMIT 1")
+        if ultimo_evento.empty:
+            st.info("📌 Se você acabou de aprovar uma arte e aqui NÃO aparece um evento, o clique do Portal está gravando em outro banco/instância ou não está executando o código esperado.")
+        elif ultima_notif.empty:
+            st.warning("📌 Há evento no ERP, mas não há notificação: o problema está na criação da notificação.")
+        else:
+            st.write(f"Último evento local: **#{int(ultimo_evento.iloc[0]['id'])} — {ultimo_evento.iloc[0]['evento']}**")
+            st.write(f"Última notificação local: **#{int(ultima_notif.iloc[0]['id'])} — {ultima_notif.iloc[0]['evento']}**")
+            if str(ultimo_evento.iloc[0]['evento']) in {"Arte aprovada", "Alteração de arte", "Pedido aprovado", "Pedido reprovado"}:
+                st.success("✅ O ERP possui um evento de cliente e uma notificação local. Se ela não aparece na lateral, o problema está na exibição/estado da sessão.")
+    except Exception as e:
+        st.warning(f"Não foi possível concluir a interpretação automática: {e}")
+
+
 def mostrar_notificacoes_portal_erp():
     import urllib.parse
     """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
@@ -18986,6 +19090,19 @@ botao_sair()
 # Central de notificações do Portal — somente leitura/atalho; não altera os demais módulos.
 # Central de notificações: atualização automática da própria área de notificações.
 # Isso faz o ERP consultar novamente o banco sem exigir F5 ou clicar em outro menu.
+
+with st.sidebar:
+    with st.expander("🛠️ Diagnóstico Portal", expanded=False):
+        if st.button("🔎 Verificar comunicação", key="btn_diagnostico_notificacoes"):
+            st.session_state["abrir_diagnostico_notificacoes"] = True
+
+if st.session_state.get("abrir_diagnostico_notificacoes", False):
+    with st.container(border=True):
+        diagnostico_notificacoes_portal()
+        if st.button("Fechar diagnóstico", key="fechar_diagnostico_notificacoes"):
+            st.session_state["abrir_diagnostico_notificacoes"] = False
+            st.rerun()
+
 try:
     if hasattr(st, "fragment"):
         @st.fragment(run_every="3s")
