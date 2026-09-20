@@ -17403,14 +17403,11 @@ def garantir_portal_v2():
 
 
 def portal_evento(orcamento_id, token, evento, descricao, versao=None):
-    """
-    Registra um evento do Portal e, quando for uma ação do cliente, cria
-    uma NOTIFICAÇÃO NOVA e independente no ERP.
+    """Registra o evento do Portal e garante a notificação local antes da sincronização.
 
-    Importante: não existe deduplicação por portal, token, evento ou versão.
-    Portanto, o mesmo Portal pode gerar várias notificações ao longo do tempo:
-    aprovação da versão 1, alteração, aprovação da versão 2, nova alteração,
-    aprovação do pedido etc.
+    A gravação local é a fonte imediata do ERP. A sincronização com o Supabase
+    é complementar e nunca pode impedir que o evento/notificação fique salvo
+    no SQLite do Railway.
     """
     try:
         garantir_portal_v2()
@@ -17427,9 +17424,9 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
             "Pedido reprovado",
         }
 
-        # Uma única transação grava primeiro o evento e, se for uma ação
-        # do cliente, a notificação correspondente. Assim cada notificação
-        # fica ligada ao ID EXATO daquele evento, mesmo usando o mesmo Portal.
+        # 1) Primeiro grava o evento e COMITA independentemente.
+        # Assim um problema de sincronização/coluna da notificação nunca
+        # desfaz a ação que o cliente acabou de realizar.
         with conectar() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -17437,62 +17434,82 @@ def portal_evento(orcamento_id, token, evento, descricao, versao=None):
                 (oid, tok, evt, desc, data_evento),
             )
             portal_evento_id = cur.lastrowid
-
-            if evt in eventos_cliente:
-                cur.execute(
-                    """
-                    INSERT INTO portal_notificacoes
-                        (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
-                    VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
-                    """,
-                    (
-                        oid,
-                        tok,
-                        evt,
-                        desc,
-                        int(versao) if versao is not None else None,
-                        data_evento,
-                        int(portal_evento_id),
-                    ),
-                )
-
             conn.commit()
 
-        # Sincroniza somente depois que a transação terminou.
-        # Não há INSERT OR IGNORE nem chave de deduplicação: cada ação
-        # confirmada pelo cliente gera uma nova notificação.
+        # 2) Para ações do cliente, grava a notificação em transação separada.
         if evt in eventos_cliente:
-            # Canal dedicado: a notificação chega mesmo se a sincronização
-            # do arquivo SQLite estiver atrasada ou em conflito.
-            _notif_sync_id = _sincronizar_notificacao_portal_nuvem(
-                oid, tok, evt, desc, versao, data_evento, portal_evento_id
-            )
+            notif_gravada = False
+            for tentativa in range(2):
+                try:
+                    garantir_portal_v2()
+                    with conectar() as conn:
+                        cur = conn.cursor()
+                        cur.execute(
+                            """
+                            INSERT INTO portal_notificacoes
+                                (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
+                            VALUES (?, ?, ?, ?, ?, 'Não', ?, ?)
+                            """,
+                            (
+                                oid,
+                                tok,
+                                evt,
+                                desc,
+                                int(versao) if versao is not None else None,
+                                data_evento,
+                                int(portal_evento_id),
+                            ),
+                        )
+                        conn.commit()
+                    notif_gravada = True
+                    break
+                except Exception as _notif_local_err:
+                    if tentativa == 1:
+                        print(f"[PORTAL NOTIFICACAO] Falha ao gravar notificação local: {_notif_local_err}")
 
-            _notif_payload = {
-                "sync_id": str(_notif_sync_id or uuid.uuid4().hex),
-                "orcamento_id": oid,
-                "token": tok,
-                "evento": evt,
-                "descricao": desc,
-                "versao": int(versao) if versao is not None else None,
-                "data": data_evento,
-                "portal_evento_id": int(portal_evento_id),
-            }
-            _feed_sync_id = _publicar_feed_notificacao_portal_nuvem(_notif_payload)
+            # 3) Sincronização remota é complementar. Se ela falhar, a
+            # notificação local continua disponível no ERP.
+            if notif_gravada:
+                try:
+                    _notif_sync_id = _sincronizar_notificacao_portal_nuvem(
+                        oid, tok, evt, desc, versao, data_evento, portal_evento_id
+                    )
+                except Exception as _e:
+                    print(f"[PORTAL NOTIFICACAO] Canal dedicado indisponível: {_e}")
+                    _notif_sync_id = False
 
-            # Mantém também a sincronização tradicional do ERP.
-            _sync_ok = enviar_banco_para_nuvem(force=True)
-            if _sync_ok is False:
-                print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; canal dedicado preservado.")
-            if not _notif_sync_id and not _feed_sync_id:
-                print("[PORTAL NOTIFICACAO] Nenhum canal remoto conseguiu publicar o evento.")
+                _notif_payload = {
+                    "sync_id": str(_notif_sync_id or uuid.uuid4().hex),
+                    "orcamento_id": oid,
+                    "token": tok,
+                    "evento": evt,
+                    "descricao": desc,
+                    "versao": int(versao) if versao is not None else None,
+                    "data": data_evento,
+                    "portal_evento_id": int(portal_evento_id),
+                }
+                try:
+                    _feed_sync_id = _publicar_feed_notificacao_portal_nuvem(_notif_payload)
+                except Exception as _e:
+                    print(f"[PORTAL NOTIFICACAO] Feed remoto indisponível: {_e}")
+                    _feed_sync_id = False
+
+                try:
+                    _sync_ok = enviar_banco_para_nuvem(force=True)
+                    if _sync_ok is False:
+                        print("[PORTAL NOTIFICACAO] Banco principal não sincronizou; notificação local preservada.")
+                except Exception as _e:
+                    print(f"[PORTAL NOTIFICACAO] Falha no backup remoto do banco: {_e}")
+
+                if not _notif_sync_id and not _feed_sync_id:
+                    print("[PORTAL NOTIFICACAO] Supabase não publicou a notificação; SQLite local continua como fonte do ERP.")
 
         return int(portal_evento_id)
 
     except Exception as _portal_evento_err:
-        print(f"[PORTAL NOTIFICACAO] Falha ao gravar/sincronizar evento: {_portal_evento_err}")
+        print(f"[PORTAL NOTIFICACAO] Falha ao registrar evento do Portal: {_portal_evento_err}")
         return None
-    return True
+
 def _url_notificacao_portal(notificacao_id, token):
     base = APP_URL_OFICIAL.rstrip('/')
     return f"{base}/?portal=cliente&token={token}&notificacao={int(notificacao_id)}"
@@ -17523,6 +17540,43 @@ def mostrar_notificacoes_portal_erp():
             _importar_notificacoes_portal_nuvem()
         except Exception as _notif_import_err:
             print(f"[PORTAL NOTIFICACAO] Falha na atualização das notificações: {_notif_import_err}")
+
+        # AUTOCURA: se uma versão antiga do Portal gravou o evento mas a
+        # tabela de notificações não recebeu a linha, transforma o evento
+        # recente do cliente em notificação. Isso recupera ações já feitas
+        # sem exigir que o cliente aprove novamente.
+        try:
+            eventos_pendentes = consultar("""
+                SELECT e.*
+                FROM portal_eventos e
+                WHERE e.evento IN ('Arte aprovada', 'Alteração de arte', 'Pedido aprovado', 'Pedido reprovado')
+                  AND datetime(e.data) >= datetime('now', '-7 days')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM portal_notificacoes n
+                      WHERE n.portal_evento_id = e.id
+                  )
+                ORDER BY e.id ASC
+                LIMIT 100
+            """)
+            for _, ev in eventos_pendentes.iterrows():
+                try:
+                    executar(
+                        """INSERT INTO portal_notificacoes
+                           (orcamento_id, token, evento, descricao, versao, lida, data, portal_evento_id)
+                           VALUES (?, ?, ?, ?, NULL, 'Não', ?, ?)""",
+                        (
+                            int(ev.get("orcamento_id") or 0),
+                            str(ev.get("token") or ""),
+                            str(ev.get("evento") or "Atualização do Portal"),
+                            str(ev.get("descricao") or ""),
+                            str(ev.get("data") or agora_brasil().isoformat()),
+                            int(ev.get("id") or 0),
+                        ),
+                    )
+                except Exception as _autocura_err:
+                    print(f"[PORTAL NOTIFICACAO] Autocura ignorou evento: {_autocura_err}")
+        except Exception as _autocura_busca_err:
+            print(f"[PORTAL NOTIFICACAO] Não foi possível verificar eventos pendentes: {_autocura_busca_err}")
 
         notas = consultar("""
             SELECT n.*, o.cliente_nome
