@@ -16885,6 +16885,213 @@ if detectar_pagina_publica() == "catalogo":
 
 criar_banco()
 
+
+# ============================================================
+# MELHORIAS PROFISSIONAIS — ADITIVAS E SEGURAS
+# Não removem nem recriam dados existentes.
+# ============================================================
+def garantir_melhorias_profissionais():
+    """Cria somente estruturas novas para Compras e Auditoria.
+    As tabelas existentes do ERP nunca são apagadas ou recriadas.
+    """
+    executar("""CREATE TABLE IF NOT EXISTS compras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero TEXT,
+        fornecedor TEXT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'Pendente',
+        forma_pagamento TEXT,
+        subtotal REAL DEFAULT 0,
+        frete REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        observacoes TEXT,
+        data_recebimento TEXT,
+        ativo TEXT DEFAULT 'Sim'
+    )""")
+    executar("""CREATE TABLE IF NOT EXISTS compra_itens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        compra_id INTEGER,
+        item TEXT NOT NULL,
+        categoria TEXT,
+        quantidade REAL DEFAULT 1,
+        valor_unitario REAL DEFAULT 0,
+        total REAL DEFAULT 0,
+        estoque_lancado TEXT DEFAULT 'Não'
+    )""")
+    executar("""CREATE TABLE IF NOT EXISTS auditoria_erp (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data TEXT DEFAULT CURRENT_TIMESTAMP,
+        usuario TEXT,
+        tabela TEXT,
+        registro_id INTEGER,
+        acao TEXT,
+        descricao TEXT
+    )""")
+    # Índices novos apenas; não alteram dados.
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_compras_data ON compras(data)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_status ON compras(status)",
+        "CREATE INDEX IF NOT EXISTS idx_compra_itens_compra ON compra_itens(compra_id)",
+        "CREATE INDEX IF NOT EXISTS idx_auditoria_data ON auditoria_erp(data)",
+        "CREATE INDEX IF NOT EXISTS idx_auditoria_tabela ON auditoria_erp(tabela)"
+    ]:
+        try:
+            executar(sql)
+        except Exception:
+            pass
+
+
+def registrar_auditoria(tabela, registro_id, acao, descricao):
+    try:
+        executar(
+            "INSERT INTO auditoria_erp(usuario,tabela,registro_id,acao,descricao) VALUES (?,?,?,?,?)",
+            (st.session_state.get('usuario_logado','Sistema'), tabela, registro_id, acao, descricao)
+        )
+    except Exception:
+        pass
+
+
+def tela_central_pedido():
+    st.title("Central do Pedido")
+    st.caption("Uma visão única do cliente, venda, produção, financeiro, materiais e entrega.")
+
+    vendas = consultar("""SELECT id, cliente_nome, status, total, data_entrega, data_criacao
+                         FROM vendas WHERE COALESCE(cancelada,'Não')='Não' ORDER BY id DESC""")
+    orcs = consultar("""SELECT id, cliente_nome, status, total, data_prevista_entrega, data_orcamento
+                        FROM orcamentos ORDER BY id DESC""")
+
+    opcoes=[]
+    mapa={}
+    if not vendas.empty:
+        for _,r in vendas.iterrows():
+            texto=f"Venda #{int(r['id'])} · {r.get('cliente_nome','')} · {real(r.get('total',0))} · {r.get('status','')}"
+            opcoes.append(texto); mapa[texto]=('venda',int(r['id']))
+    if not orcs.empty:
+        for _,r in orcs.iterrows():
+            texto=f"Orçamento #{int(r['id'])} · {r.get('cliente_nome','')} · {real(r.get('total',0))} · {r.get('status','')}"
+            opcoes.append(texto); mapa[texto]=('orcamento',int(r['id']))
+
+    if not opcoes:
+        st.info("Ainda não há pedidos cadastrados.")
+        return
+
+    escolha=st.selectbox("Pesquisar pedido",opcoes,key="central_pedido_busca")
+    tipo,pedido_id=mapa[escolha]
+
+    if tipo=='venda':
+        pedido=consultar("SELECT * FROM vendas WHERE id=?",(pedido_id,))
+        itens=consultar("SELECT * FROM venda_itens WHERE venda_id=? ORDER BY id",(pedido_id,))
+        cliente_nome=str(pedido.iloc[0].get('cliente_nome','')) if not pedido.empty else ''
+        status=str(pedido.iloc[0].get('status','')) if not pedido.empty else ''
+        data_entrega=pedido.iloc[0].get('data_entrega','') if not pedido.empty else ''
+        total=n(pedido.iloc[0].get('total',0)) if not pedido.empty else 0
+        cliente_id=pedido.iloc[0].get('cliente_id') if not pedido.empty else None
+        venda_id=pedido_id
+    else:
+        pedido=consultar("SELECT * FROM orcamentos WHERE id=?",(pedido_id,))
+        itens=consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=? ORDER BY id",(pedido_id,))
+        cliente_nome=str(pedido.iloc[0].get('cliente_nome','')) if not pedido.empty else ''
+        status=str(pedido.iloc[0].get('status','')) if not pedido.empty else ''
+        data_entrega=pedido.iloc[0].get('data_prevista_entrega','') if not pedido.empty else ''
+        total=n(pedido.iloc[0].get('total',0)) if not pedido.empty else 0
+        cliente_id=pedido.iloc[0].get('cliente_id') if not pedido.empty else None
+        venda_id=None
+
+    st.divider()
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Cliente",cliente_nome or 'Não informado')
+    c2.metric("Status",status or '—')
+    c3.metric("Total",real(total))
+    c4.metric("Entrega",data_br(data_entrega) if data_entrega else 'Não definida')
+
+    a,b,c=st.tabs(["📦 Itens e produção","💰 Financeiro","🚚 Entrega e histórico"])
+    with a:
+        if itens.empty:
+            st.info("Nenhum item encontrado neste pedido.")
+        else:
+            st.dataframe(itens,use_container_width=True,hide_index=True)
+        try:
+            if venda_id:
+                ops=consultar("SELECT * FROM ordens_producao WHERE ativo='Sim' AND (orcamento_id=? OR codigo LIKE ? ) ORDER BY id DESC",(venda_id,f"%{venda_id}%"))
+            else:
+                ops=consultar("SELECT * FROM ordens_producao WHERE ativo='Sim' AND orcamento_id=? ORDER BY id DESC",(pedido_id,))
+            if not ops.empty:
+                st.subheader("Ordens de produção")
+                st.dataframe(ops[['codigo','cliente_nome','data_entrega','status','prioridade'] if all(x in ops.columns for x in ['codigo','cliente_nome','data_entrega','status','prioridade']) else ops.columns],use_container_width=True,hide_index=True)
+            else:
+                st.info("Nenhuma ordem de produção vinculada.")
+        except Exception:
+            pass
+
+    with b:
+        if venda_id:
+            pg=consultar("SELECT * FROM venda_pagamentos WHERE venda_id=? ORDER BY id",(venda_id,))
+            if not pg.empty: st.dataframe(formatar_valores_tabela(pg),use_container_width=True,hide_index=True)
+            cr=consultar("SELECT * FROM contas_receber WHERE referencia_id=? ORDER BY id DESC",(venda_id,))
+            if not cr.empty: st.dataframe(formatar_valores_tabela(cr),use_container_width=True,hide_index=True)
+        else:
+            cr=consultar("SELECT * FROM contas_receber WHERE referencia_id=? ORDER BY id DESC",(pedido_id,))
+            if not cr.empty: st.dataframe(formatar_valores_tabela(cr),use_container_width=True,hide_index=True)
+        if (pg.empty if venda_id else cr.empty): st.info("Nenhum registro financeiro vinculado encontrado.")
+
+    with c:
+        try:
+            entregas=consultar("SELECT * FROM entregas WHERE referencia_id=? ORDER BY id DESC",(pedido_id,))
+            if not entregas.empty:
+                st.dataframe(entregas,use_container_width=True,hide_index=True)
+            else:
+                st.info("Nenhuma entrega vinculada.")
+        except Exception: pass
+        hist=consultar("SELECT data,usuario,tabela,acao,descricao FROM auditoria_erp WHERE registro_id=? ORDER BY id DESC LIMIT 50",(pedido_id,))
+        if not hist.empty:
+            st.subheader("Histórico")
+            st.dataframe(hist,use_container_width=True,hide_index=True)
+
+
+def tela_compras_profissional():
+    st.title("Compras")
+    st.caption("Controle de compras de materiais e entrada no estoque sem mexer nos registros existentes.")
+    abas=st.tabs(["Nova compra","Compras registradas","Histórico"])
+    with abas[0]:
+        with st.form("nova_compra_profissional"):
+            c1,c2,c3=st.columns(3)
+            fornecedor=c1.text_input("Fornecedor")
+            forma=c2.selectbox("Forma de pagamento",["PIX","Cartão","Dinheiro","Boleto","Transferência","Outro"])
+            data_compra=c3.date_input("Data",value=datetime.now().date())
+            item=st.text_input("Material / produto comprado")
+            c4,c5,c6=st.columns(3)
+            categoria=c4.text_input("Categoria",value="Insumos")
+            qtd=c5.number_input("Quantidade",min_value=0.01,value=1.0,step=1.0)
+            valor=c6.number_input("Valor unitário",min_value=0.0,value=0.0,step=0.01)
+            obs=st.text_area("Observações")
+            salvar=st.form_submit_button("Registrar compra",type="primary",use_container_width=True)
+        if salvar:
+            if not item.strip(): st.error("Informe o material comprado.")
+            else:
+                total=qtd*valor
+                cid=executar("INSERT INTO compras(numero,fornecedor,data,status,forma_pagamento,subtotal,total,observacoes) VALUES (?,?,?,?,?,?,?,?)",(None,fornecedor,data_compra.isoformat(),'Recebida',forma,total,total,obs))
+                executar("INSERT INTO compra_itens(compra_id,item,categoria,quantidade,valor_unitario,total,estoque_lancado) VALUES (?,?,?,?,?,?,?)",(cid,item,categoria,qtd,valor,total,'Não'))
+                registrar_auditoria('compras',cid,'CRIAR',f'Compra registrada: {item} · {real(total)}')
+                st.success(f"Compra registrada: {real(total)}")
+                st.rerun()
+
+    with abas[1]:
+        df=consultar("SELECT id,fornecedor,data,status,forma_pagamento,total,observacoes FROM compras WHERE ativo='Sim' ORDER BY id DESC")
+        if df.empty: st.info("Nenhuma compra registrada.")
+        else: st.dataframe(formatar_valores_tabela(df),use_container_width=True,hide_index=True)
+
+    with abas[2]:
+        df=consultar("SELECT data,usuario,tabela,registro_id,acao,descricao FROM auditoria_erp ORDER BY id DESC LIMIT 200")
+        if df.empty: st.info("Ainda não há registros de auditoria.")
+        else: st.dataframe(df,use_container_width=True,hide_index=True)
+
+
+try:
+    garantir_melhorias_profissionais()
+except Exception as _melhorias_init_err:
+    print(f'[MELHORIAS] Inicialização: {_melhorias_init_err}')
+
+
 # Limpeza única solicitada: remove os produtos antigos do cadastro interno.
 # A precificação continua funcionando somente como simulador e não salva novos produtos.
 try:
@@ -17856,61 +18063,453 @@ def tela_portal_cliente_publico():
 
 
 def gerar_pdf_orcamento_bytes(orcamento_id):
+    """Gera o PDF profissional do orçamento usando os dados da aba Configurações.
+    Esta função é isolada para não alterar nenhuma outra parte do ERP.
+    """
     from io import BytesIO
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+    )
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT
     from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
 
     o_df = consultar("SELECT * FROM orcamentos WHERE id=?", (int(orcamento_id),))
     if o_df.empty:
         return None
+
     o = o_df.iloc[0]
-    itens = consultar("SELECT produto, categoria, quantidade, valor_unitario, desconto, total FROM orcamento_itens WHERE orcamento_id=?", (int(orcamento_id),))
+    itens = consultar(
+        """SELECT produto, categoria, quantidade, valor_unitario, desconto, total
+           FROM orcamento_itens WHERE orcamento_id=? ORDER BY id""",
+        (int(orcamento_id),)
+    )
 
+    # ------------------------------------------------------------
+    # DADOS DA EMPRESA — SEMPRE VINDOS DE CONFIGURAÇÕES
+    # ------------------------------------------------------------
+    empresa = (
+        obter_config("nome_empresa", "")
+        or obter_config("catalogo_nome_empresa", "")
+        or obter_config("catalogo_titulo", "")
+        or EMPRESA
+    )
+    telefone = obter_config("whatsapp", "")
+    endereco = obter_config("catalogo_endereco", "")
+    email_empresa = obter_config("email", "") or obter_config("catalogo_email", "")
+    instagram = obter_config("instagram", "")
+    cnpj = obter_config("catalogo_cnpj", "")
+    logo_path = obter_config("logo_path", "") or obter_config("catalogo_logo_path", "")
+
+    def _texto(valor):
+        return html.escape(str(valor or "").strip())
+
+    def _telefone_formatado(valor):
+        bruto = "".join(c for c in str(valor or "") if c.isdigit())
+        if len(bruto) == 13 and bruto.startswith("55"):
+            bruto = bruto[2:]
+        if len(bruto) == 11:
+            return f"({bruto[:2]}) {bruto[2:7]}-{bruto[7:]}"
+        if len(bruto) == 10:
+            return f"({bruto[:2]}) {bruto[2:6]}-{bruto[6:]}"
+        return str(valor or "").strip()
+
+    def _imagem_logo():
+        """Carrega a logo cadastrada sem recriá-la ou alterá-la."""
+        try:
+            caminho = str(logo_path or "").strip()
+            if not caminho:
+                return None
+
+            # Suporta caminho de arquivo e data URI.
+            if caminho.startswith("data:image"):
+                import base64 as _b64
+                _, encoded = caminho.split(",", 1)
+                dados = _b64.b64decode(encoded)
+                fonte = BytesIO(dados)
+                fonte.seek(0)
+                img_reader = ImageReader(fonte)
+                iw, ih = img_reader.getSize()
+            else:
+                arquivo = Path(caminho)
+                if not arquivo.exists() or not arquivo.is_file():
+                    return None
+                img_reader = ImageReader(str(arquivo))
+                iw, ih = img_reader.getSize()
+
+            if not iw or not ih:
+                return None
+
+            # Mantém a proporção original da logo.
+            largura_max = 43 * mm
+            altura_max = 25 * mm
+            escala = min(largura_max / float(iw), altura_max / float(ih))
+            img = RLImage(img_reader, width=iw * escala, height=ih * escala)
+            img.hAlign = "LEFT"
+            return img
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------
+    # DOCUMENTO
+    # ------------------------------------------------------------
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=16*mm, leftMargin=16*mm, topMargin=16*mm, bottomMargin=16*mm)
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='SophiTitle', parent=styles['Title'], alignment=TA_CENTER, fontSize=20, leading=24, spaceAfter=12))
-    story = [Paragraph('SOPHI PERSONALIZADOS', styles['SophiTitle']), Paragraph('ORÇAMENTO', styles['Heading2']), Spacer(1, 6)]
-    codigo = codigo_visual('ORC', int(o['id']), ano=datetime.now().year)
-    story.append(Paragraph(f"<b>Orçamento:</b> {codigo}", styles['Normal']))
-    story.append(Paragraph(f"<b>Cliente:</b> {html.escape(str(o.get('cliente_nome') or '-'))}", styles['Normal']))
-    story.append(Paragraph(f"<b>Data:</b> {datetime.now().strftime('%d/%m/%Y')}", styles['Normal']))
-    story.append(Spacer(1, 10))
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        rightMargin=15 * mm,
+        leftMargin=15 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=f"Orçamento {codigo_visual('ORC', int(o['id']), ano=datetime.now().year)}",
+        author=str(empresa),
+    )
 
-    data = [['Produto', 'Categoria', 'Qtd.', 'Unitário', 'Desconto', 'Total']]
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="SophiCompany",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=18,
+        textColor=colors.black,
+        spaceAfter=2,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiCompanyInfo",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.2,
+        leading=11,
+        textColor=colors.HexColor("#333333"),
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiDocTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=19,
+        leading=22,
+        alignment=TA_RIGHT,
+        textColor=colors.black,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiDocCode",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#333333"),
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiSection",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11,
+        textColor=colors.black,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiInfo",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#222222"),
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiTable",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.7,
+        leading=9.5,
+        textColor=colors.black,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiTableBold",
+        parent=styles["SophiTable"],
+        fontName="Helvetica-Bold",
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiRight",
+        parent=styles["SophiTable"],
+        alignment=TA_RIGHT,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiRightBold",
+        parent=styles["SophiTableBold"],
+        alignment=TA_RIGHT,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiTotalLabel",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=13,
+        alignment=TA_RIGHT,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiTotalValue",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=21,
+        alignment=TA_RIGHT,
+    ))
+    styles.add(ParagraphStyle(
+        name="SophiFooter",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=10,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor("#555555"),
+    ))
+
+    story = []
+
+    # ------------------------------------------------------------
+    # CABEÇALHO — LOGO + DADOS DA EMPRESA + ORÇAMENTO
+    # ------------------------------------------------------------
+    logo = _imagem_logo()
+
+    contato = []
+    if telefone:
+        contato.append(f"Telefone: {_texto(_telefone_formatado(telefone))}")
+    if email_empresa:
+        contato.append(f"E-mail: {_texto(email_empresa)}")
+    if instagram:
+        contato.append(f"Instagram: {_texto(instagram)}")
+    if cnpj:
+        contato.append(f"CNPJ: {_texto(cnpj)}")
+    if endereco:
+        contato.append(_texto(endereco))
+
+    bloco_empresa = [Paragraph(_texto(empresa), styles["SophiCompany"])]
+    if contato:
+        bloco_empresa.append(Paragraph("<br/>".join(contato), styles["SophiCompanyInfo"]))
+
+    codigo = codigo_visual("ORC", int(o["id"]), ano=datetime.now().year)
+    bloco_orcamento = [
+        Paragraph("ORÇAMENTO", styles["SophiDocTitle"]),
+        Spacer(1, 2 * mm),
+        Paragraph(_texto(codigo), styles["SophiDocCode"]),
+        Paragraph(
+            f"Emissão: {_texto(datetime.now().strftime('%d/%m/%Y'))}",
+            styles["SophiDocCode"],
+        ),
+    ]
+
+    if logo is not None:
+        lado_esquerdo = Table([[logo, bloco_empresa]], colWidths=[48 * mm, 82 * mm])
+        lado_esquerdo.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+    else:
+        lado_esquerdo = Table([[bloco_empresa]], colWidths=[130 * mm])
+        lado_esquerdo.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+
+    cabecalho = Table([[lado_esquerdo, bloco_orcamento]], colWidths=[130 * mm, 45 * mm])
+    cabecalho.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(cabecalho)
+    story.append(Spacer(1, 5 * mm))
+
+    # Linha elegante de separação.
+    linha = Table([[""]], colWidths=[175 * mm], rowHeights=[1.2 * mm])
+    linha.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.black),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(linha)
+    story.append(Spacer(1, 5 * mm))
+
+    # ------------------------------------------------------------
+    # CLIENTE
+    # ------------------------------------------------------------
+    cliente = _texto(o.get("cliente_nome") or "-")
+    whatsapp_cliente = _telefone_formatado(o.get("whatsapp") or "")
+    cliente_info = f"<b>Cliente:</b> {cliente}"
+    if whatsapp_cliente:
+        cliente_info += f"&nbsp;&nbsp;&nbsp; <b>Telefone:</b> {_texto(whatsapp_cliente)}"
+
+    cliente_box = Table([
+        [Paragraph("DADOS DO CLIENTE", styles["SophiSection"])],
+        [Paragraph(cliente_info, styles["SophiInfo"])],
+    ], colWidths=[175 * mm])
+    cliente_box.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C8C8C8")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#D0D0D0")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
+        ("TOPPADDING", (0, 0), (-1, 0), 2.5 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 2.5 * mm),
+        ("TOPPADDING", (0, 1), (-1, 1), 3 * mm),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 3 * mm),
+    ]))
+    story.append(cliente_box)
+    story.append(Spacer(1, 6 * mm))
+
+    # ------------------------------------------------------------
+    # ITENS
+    # ------------------------------------------------------------
+    data = [[
+        Paragraph("PRODUTO", styles["SophiTableBold"]),
+        Paragraph("CATEGORIA", styles["SophiTableBold"]),
+        Paragraph("QTD.", styles["SophiTableBold"]),
+        Paragraph("UNITÁRIO", styles["SophiTableBold"]),
+        Paragraph("DESCONTO", styles["SophiTableBold"]),
+        Paragraph("TOTAL", styles["SophiTableBold"]),
+    ]]
+
     if itens.empty:
-        data.append(['Sem itens', '', '', '', '', real(float(o.get('total') or 0))])
+        data.append([
+            Paragraph("Sem itens", styles["SophiTable"]),
+            "", "", "", "",
+            Paragraph(real(float(o.get("total") or 0)), styles["SophiRight"])
+        ])
     else:
         for _, r in itens.iterrows():
+            qtd = n(r.get("quantidade"), 0)
+            qtd_texto = f"{qtd:.0f}" if float(qtd).is_integer() else f"{qtd:.2f}".replace(".", ",")
             data.append([
-                str(r.get('produto') or '-'),
-                str(r.get('categoria') or '-'),
-                str(r.get('quantidade') or 0),
-                real(float(r.get('valor_unitario') or 0)),
-                real(float(r.get('desconto') or 0)),
-                real(float(r.get('total') or 0)),
+                Paragraph(_texto(r.get("produto") or "-"), styles["SophiTable"]),
+                Paragraph(_texto(r.get("categoria") or "-"), styles["SophiTable"]),
+                Paragraph(qtd_texto, styles["SophiRight"]),
+                Paragraph(real(n(r.get("valor_unitario"))), styles["SophiRight"]),
+                Paragraph(real(n(r.get("desconto"))), styles["SophiRight"]),
+                Paragraph(real(n(r.get("total"))), styles["SophiRightBold"]),
             ])
-    tbl = Table(data, repeatRows=1, colWidths=[45*mm, 30*mm, 15*mm, 28*mm, 25*mm, 28*mm])
+
+    tbl = Table(
+        data,
+        repeatRows=1,
+        colWidths=[48 * mm, 31 * mm, 16 * mm, 27 * mm, 25 * mm, 28 * mm],
+    )
     tbl.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),colors.black),
-        ('TEXTCOLOR',(0,0),(-1,0),colors.white),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('GRID',(0,0),(-1,-1),0.4,colors.grey),
-        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('FONTSIZE',(0,0),(-1,-1),8),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white, colors.HexColor('#f7f7f7')]),
-        ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.black),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#D0D0D0")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
+            colors.white, colors.HexColor("#F8F8F8")
+        ]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2.5 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2.5 * mm),
+        ("TOPPADDING", (0, 0), (-1, 0), 3 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 3 * mm),
+        ("TOPPADDING", (0, 1), (-1, -1), 2.7 * mm),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 2.7 * mm),
     ]))
-    story += [tbl, Spacer(1, 12), Paragraph(f"<b>TOTAL: {real(float(o.get('total') or 0))}</b>", styles['Heading2'])]
-    story.append(Spacer(1, 12))
-    story.append(Paragraph('Este orçamento foi preparado pela Sophi Personalizados Oficial.', styles['Normal']))
+    story.append(tbl)
+    story.append(Spacer(1, 6 * mm))
+
+    # ------------------------------------------------------------
+    # RESUMO FINANCEIRO
+    # ------------------------------------------------------------
+    subtotal = n(o.get("subtotal"), 0)
+    desconto = n(o.get("desconto"), 0)
+    frete = n(o.get("frete"), 0)
+    total = n(o.get("total"), 0)
+
+    resumo_linhas = []
+    if subtotal:
+        resumo_linhas.append([
+            Paragraph("Subtotal", styles["SophiTotalLabel"]),
+            Paragraph(real(subtotal), styles["SophiRight"])
+        ])
+    if desconto:
+        resumo_linhas.append([
+            Paragraph("Desconto", styles["SophiTotalLabel"]),
+            Paragraph(f"- {real(desconto)}", styles["SophiRight"])
+        ])
+    if frete:
+        resumo_linhas.append([
+            Paragraph("Frete", styles["SophiTotalLabel"]),
+            Paragraph(real(frete), styles["SophiRight"])
+        ])
+    resumo_linhas.append([
+        Paragraph("TOTAL DO ORÇAMENTO", styles["SophiTotalLabel"]),
+        Paragraph(real(total), styles["SophiTotalValue"])
+    ])
+
+    resumo = Table(resumo_linhas, colWidths=[120 * mm, 55 * mm])
+    resumo.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("TOPPADDING", (0, 0), (-1, -2), 1.5 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, -2), 1.5 * mm),
+        ("TOPPADDING", (0, -1), (-1, -1), 3 * mm),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 3 * mm),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.1, colors.black),
+    ]))
+    story.append(resumo)
+
+    # ------------------------------------------------------------
+    # OBSERVAÇÕES / CONDIÇÕES
+    # ------------------------------------------------------------
+    observacoes = str(o.get("observacoes") or "").strip()
+    if observacoes:
+        story.append(Spacer(1, 6 * mm))
+        obs_box = Table([
+            [Paragraph("OBSERVAÇÕES", styles["SophiSection"])],
+            [Paragraph(_texto(observacoes).replace("\n", "<br/>"), styles["SophiInfo"])],
+        ], colWidths=[175 * mm])
+        obs_box.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#C8C8C8")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5 * mm),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5 * mm),
+        ]))
+        story.append(obs_box)
+
+    # ------------------------------------------------------------
+    # RODAPÉ
+    # ------------------------------------------------------------
+    story.append(Spacer(1, 12 * mm))
+    validade = obter_config("validade_orcamento", "7")
+    rodape_partes = [
+        f"Este orçamento foi preparado por {_texto(empresa)}.",
+        f"Validade: {_texto(validade)} dias." if validade else "",
+    ]
+    if telefone:
+        rodape_partes.append(f"Contato: {_texto(_telefone_formatado(telefone))}")
+
+    story.append(Paragraph(
+        " &nbsp;•&nbsp; ".join(x for x in rodape_partes if x),
+        styles["SophiFooter"]
+    ))
+
     doc.build(story)
     return buf.getvalue()
-
 
 def tela_portal_cliente_admin():
     garantir_portal_v2()
@@ -18555,6 +19154,8 @@ menu = st.sidebar.radio(
         "🏭 Produção / Agenda",
         "👥 Clientes / CRM",
         "🧾 Materiais e Estoque",
+        "📦 Compras",
+        "🗂️ Central do Pedido",
         "💰 Financeiro",
         "💬 Mensagens WhatsApp",
         "🌐 Portal do Cliente",
@@ -18575,7 +19176,7 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "✂️ ", "📅 ", "🎨 "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "🗂️ ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "✂️ ", "📅 ", "🎨 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -18586,7 +19187,7 @@ try:
     _icone_tela = {
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
-        "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
+        "Materiais e Estoque":"▦", "Compras":"🛍", "Central do Pedido":"▣", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
         "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Gerador de Imagens":"🖼️", "Central de Automação":"⚡",
         "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
@@ -19639,6 +20240,10 @@ elif menu_limpo == "Materiais e Estoque":
         tela_materiais()
     with _abas_me[1]:
         tela_estoque_unificado()
+elif menu_limpo == "Compras":
+    tela_compras_profissional()
+elif menu_limpo == "Central do Pedido":
+    tela_central_pedido()
 elif menu_limpo == "Vendas / PDV":
     tela_vendas_pdv()
 elif menu_limpo == "Financeiro":
