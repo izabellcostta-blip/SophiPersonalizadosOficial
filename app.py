@@ -16885,213 +16885,6 @@ if detectar_pagina_publica() == "catalogo":
 
 criar_banco()
 
-
-# ============================================================
-# MELHORIAS PROFISSIONAIS — ADITIVAS E SEGURAS
-# Não removem nem recriam dados existentes.
-# ============================================================
-def garantir_melhorias_profissionais():
-    """Cria somente estruturas novas para Compras e Auditoria.
-    As tabelas existentes do ERP nunca são apagadas ou recriadas.
-    """
-    executar("""CREATE TABLE IF NOT EXISTS compras (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        numero TEXT,
-        fornecedor TEXT,
-        data TEXT DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'Pendente',
-        forma_pagamento TEXT,
-        subtotal REAL DEFAULT 0,
-        frete REAL DEFAULT 0,
-        total REAL DEFAULT 0,
-        observacoes TEXT,
-        data_recebimento TEXT,
-        ativo TEXT DEFAULT 'Sim'
-    )""")
-    executar("""CREATE TABLE IF NOT EXISTS compra_itens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        compra_id INTEGER,
-        item TEXT NOT NULL,
-        categoria TEXT,
-        quantidade REAL DEFAULT 1,
-        valor_unitario REAL DEFAULT 0,
-        total REAL DEFAULT 0,
-        estoque_lancado TEXT DEFAULT 'Não'
-    )""")
-    executar("""CREATE TABLE IF NOT EXISTS auditoria_erp (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data TEXT DEFAULT CURRENT_TIMESTAMP,
-        usuario TEXT,
-        tabela TEXT,
-        registro_id INTEGER,
-        acao TEXT,
-        descricao TEXT
-    )""")
-    # Índices novos apenas; não alteram dados.
-    for sql in [
-        "CREATE INDEX IF NOT EXISTS idx_compras_data ON compras(data)",
-        "CREATE INDEX IF NOT EXISTS idx_compras_status ON compras(status)",
-        "CREATE INDEX IF NOT EXISTS idx_compra_itens_compra ON compra_itens(compra_id)",
-        "CREATE INDEX IF NOT EXISTS idx_auditoria_data ON auditoria_erp(data)",
-        "CREATE INDEX IF NOT EXISTS idx_auditoria_tabela ON auditoria_erp(tabela)"
-    ]:
-        try:
-            executar(sql)
-        except Exception:
-            pass
-
-
-def registrar_auditoria(tabela, registro_id, acao, descricao):
-    try:
-        executar(
-            "INSERT INTO auditoria_erp(usuario,tabela,registro_id,acao,descricao) VALUES (?,?,?,?,?)",
-            (st.session_state.get('usuario_logado','Sistema'), tabela, registro_id, acao, descricao)
-        )
-    except Exception:
-        pass
-
-
-def tela_central_pedido():
-    st.title("Central do Pedido")
-    st.caption("Uma visão única do cliente, venda, produção, financeiro, materiais e entrega.")
-
-    vendas = consultar("""SELECT id, cliente_nome, status, total, data_entrega, data_criacao
-                         FROM vendas WHERE COALESCE(cancelada,'Não')='Não' ORDER BY id DESC""")
-    orcs = consultar("""SELECT id, cliente_nome, status, total, data_prevista_entrega, data_orcamento
-                        FROM orcamentos ORDER BY id DESC""")
-
-    opcoes=[]
-    mapa={}
-    if not vendas.empty:
-        for _,r in vendas.iterrows():
-            texto=f"Venda #{int(r['id'])} · {r.get('cliente_nome','')} · {real(r.get('total',0))} · {r.get('status','')}"
-            opcoes.append(texto); mapa[texto]=('venda',int(r['id']))
-    if not orcs.empty:
-        for _,r in orcs.iterrows():
-            texto=f"Orçamento #{int(r['id'])} · {r.get('cliente_nome','')} · {real(r.get('total',0))} · {r.get('status','')}"
-            opcoes.append(texto); mapa[texto]=('orcamento',int(r['id']))
-
-    if not opcoes:
-        st.info("Ainda não há pedidos cadastrados.")
-        return
-
-    escolha=st.selectbox("Pesquisar pedido",opcoes,key="central_pedido_busca")
-    tipo,pedido_id=mapa[escolha]
-
-    if tipo=='venda':
-        pedido=consultar("SELECT * FROM vendas WHERE id=?",(pedido_id,))
-        itens=consultar("SELECT * FROM venda_itens WHERE venda_id=? ORDER BY id",(pedido_id,))
-        cliente_nome=str(pedido.iloc[0].get('cliente_nome','')) if not pedido.empty else ''
-        status=str(pedido.iloc[0].get('status','')) if not pedido.empty else ''
-        data_entrega=pedido.iloc[0].get('data_entrega','') if not pedido.empty else ''
-        total=n(pedido.iloc[0].get('total',0)) if not pedido.empty else 0
-        cliente_id=pedido.iloc[0].get('cliente_id') if not pedido.empty else None
-        venda_id=pedido_id
-    else:
-        pedido=consultar("SELECT * FROM orcamentos WHERE id=?",(pedido_id,))
-        itens=consultar("SELECT * FROM orcamento_itens WHERE orcamento_id=? ORDER BY id",(pedido_id,))
-        cliente_nome=str(pedido.iloc[0].get('cliente_nome','')) if not pedido.empty else ''
-        status=str(pedido.iloc[0].get('status','')) if not pedido.empty else ''
-        data_entrega=pedido.iloc[0].get('data_prevista_entrega','') if not pedido.empty else ''
-        total=n(pedido.iloc[0].get('total',0)) if not pedido.empty else 0
-        cliente_id=pedido.iloc[0].get('cliente_id') if not pedido.empty else None
-        venda_id=None
-
-    st.divider()
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("Cliente",cliente_nome or 'Não informado')
-    c2.metric("Status",status or '—')
-    c3.metric("Total",real(total))
-    c4.metric("Entrega",data_br(data_entrega) if data_entrega else 'Não definida')
-
-    a,b,c=st.tabs(["📦 Itens e produção","💰 Financeiro","🚚 Entrega e histórico"])
-    with a:
-        if itens.empty:
-            st.info("Nenhum item encontrado neste pedido.")
-        else:
-            st.dataframe(itens,use_container_width=True,hide_index=True)
-        try:
-            if venda_id:
-                ops=consultar("SELECT * FROM ordens_producao WHERE ativo='Sim' AND (orcamento_id=? OR codigo LIKE ? ) ORDER BY id DESC",(venda_id,f"%{venda_id}%"))
-            else:
-                ops=consultar("SELECT * FROM ordens_producao WHERE ativo='Sim' AND orcamento_id=? ORDER BY id DESC",(pedido_id,))
-            if not ops.empty:
-                st.subheader("Ordens de produção")
-                st.dataframe(ops[['codigo','cliente_nome','data_entrega','status','prioridade'] if all(x in ops.columns for x in ['codigo','cliente_nome','data_entrega','status','prioridade']) else ops.columns],use_container_width=True,hide_index=True)
-            else:
-                st.info("Nenhuma ordem de produção vinculada.")
-        except Exception:
-            pass
-
-    with b:
-        if venda_id:
-            pg=consultar("SELECT * FROM venda_pagamentos WHERE venda_id=? ORDER BY id",(venda_id,))
-            if not pg.empty: st.dataframe(formatar_valores_tabela(pg),use_container_width=True,hide_index=True)
-            cr=consultar("SELECT * FROM contas_receber WHERE referencia_id=? ORDER BY id DESC",(venda_id,))
-            if not cr.empty: st.dataframe(formatar_valores_tabela(cr),use_container_width=True,hide_index=True)
-        else:
-            cr=consultar("SELECT * FROM contas_receber WHERE referencia_id=? ORDER BY id DESC",(pedido_id,))
-            if not cr.empty: st.dataframe(formatar_valores_tabela(cr),use_container_width=True,hide_index=True)
-        if (pg.empty if venda_id else cr.empty): st.info("Nenhum registro financeiro vinculado encontrado.")
-
-    with c:
-        try:
-            entregas=consultar("SELECT * FROM entregas WHERE referencia_id=? ORDER BY id DESC",(pedido_id,))
-            if not entregas.empty:
-                st.dataframe(entregas,use_container_width=True,hide_index=True)
-            else:
-                st.info("Nenhuma entrega vinculada.")
-        except Exception: pass
-        hist=consultar("SELECT data,usuario,tabela,acao,descricao FROM auditoria_erp WHERE registro_id=? ORDER BY id DESC LIMIT 50",(pedido_id,))
-        if not hist.empty:
-            st.subheader("Histórico")
-            st.dataframe(hist,use_container_width=True,hide_index=True)
-
-
-def tela_compras_profissional():
-    st.title("Compras")
-    st.caption("Controle de compras de materiais e entrada no estoque sem mexer nos registros existentes.")
-    abas=st.tabs(["Nova compra","Compras registradas","Histórico"])
-    with abas[0]:
-        with st.form("nova_compra_profissional"):
-            c1,c2,c3=st.columns(3)
-            fornecedor=c1.text_input("Fornecedor")
-            forma=c2.selectbox("Forma de pagamento",["PIX","Cartão","Dinheiro","Boleto","Transferência","Outro"])
-            data_compra=c3.date_input("Data",value=datetime.now().date())
-            item=st.text_input("Material / produto comprado")
-            c4,c5,c6=st.columns(3)
-            categoria=c4.text_input("Categoria",value="Insumos")
-            qtd=c5.number_input("Quantidade",min_value=0.01,value=1.0,step=1.0)
-            valor=c6.number_input("Valor unitário",min_value=0.0,value=0.0,step=0.01)
-            obs=st.text_area("Observações")
-            salvar=st.form_submit_button("Registrar compra",type="primary",use_container_width=True)
-        if salvar:
-            if not item.strip(): st.error("Informe o material comprado.")
-            else:
-                total=qtd*valor
-                cid=executar("INSERT INTO compras(numero,fornecedor,data,status,forma_pagamento,subtotal,total,observacoes) VALUES (?,?,?,?,?,?,?,?)",(None,fornecedor,data_compra.isoformat(),'Recebida',forma,total,total,obs))
-                executar("INSERT INTO compra_itens(compra_id,item,categoria,quantidade,valor_unitario,total,estoque_lancado) VALUES (?,?,?,?,?,?,?)",(cid,item,categoria,qtd,valor,total,'Não'))
-                registrar_auditoria('compras',cid,'CRIAR',f'Compra registrada: {item} · {real(total)}')
-                st.success(f"Compra registrada: {real(total)}")
-                st.rerun()
-
-    with abas[1]:
-        df=consultar("SELECT id,fornecedor,data,status,forma_pagamento,total,observacoes FROM compras WHERE ativo='Sim' ORDER BY id DESC")
-        if df.empty: st.info("Nenhuma compra registrada.")
-        else: st.dataframe(formatar_valores_tabela(df),use_container_width=True,hide_index=True)
-
-    with abas[2]:
-        df=consultar("SELECT data,usuario,tabela,registro_id,acao,descricao FROM auditoria_erp ORDER BY id DESC LIMIT 200")
-        if df.empty: st.info("Ainda não há registros de auditoria.")
-        else: st.dataframe(df,use_container_width=True,hide_index=True)
-
-
-try:
-    garantir_melhorias_profissionais()
-except Exception as _melhorias_init_err:
-    print(f'[MELHORIAS] Inicialização: {_melhorias_init_err}')
-
-
 # Limpeza única solicitada: remove os produtos antigos do cadastro interno.
 # A precificação continua funcionando somente como simulador e não salva novos produtos.
 try:
@@ -17719,10 +17512,10 @@ def mostrar_notificacoes_portal_erp():
     """Mostra somente notificações pendentes do Portal e abre o Portal em nova guia."""
     try:
         garantir_portal_v2()
-        try:
-            baixar_banco_da_nuvem()
-        except Exception:
-            pass
+        # Não baixa/substitui o SQLite a cada atualização da tela.
+        # As notificações usam o canal dedicado do Supabase abaixo, evitando
+        # que o auto-refresh a cada poucos segundos sobrescreva alterações
+        # locais do ERP com uma cópia antiga do banco.
 
         # Busca também o canal dedicado. Isso é o que garante a chegada
         # imediata quando Portal e ERP estão em sessões Railway diferentes.
@@ -17741,6 +17534,23 @@ def mostrar_notificacoes_portal_erp():
         """)
 
         qtd = len(notas) if not notas.empty else 0
+
+        # Aviso visual quando chega uma nova ação do cliente.
+        # A memória é apenas da sessão atual da tela e não altera o banco.
+        try:
+            ids_atuais = [int(x) for x in notas["id"].tolist()] if not notas.empty else []
+            ids_anteriores = set(st.session_state.get("portal_notif_ids_vistos", []))
+            novos = [x for x in ids_atuais if x not in ids_anteriores]
+            if ids_anteriores and novos:
+                nova = notas[notas["id"].isin(novos)].iloc[0]
+                evento_novo = str(nova.get("evento") or "Atualização do Portal")
+                cliente_novo = str(nova.get("cliente_nome") or "Cliente")
+                if hasattr(st, "toast"):
+                    st.toast(f"🔔 {evento_novo} — {cliente_novo}", icon="🔔")
+            st.session_state["portal_notif_ids_vistos"] = ids_atuais[:50]
+        except Exception as _toast_err:
+            print(f"[PORTAL NOTIFICACAO] Aviso visual indisponível: {_toast_err}")
+
         st.sidebar.markdown(
             f'<div id="sophi-notificacoes-titulo" style="margin:8px 0 6px;font-weight:900;font-size:13px;">🔔 Notificações ({qtd})</div>',
             unsafe_allow_html=True
@@ -19154,8 +18964,6 @@ menu = st.sidebar.radio(
         "🏭 Produção / Agenda",
         "👥 Clientes / CRM",
         "🧾 Materiais e Estoque",
-        "📦 Compras",
-        "🗂️ Central do Pedido",
         "💰 Financeiro",
         "💬 Mensagens WhatsApp",
         "🌐 Portal do Cliente",
@@ -19176,7 +18984,7 @@ menu = st.sidebar.radio(
 # IMPORTANTE: não resetar menu_limpo depois da primeira limpeza, senão
 # "✅ Tarefas do Dia" não entra no elif e a tela fica em branco.
 menu_limpo = str(menu)
-for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "🗂️ ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "✂️ ", "📅 ", "🎨 "]:
+for _icone in ["✅ ", "🏠 ", "👥 ", "💬 ", "📝 ", "🧾 ", "🏭 ", "🏷️ ", "🏷 ", "💡 ", "📋 ", "🎁 ", "📦 ", "💰 ", "📊 ", "⚡ ", "🛒 ", "🧺 ", "🖼️ ", "🖼 ", "⚙️ ", "⚙ ", "🤖 ", "🌐 ", "🖨️ ", "✂️ ", "📅 ", "🎨 "]:
     menu_limpo = menu_limpo.replace(_icone, "")
 menu_limpo = menu_limpo.strip()
 
@@ -19187,7 +18995,7 @@ try:
     _icone_tela = {
         "Vendas / PDV":"🛒", "Dashboard":"◫", "Tarefas do Dia":"✓", "Precificação":"◈",
         "Custos Fixos":"💡", "Orçamentos":"▤", "Produção / Agenda":"◷", "Clientes / CRM":"♙",
-        "Materiais e Estoque":"▦", "Compras":"🛍", "Central do Pedido":"▣", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
+        "Materiais e Estoque":"▦", "Financeiro":"R$", "Mensagens WhatsApp":"◌",
         "Relatórios":"↗", "Portal do Cliente":"🌐", "Impressão / Etiquetas":"🖨",
         "Calendário Comercial":"📅", "Gerador de Moldes":"✂️", "Gerador de Imagens":"🖼️", "Central de Automação":"⚡",
         "Biblioteca de Artes":"🎨", "Sophi Gestora IA":"✦", "Configurações":"⚙"
@@ -20240,10 +20048,6 @@ elif menu_limpo == "Materiais e Estoque":
         tela_materiais()
     with _abas_me[1]:
         tela_estoque_unificado()
-elif menu_limpo == "Compras":
-    tela_compras_profissional()
-elif menu_limpo == "Central do Pedido":
-    tela_central_pedido()
 elif menu_limpo == "Vendas / PDV":
     tela_vendas_pdv()
 elif menu_limpo == "Financeiro":
