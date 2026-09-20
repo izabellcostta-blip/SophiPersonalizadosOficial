@@ -17580,28 +17580,14 @@ def mostrar_notificacoes_portal_erp():
         except Exception as _autocura_busca_err:
             print(f"[PORTAL NOTIFICACAO] Não foi possível verificar eventos pendentes: {_autocura_busca_err}")
 
-        # Consulta robusta: a notificação precisa aparecer mesmo em bancos
-        # antigos onde alguma coluna opcional ainda não exista.
-        try:
-            notas = consultar("""
-                SELECT n.*, COALESCE(o.cliente_nome, 'Cliente') AS cliente_nome
-                FROM portal_notificacoes n
-                LEFT JOIN orcamentos o ON o.id=n.orcamento_id
-                WHERE COALESCE(LOWER(n.lida), 'não') <> 'sim'
-                ORDER BY n.id DESC
-                LIMIT 50
-            """)
-        except Exception as _notif_query_err:
-            print(f"[PORTAL NOTIFICACAO] Consulta com cliente falhou: {_notif_query_err}")
-            notas = consultar("""
-                SELECT *
-                FROM portal_notificacoes
-                WHERE COALESCE(LOWER(lida), 'não') <> 'sim'
-                ORDER BY id DESC
-                LIMIT 50
-            """)
-            if not notas.empty:
-                notas["cliente_nome"] = "Cliente"
+        notas = consultar("""
+            SELECT n.*, o.cliente_nome
+            FROM portal_notificacoes n
+            LEFT JOIN orcamentos o ON o.id=n.orcamento_id
+            WHERE COALESCE(LOWER(n.lida), 'não') <> 'sim'
+            ORDER BY n.id DESC
+            LIMIT 50
+        """)
 
         qtd = len(notas) if not notas.empty else 0
 
