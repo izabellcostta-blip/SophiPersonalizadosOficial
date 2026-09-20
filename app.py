@@ -17580,27 +17580,30 @@ def mostrar_notificacoes_portal_erp():
         except Exception as _autocura_busca_err:
             print(f"[PORTAL NOTIFICACAO] Não foi possível verificar eventos pendentes: {_autocura_busca_err}")
 
+        # IMPORTANTE: não dependa de nenhuma coluna da tabela orcamentos para
+        # carregar a notificação. A notificação precisa aparecer mesmo que uma
+        # instalação antiga tenha estrutura diferente nessa tabela.
         notas = consultar("""
-            SELECT n.*
-            FROM portal_notificacoes n
-            WHERE COALESCE(LOWER(TRIM(n.lida)), 'não') <> 'sim'
-            ORDER BY n.id DESC
+            SELECT id, orcamento_id, token, evento, descricao, versao, lida,
+                   data, portal_evento_id, sync_id
+            FROM portal_notificacoes
+            WHERE COALESCE(LOWER(TRIM(CAST(lida AS TEXT))), 'não') NOT IN ('sim', '1', 'true', 'lido')
+            ORDER BY id DESC
             LIMIT 50
         """)
-        nomes_clientes = {}
+
+        # Busca o nome do cliente separadamente, sem deixar essa busca impedir
+        # a exibição da notificação.
         if not notas.empty:
-            try:
-                ids_orc = [int(x) for x in notas["orcamento_id"].dropna().tolist() if str(x).strip()]
-                if ids_orc:
-                    placeholders = ",".join(["?"] * len(ids_orc))
-                    cols_orc = consultar("PRAGMA table_info(orcamentos)")["name"].astype(str).tolist()
-                    col_nome = next((c for c in ["cliente_nome", "cliente", "nome_cliente"] if c in cols_orc), None)
-                    if col_nome:
-                        df_nomes = consultar(f"SELECT id, [{col_nome}] AS nome_cliente FROM orcamentos WHERE id IN ({placeholders})", tuple(ids_orc))
-                        if not df_nomes.empty:
-                            nomes_clientes = {int(r["id"]): str(r.get("nome_cliente") or "Cliente") for _, r in df_nomes.iterrows()}
-            except Exception as _nome_err:
-                print(f"[PORTAL NOTIFICACAO] Falha ao buscar nomes: {_nome_err}")
+            nomes = {}
+            for _oid in notas['orcamento_id'].dropna().tolist():
+                try:
+                    _cli = consultar("SELECT cliente_nome FROM orcamentos WHERE id=? LIMIT 1", (int(_oid),))
+                    if not _cli.empty:
+                        nomes[int(_oid)] = str(_cli.iloc[0].get('cliente_nome') or 'Cliente')
+                except Exception as _nome_err:
+                    print(f"[PORTAL NOTIFICACAO] Não foi possível obter nome do cliente: {_nome_err}")
+            notas['cliente_nome'] = notas['orcamento_id'].apply(lambda x: nomes.get(int(x), 'Cliente') if pd.notna(x) else 'Cliente')
 
         qtd = len(notas) if not notas.empty else 0
 
@@ -17613,7 +17616,7 @@ def mostrar_notificacoes_portal_erp():
             if ids_anteriores and novos:
                 nova = notas[notas["id"].isin(novos)].iloc[0]
                 evento_novo = str(nova.get("evento") or "Atualização do Portal")
-                cliente_novo = nomes_clientes.get(int(nova.get("orcamento_id") or 0), "Cliente")
+                cliente_novo = str(nova.get("cliente_nome") or "Cliente")
                 if hasattr(st, "toast"):
                     st.toast(f"🔔 {evento_novo} — {cliente_novo}", icon="🔔")
             st.session_state["portal_notif_ids_vistos"] = ids_atuais[:50]
@@ -17633,7 +17636,7 @@ def mostrar_notificacoes_portal_erp():
             _notif_id_btn = int(nrow["id"])
             _token_btn = str(nrow.get("token") or "")
             evento = str(nrow.get("evento") or "Atualização do Portal")
-            cliente = nomes_clientes.get(int(nrow.get("orcamento_id") or 0), "Cliente")
+            cliente = str(nrow.get("cliente_nome") or "Cliente")
             vers = nrow.get("versao")
             vers_txt = f" · Versão {int(vers)}" if pd.notna(vers) else ""
 
