@@ -18044,8 +18044,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         pagesize=A4,
         rightMargin=15 * mm,
         leftMargin=15 * mm,
-        topMargin=14 * mm,
-        bottomMargin=14 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
         title=f"Orçamento {codigo_visual('ORC', int(o['id']), ano=datetime.now().year)}",
         author=str(empresa),
     )
@@ -18055,8 +18055,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         name="SophiCompany",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=15,
-        leading=18,
+        fontSize=17,
+        leading=20,
         textColor=colors.black,
         spaceAfter=2,
     ))
@@ -18064,16 +18064,16 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         name="SophiCompanyInfo",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=8.2,
-        leading=11,
+        fontSize=8.5,
+        leading=12,
         textColor=colors.HexColor("#333333"),
     ))
     styles.add(ParagraphStyle(
         name="SophiDocTitle",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=19,
-        leading=22,
+        fontSize=21,
+        leading=24,
         alignment=TA_RIGHT,
         textColor=colors.black,
     ))
@@ -18106,8 +18106,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         name="SophiTable",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=7.7,
-        leading=9.5,
+        fontSize=8,
+        leading=10,
         textColor=colors.black,
     ))
     styles.add(ParagraphStyle(
@@ -18137,8 +18137,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         name="SophiTotalValue",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=18,
-        leading=21,
+        fontSize=20,
+        leading=23,
         alignment=TA_RIGHT,
     ))
     styles.add(ParagraphStyle(
@@ -18214,7 +18214,20 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(cabecalho)
-    story.append(Spacer(1, 5 * mm))
+    story.append(Spacer(1, 4 * mm))
+    faixa = Table([[Paragraph("PROPOSTA COMERCIAL", ParagraphStyle(
+        "SophiFaixa", parent=styles["SophiSection"], textColor=colors.white,
+        fontSize=8, leading=10, tracking=1.1
+    ))]], colWidths=[175 * mm])
+    faixa.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#111111")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.2 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2 * mm),
+    ]))
+    story.append(faixa)
+    story.append(Spacer(1, 4 * mm))
 
     # Linha elegante de separação.
     linha = Table([[""]], colWidths=[175 * mm], rowHeights=[1.2 * mm])
@@ -18242,9 +18255,9 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         [Paragraph(cliente_info, styles["SophiInfo"])],
     ], colWidths=[175 * mm])
     cliente_box.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
-        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C8C8C8")),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#D0D0D0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EAEAEA")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#B8B8B8")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.HexColor("#B8B8B8")),
         ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
         ("TOPPADDING", (0, 0), (-1, 0), 2.5 * mm),
@@ -18292,11 +18305,12 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         colWidths=[48 * mm, 31 * mm, 16 * mm, 27 * mm, 25 * mm, 28 * mm],
     )
     tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#151515")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#D0D0D0")),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D8D8D8")),
+        ("LINEBELOW", (0, 0), (-1, 0), 1, colors.HexColor("#000000")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
             colors.white, colors.HexColor("#F8F8F8")
         ]),
@@ -18304,8 +18318,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         ("RIGHTPADDING", (0, 0), (-1, -1), 2.5 * mm),
         ("TOPPADDING", (0, 0), (-1, 0), 3 * mm),
         ("BOTTOMPADDING", (0, 0), (-1, 0), 3 * mm),
-        ("TOPPADDING", (0, 1), (-1, -1), 2.7 * mm),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 2.7 * mm),
+        ("TOPPADDING", (0, 1), (-1, -1), 3.2 * mm),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 3.2 * mm),
     ]))
     story.append(tbl)
     story.append(Spacer(1, 6 * mm))
@@ -18349,7 +18363,9 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
         ("BOTTOMPADDING", (0, 0), (-1, -2), 1.5 * mm),
         ("TOPPADDING", (0, -1), (-1, -1), 3 * mm),
         ("BOTTOMPADDING", (0, -1), (-1, -1), 3 * mm),
-        ("LINEABOVE", (0, -1), (-1, -1), 1.1, colors.black),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EEEEEE")),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.2, colors.black),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.6, colors.HexColor("#BDBDBD")),
     ]))
     story.append(resumo)
 
@@ -18364,8 +18380,8 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
             [Paragraph(_texto(observacoes).replace("\n", "<br/>"), styles["SophiInfo"])],
         ], colWidths=[175 * mm])
         obs_box.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#C8C8C8")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EAEAEA")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#B8B8B8")),
             ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
             ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
             ("TOPPADDING", (0, 0), (-1, -1), 2.5 * mm),
@@ -18385,6 +18401,10 @@ def gerar_pdf_orcamento_bytes(orcamento_id):
     if telefone:
         rodape_partes.append(f"Contato: {_texto(_telefone_formatado(telefone))}")
 
+    rodape_linha = Table([[""]], colWidths=[175 * mm], rowHeights=[0.5 * mm])
+    rodape_linha.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#B8B8B8"))]))
+    story.append(rodape_linha)
+    story.append(Spacer(1, 2.5 * mm))
     story.append(Paragraph(
         " &nbsp;•&nbsp; ".join(x for x in rodape_partes if x),
         styles["SophiFooter"]
